@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- getExternalFilesDir(null): where the session logs are written. -->
+    <external-files-path
+        name="logs"
+        path="." />
+    <!-- Fallback the logger uses if external storage is unavailable. -->
+    <files-path
+        name="internal-logs"
+        path="." />
+</paths>
