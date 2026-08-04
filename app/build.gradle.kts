@@ -20,7 +20,9 @@ fun gitDescribe(): String {
     }
     val sha = run("git", "rev-parse", "--short", "HEAD")
     if (sha.isEmpty()) return ""
-    val dirty = if (run("git", "status", "--porcelain").isNotEmpty()) "-dirty" else ""
+    // Scoped to this directory: unrelated edits elsewhere in the parent repo
+    // (map specs, firmware worktrees) must not mark the app build dirty.
+    val dirty = if (run("git", "status", "--porcelain", "--", ".").isNotEmpty()) "-dirty" else ""
     return "-g$sha$dirty"
 }
 
