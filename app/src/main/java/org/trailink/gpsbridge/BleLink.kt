@@ -11,6 +11,7 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
@@ -18,6 +19,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelUuid
 import android.util.Log
 import java.util.UUID
 
@@ -48,8 +50,21 @@ class BleLink(
         /** A write that gets no callback in this long counts as failed. */
         private const val WRITE_TIMEOUT_MS = 3000L
 
-        /** Delay before a scan restarts after a drop; also the retry backoff. */
-        private const val RESCAN_DELAY_MS = 1500L
+        /** Delay before a reconnect or rescan after a drop. */
+        private const val RECONNECT_DELAY_MS = 1500L
+
+        /**
+         * How long a direct reconnect to a known address is given before we fall
+         * back to scanning. `autoConnect = true` never reports failure -- the
+         * stack just keeps waiting -- so the only way out is a timeout.
+         */
+        private const val RECONNECT_TIMEOUT_MS = 25_000L
+
+        /** A fresh connect after a scan hit should be quick or not at all. */
+        private const val CONNECT_TIMEOUT_MS = 12_000L
+
+        /** Direct reconnects tried before falling back to a scan. */
+        private const val MAX_DIRECT_RECONNECTS = 3
     }
 
     enum class State {
@@ -78,6 +93,14 @@ class BleLink(
     private var gatt: BluetoothGatt? = null
     private var posChar: BluetoothGattCharacteristic? = null
     private var wantRunning = false
+
+    /**
+     * Address of the device we last talked to. A direct reconnect to it beats a
+     * rescan: it works with the screen off and costs no scan duty cycle.
+     */
+    private var lastAddress: String? = null
+    private var directReconnects = 0
+    private var connectTimeout: Runnable? = null
 
     var state: State = State.IDLE
         private set
@@ -113,12 +136,21 @@ class BleLink(
             return
         }
         if (isConnected) return
-        startScan()
+        if (state == State.CONNECTING) return
+        // A known address is worth a direct connect before a scan: BLE scanning
+        // is throttled to nothing while the screen is off, so after the device
+        // drops the link mid-ride a rescan would never find it again.
+        if (lastAddress != null && directReconnects < MAX_DIRECT_RECONNECTS) {
+            reconnectDirect()
+        } else {
+            startScan()
+        }
     }
 
     /** Manual retry from the UI: tear everything down and start clean. */
     fun retry() {
         teardown()
+        directReconnects = 0
         main.postDelayed({ if (wantRunning) start() }, 200)
     }
 
@@ -130,6 +162,7 @@ class BleLink(
 
     private fun teardown() {
         stopScan()
+        cancelConnectTimeout()
         cancelPendingWrite("torn down")
         val g = gatt
         gatt = null
@@ -156,16 +189,22 @@ class BleLink(
             setState(State.FAILED, "BLE scanner unavailable")
             return
         }
-        // No ScanFilter: filtering server-side on the service UUID misses
-        // devices that keep the UUID out of the advertisement and only expose it
-        // after connect. Matching by name and by advertised UUID here covers
-        // both, and there is exactly one device to look for.
+        // Filters are mandatory in practice, not an optimisation: since Android
+        // 8.1 an unfiltered scan returns nothing at all while the screen is off,
+        // which is exactly the case that matters here -- phone locked in a bag,
+        // device drops the link, app has to find it again. Two filters, OR'd:
+        // by name, and by advertised service UUID for a device that leaves its
+        // name out of the advertisement.
+        val filters = listOf(
+            ScanFilter.Builder().setDeviceName(DEVICE_NAME).build(),
+            ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build(),
+        )
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .build()
         try {
-            scanner.startScan(null, settings, scanCallback)
+            scanner.startScan(filters, settings, scanCallback)
             scanning = true
             setState(State.SCANNING, "looking for $DEVICE_NAME")
             listener.onBleEvent("scan_start", null, null)
@@ -223,30 +262,95 @@ class BleLink(
         val device = result.device
         connectedName = advName ?: gattName ?: DEVICE_NAME
         connectedAddress = device.address
+        lastAddress = device.address
         setState(State.CONNECTING, "${connectedName} (${device.address})")
         listener.onBleEvent(
             "found",
             connectedName,
             mapOf("address" to device.address, "rssi" to result.rssi),
         )
-        connect(device)
+        connect(device, autoConnect = false)
     }
 
     // --- connection -----------------------------------------------------
 
+    /**
+     * Reconnects to [lastAddress] without scanning. `autoConnect = true` hands
+     * the waiting to the Bluetooth stack, which keeps trying at a low duty cycle
+     * and does it with the screen off -- the case a scan cannot cover.
+     */
     @SuppressLint("MissingPermission")
-    private fun connect(device: BluetoothDevice) {
+    private fun reconnectDirect() {
+        val addr = lastAddress ?: return startScan()
+        val a = adapter ?: return
+        val device = try {
+            a.getRemoteDevice(addr)
+        } catch (t: Throwable) {
+            Log.w(TAG, "getRemoteDevice", t)
+            lastAddress = null
+            return startScan()
+        }
+        directReconnects++
+        connectedAddress = addr
+        setState(State.CONNECTING, "reconnecting to $addr (try $directReconnects)")
+        listener.onBleEvent(
+            "reconnect_direct",
+            addr,
+            mapOf("attempt" to directReconnects),
+        )
+        connect(device, autoConnect = true)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connect(device: BluetoothDevice, autoConnect: Boolean) {
         try {
-            gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+            gatt = device.connectGatt(
+                context,
+                autoConnect,
+                gattCallback,
+                BluetoothDevice.TRANSPORT_LE,
+            )
             if (gatt == null) {
                 setState(State.FAILED, "connectGatt returned null")
-                scheduleRescan()
+                scheduleReconnect()
+                return
             }
+            armConnectTimeout(
+                if (autoConnect) RECONNECT_TIMEOUT_MS else CONNECT_TIMEOUT_MS
+            )
         } catch (t: Throwable) {
             Log.e(TAG, "connectGatt", t)
             setState(State.FAILED, "connect threw ${t.javaClass.simpleName}")
-            scheduleRescan()
+            scheduleReconnect()
         }
+    }
+
+    /**
+     * A connect that never completes has to be abandoned, or the link sits in
+     * CONNECTING for the rest of the ride.
+     */
+    private fun armConnectTimeout(ms: Long) {
+        cancelConnectTimeout()
+        val r = Runnable {
+            if (isConnected) return@Runnable
+            listener.onBleEvent("connect_timeout", "after ${ms / 1000}s", null)
+            teardown()
+            if (!wantRunning) return@Runnable
+            // Direct reconnect had its chances; fall back to a filtered scan.
+            if (directReconnects >= MAX_DIRECT_RECONNECTS) {
+                setState(State.DISCONNECTED, "reconnect gave up, scanning")
+                startScan()
+            } else {
+                scheduleReconnect()
+            }
+        }
+        connectTimeout = r
+        main.postDelayed(r, ms)
+    }
+
+    private fun cancelConnectTimeout() {
+        connectTimeout?.let { main.removeCallbacks(it) }
+        connectTimeout = null
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
@@ -284,8 +388,8 @@ class BleLink(
                             mapOf("gatt_status" to status),
                         )
                         if (wantRunning) {
-                            setState(State.DISCONNECTED, "lost link, rescanning")
-                            scheduleRescan()
+                            setState(State.DISCONNECTED, "lost link, reconnecting")
+                            scheduleReconnect()
                         } else {
                             setState(State.IDLE, null)
                         }
@@ -314,6 +418,9 @@ class BleLink(
                     return@post
                 }
                 posChar = ch
+                cancelConnectTimeout()
+                directReconnects = 0
+                lastAddress = connectedAddress ?: lastAddress
                 // The state line already carries the name, so the detail is
                 // just the address.
                 setState(State.CONNECTED, connectedAddress)
@@ -334,11 +441,11 @@ class BleLink(
         }
     }
 
-    private fun scheduleRescan() {
+    private fun scheduleReconnect() {
         if (!wantRunning) return
         main.postDelayed({
             if (wantRunning && !isConnected) start()
-        }, RESCAN_DELAY_MS)
+        }, RECONNECT_DELAY_MS)
     }
 
     // --- writing --------------------------------------------------------

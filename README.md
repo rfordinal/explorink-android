@@ -11,21 +11,52 @@ minSdk 31, targetSdk 36, compileSdk 36. Debug-signed only.
 1. Scans for `XteinkX4Map`, connects, no pairing.
 2. Every 5 seconds, while connected and a fix exists, writes 19 bytes to
    characteristic `5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0002`.
-3. Logs every raw GPS fix, every packet written (including failures) and every
-   link event to one JSON Lines file per session.
+3. Records every raw GPS fix, every packet written (including failures) and
+   every link event to one JSON Lines file per recording — started and stopped
+   by the user.
+
+All of it runs in a foreground service, so it keeps going with the screen
+locked and the app swiped away.
 
 It does not touch the command characteristic (`...0003`). No route logic, no
-background service, no cloud.
+cloud.
+
+## Two things the brief got wrong, reversed after first field use
+
+The brief listed a background service as a non-goal and left the logging toggle
+optional. Both were wrong in the field and were changed:
+
+- **Sending died the moment the screen locked.** Holding a phone screen awake in
+  a handlebar bag is not a plan. Everything now lives in `BridgeService`, a
+  foreground service of type `location|connectedDevice`, with a partial wake
+  lock so the 5 s timer still fires in Doze. No
+  `ACCESS_BACKGROUND_LOCATION` is needed: a location-typed foreground service
+  started from a visible activity counts as in-use.
+- **There was no way to say "record this ride".** Recording is now an explicit
+  Start/Stop, in the window and as a notification action. Each start opens a new
+  file with its own header.
+
+A third thing fell out of the first real ride test, and it was a genuine bug:
+after the X4 dropped the link (`gatt status 19`, peer terminated) the app never
+found it again. Cause: **since Android 8.1 an unfiltered BLE scan returns
+nothing while the screen is off** — exactly the case this app is for. Fixed two
+ways: the scan now carries `ScanFilter`s (by name, and by service UUID), and a
+drop is first answered by a direct `autoConnect = true` reconnect to the
+remembered address, which needs no scan at all. Three tries with a 25 s timeout
+each, then fall back to the filtered scan.
 
 ## Files
 
 ```
 android/
   app/src/main/java/org/trailink/gpsbridge/
-    MainActivity.kt      the one window, permissions, 5s send timer
-    BleLink.kt           scan, connect, write; UUIDs and device name
+    BridgeService.kt     the bridge: BLE, GPS, 5s send timer, recorder,
+                         counters, notification. Survives a locked screen.
+    MainActivity.kt      the one window. Binds, renders a snapshot, four
+                         buttons. Holds no state of its own.
+    BleLink.kt           scan, connect, reconnect, write; UUIDs and name
     PositionPacket.kt    the 19-byte encoder and heading sectors
-    SessionLogger.kt     JSON Lines session file, fsynced per line
+    SessionLogger.kt     JSON Lines recording file, fsynced per line
   app/src/test/java/...  PositionPacketTest.kt, 9 tests, pure JVM
 ```
 
@@ -90,9 +121,19 @@ jq -c 'select(.type=="packet")' trailink-gps-*.jsonl | head
 
 ## Calls made where the brief was silent
 
-- **One session file, both streams, tagged by `type`** — the brief demands
+- **One file per recording, both streams, tagged by `type`** — the brief demands
   "one file per session" with a single header line, so the two streams share
-  the file and stay separable by `type`.
+  the file and stay separable by `type`. "Session" now means one Start-to-Stop
+  recording, not the app's lifetime.
+- **Recording is separate from sending.** The bridge connects and sends whenever
+  it is running; recording only decides whether that gets written down. Stopping
+  a recording does not stop navigation.
+- **`Share log` offers the current recording, or the last one if stopped.** No
+  file browser — the older files are in the same folder for anyone who wants
+  them.
+- **`START_NOT_STICKY`.** A service resurrected after a low-memory kill would
+  come back with a null intent, no permissions re-checked and nobody watching.
+  A ride that ends in a kill should end visibly.
 - **Packet bytes as lowercase hex**, noted in the header as
   `"packet_encoding":"hex"`.
 - **Logging runs for the whole app lifetime**, no start/stop toggle — the brief
@@ -116,9 +157,9 @@ jq -c 'select(.type=="packet")' trailink-gps-*.jsonl | head
   is unacknowledged is counted and logged as failed, not queued — at a 5 s
   cadence this only happens when the link is already sick, and that is
   information.
-- **Foreground only.** Sending and location updates stop in `onStop` and resume
-  in `onStart`. The BLE link is left connected across a short background trip
-  so returning to the app does not force a rescan.
+- **The service outlives the window.** Closing the activity or locking the phone
+  does not stop the bridge. The only things that stop it are the **Stop** button
+  and the **Stop** notification action.
 
 ## Verification status
 
@@ -130,10 +171,23 @@ they share the emulator's virtual Bluetooth. Ten 19-byte writes 5 s apart,
 `seq` 1..10, every packet decoded correctly on the peripheral side, log file
 valid after a hard `am force-stop`, share sheet opens with the right file.
 
-Not verified: the real X4. See the end of `../docs/android-install.md`.
-
 The test peripheral is not in this repo on purpose — it is 130 lines,
 re-writable in minutes, and keeping a fake X4 in the tree invites testing
 against it instead of the device.
+
+**Real hardware, Galaxy S24 (SM-S928B, Android 16) against the real X4:**
+
+- connected to `XteinkX4Map` at `14:63:93:F4:8A:36` with no pairing, and did it
+  **while the phone was locked and the screen off**, which is what the
+  `ScanFilter` fix bought
+- sent one packet every 5 s with the phone in Doze: counter 21 → 25 → 29 across
+  40 s, zero failures
+- a recording taken with the screen off held 103 raw fixes at ~1 Hz and six
+  acknowledged packets, all `ok`
+- the X4 terminating the link (`gatt status 19`) is logged as an event, which is
+  how the scan-while-locked bug was found in the first place
+
+Still open: a long ride, and whether the X4's own drop after ~30 s is a firmware
+issue. See the end of `../docs/android-install.md`.
 
 See `../docs/android-install.md` for the phone-side install manual.

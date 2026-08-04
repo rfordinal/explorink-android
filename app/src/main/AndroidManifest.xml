@@ -10,9 +10,23 @@
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- Real GPS fixes. Foreground only: no ACCESS_BACKGROUND_LOCATION. -->
+    <!-- Real GPS fixes. Still no ACCESS_BACKGROUND_LOCATION: a foreground
+         service started while the app is visible and declaring the `location`
+         type counts as in-use, which is enough to keep getting fixes with the
+         screen locked. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- The bridge keeps sending with the screen off, so it is a foreground
+         service: it reads location and it talks to a connected BLE device. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Partial wake lock only: keeps the 5 s send timer firing in Doze. The
+         screen is never held on. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Only to show the service's own status line. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature
         android:name="android.hardware.bluetooth_le"
@@ -38,6 +52,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".BridgeService"
+            android:exported="false"
+            android:foregroundServiceType="location|connectedDevice" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
