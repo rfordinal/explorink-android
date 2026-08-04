@@ -169,6 +169,11 @@ class BleLink(
         posChar = null
         connectedName = null
         connectedAddress = null
+        // Not just tidying: start() bails out early while state == CONNECTING,
+        // so a caller that tears down a stuck connect and then calls start()
+        // again (retry, connect timeout) needs this cleared first -- else the
+        // link sits in CONNECTING forever with no scan and no reconnect.
+        state = State.IDLE
         if (g != null && hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
             try {
                 g.disconnect()
