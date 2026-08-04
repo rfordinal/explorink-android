@@ -89,6 +89,45 @@ therefore knows which policy produced the file and can replace it.
 `SendPolicy` is deliberately free of Android types: it is the part with the
 reasoning in it, so it is the part with unit tests on it (11 of them).
 
+## Fix gate
+
+`FixGate.kt`. Upstream of the send policy and a separate cadence from it:
+this decides which fix is *trusted* as the phone's position at all, before
+`SendPolicy` ever asks whether that position is worth a BLE write.
+
+A phone in the field asks for GPS and network fixes together. GPS holds a
+tight, steady accuracy; a network fix that races in beside it can land tens
+to hundreds of metres away, at whatever accuracy it likes to claim for
+itself. Taking every fix as-is, newest wins, made that network fix look like
+the phone teleported — a real jump the app itself produced, not GPS noise.
+
+The rule: a fix that could not have got here from the last trusted one at a
+plausible speed (55 m/s, well past motorcycle pace, tempered only by the
+*previous* fix's own accuracy — never the new fix's self-reported one) is
+held back, not used, for one more location update. If the next fix lands
+nearer the held-back position than the old one, the phone kept moving that
+way and it was real; the held-back fix and the confirming one are both
+accepted. If it snaps back near the old position instead, the held-back fix
+was noise and is dropped. A hold that gets no next fix within 3 s times out
+and is dropped too — bounded by the ~1 Hz fix rate, not the 5 s send floor,
+so the map never sits frozen for a full send cycle waiting on a fix that
+still hasn't arrived.
+
+Field logs from 2026-08-04 showed the hold-and-confirm rule above isn't
+enough on its own: a network fix's error radius is wide enough that a
+following fix can legitimately land nearer the bad position than the real
+one, "confirming" a jump that never happened. All confirmed jumps in those
+logs were network fixes racing a GPS that was still live — so a network fix
+is now ignored outright, never even held, whenever a GPS fix has answered in
+the last 5 s (`FixGate.GPS_LIVE_WINDOW_MS`). Only once GPS has been quiet
+longer than that — a real outage, not a live GPS being raced — does a
+network fix reach the hold-and-confirm rule at all, since at that point it's
+the only signal left.
+
+Every fix is still logged raw regardless of this decision, per
+`docs/replay-concept.md` — the gate decides what the live app trusts, not
+what the recording keeps.
+
 ## Version
 
 One source, `appVersion` in `app/build.gradle.kts`. Debug builds append the
@@ -115,10 +154,12 @@ android/
     BleLink.kt           scan, connect, reconnect, write; UUIDs and name
     SendPolicy.kt        when a position is worth a BLE write. No Android
                          types, so it is unit-tested.
+    FixGate.kt           which fix is trusted as the position at all,
+                         upstream of the send policy. No Android types.
     PositionPacket.kt    the 19-byte encoder and heading sectors
     SessionLogger.kt     JSON Lines recording file, fsynced per line
-  app/src/test/java/...  PositionPacketTest.kt + SendPolicyTest.kt,
-                         20 tests, pure JVM
+  app/src/test/java/...  PositionPacketTest.kt + SendPolicyTest.kt +
+                         FixGateTest.kt, 30 tests, pure JVM
 ```
 
 ## Build
@@ -209,8 +250,9 @@ jq -c 'select(.type=="packet")' trailink-gps-*.jsonl | head
 - **Share mime type is `text/plain`** so every mail/chat/cloud target accepts
   it. The file keeps its `.jsonl` name.
 - **Both GPS and network providers are registered.** Every fix from either is
-  logged raw; the newest one is what gets sent. This is what lets a
-  mock-location app drive it indoors.
+  logged raw — this is what lets a mock-location app drive it indoors — but
+  which one becomes the trusted position goes through `FixGate` first; see
+  below.
 - **Heading**: `Location.getBearing()` when moving faster than 0.5 m/s,
   otherwise the bearing between consecutive fixes at least 3 m apart, otherwise
   the last known bearing. Never snaps back to North just because the phone

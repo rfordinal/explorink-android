@@ -118,6 +118,12 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
     private var bleDetail: String? = null
     private var lastFix: Location? = null
     private var lastBearingDeg = 0f
+
+    /** A fix that jumped too far too fast from [lastFix] to trust yet; see [FixGate]. */
+    private var pendingFix: Location? = null
+
+    /** elapsed-realtime nanos of the last GPS_PROVIDER fix, of any trust status; see [FixGate.isNetworkFixIgnorable]. */
+    private var lastGpsFixElapsedNanos: Long? = null
     private var lastSentAtMs = 0L
     private var seq = 0
     private var sentOk = 0
@@ -305,8 +311,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
         stopLocation()
         // GPS first; NETWORK as well so an indoor session (or a mock-location
         // app that feeds the network provider) still produces fixes. Every fix
-        // from either provider is logged raw and the newest one is what gets
-        // sent -- no filtering, per the recording rules.
+        // from either provider is logged raw, per the recording rules -- but
+        // which one becomes the trusted position goes through FixGate first,
+        // so a wide-radius network fix racing a live GPS can't look like a
+        // teleport on the map.
         for (p in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
             try {
                 if (!lm.isProviderEnabled(p)) continue
@@ -328,6 +336,65 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
     override fun onLocationChanged(location: Location) {
         logger?.logFix(location)
 
+        if (location.provider == LocationManager.GPS_PROVIDER) {
+            lastGpsFixElapsedNanos = location.elapsedRealtimeNanos
+        } else if (location.provider == LocationManager.NETWORK_PROVIDER) {
+            val msSinceGps = lastGpsFixElapsedNanos?.let {
+                (location.elapsedRealtimeNanos - it) / 1_000_000
+            }
+            if (FixGate.isNetworkFixIgnorable(msSinceGps)) {
+                logger?.logEvent("fix_network_ignored", null)
+                return
+            }
+        }
+
+        val pending = pendingFix
+        if (pending != null) {
+            pendingFix = null
+            val waitedMs = (location.elapsedRealtimeNanos - pending.elapsedRealtimeNanos) / 1_000_000
+            if (waitedMs > FixGate.CONFIRM_TIMEOUT_MS) {
+                // Nothing arrived in time to confirm or refute it. Drop it and
+                // judge this fix fresh against the position we still trust.
+                logger?.logEvent("fix_jump_timeout", null)
+                evaluateAndAccept(location)
+                return
+            }
+            val distToPending = pending.distanceTo(location).toDouble()
+            val distToAccepted = lastFix?.distanceTo(location)?.toDouble() ?: Double.MAX_VALUE
+            if (FixGate.jumpConfirmedBy(distToPending, distToAccepted)) {
+                // The phone kept going that way: it was real movement, not noise.
+                logger?.logEvent("fix_jump_confirmed", null)
+                acceptFix(pending)
+                acceptFix(location)
+            } else {
+                logger?.logEvent("fix_jump_rejected", null)
+                evaluateAndAccept(location)
+            }
+            return
+        }
+
+        evaluateAndAccept(location)
+    }
+
+    /** Accepts [location] outright, or holds it as [pendingFix] if it is too big a jump to trust yet. */
+    private fun evaluateAndAccept(location: Location) {
+        val previous = lastFix
+        if (previous != null) {
+            val distanceM = previous.distanceTo(location).toDouble()
+            val dtMs = (location.elapsedRealtimeNanos - previous.elapsedRealtimeNanos) / 1_000_000
+            val prevAccuracyM = if (previous.hasAccuracy()) previous.accuracy.toDouble() else 0.0
+            if (FixGate.isImplausibleJump(distanceM, dtMs, prevAccuracyM)) {
+                pendingFix = location
+                logger?.logEvent("fix_jump_suspect", null, mapOf("distance_m" to distanceM))
+                notifyObserver()
+                return
+            }
+        }
+        acceptFix(location)
+    }
+
+    /** Makes [location] the trusted position: [lastFix], bearing, and the UI/notification. */
+    private fun acceptFix(location: Location) {
         val previous = lastFix
         lastFix = location
 
