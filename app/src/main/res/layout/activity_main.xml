@@ -68,6 +68,15 @@
                 android:fontFamily="monospace"
                 android:textColor="#FF555555"
                 android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/tvVersion"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:paddingTop="16dp"
+                android:textColor="#FF999999"
+                android:textSize="10sp" />
         </LinearLayout>
     </ScrollView>
 

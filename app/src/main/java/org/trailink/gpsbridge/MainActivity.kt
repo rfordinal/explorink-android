@@ -59,6 +59,7 @@ class MainActivity : Activity(), BridgeService.Observer {
     private lateinit var tvCounters: TextView
     private lateinit var tvLogFile: TextView
     private lateinit var tvEvents: TextView
+    private lateinit var tvVersion: TextView
     private lateinit var btnRetry: Button
     private lateinit var btnExport: Button
     private lateinit var btnRecord: Button
@@ -97,6 +98,7 @@ class MainActivity : Activity(), BridgeService.Observer {
         tvCounters = findViewById(R.id.tvCounters)
         tvLogFile = findViewById(R.id.tvLogFile)
         tvEvents = findViewById(R.id.tvEvents)
+        tvVersion = findViewById(R.id.tvVersion)
         btnRetry = findViewById(R.id.btnRetry)
         btnExport = findViewById(R.id.btnExport)
         btnRecord = findViewById(R.id.btnRecord)
@@ -106,6 +108,10 @@ class MainActivity : Activity(), BridgeService.Observer {
         btnExport.setOnClickListener { shareLog() }
         btnRecord.setOnClickListener { onRecordPressed() }
         btnStop.setOnClickListener { onStopPressed() }
+
+        // Version, once, at the bottom. Debug builds carry the commit they were
+        // built from, so "which build is on the phone" is answerable.
+        tvVersion.text = "TrailInk GPS ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
 
         render()
 
@@ -325,8 +331,21 @@ class MainActivity : Activity(), BridgeService.Observer {
             }
         }
 
-        tvCounters.text = "packets: sent ${snap.sentOk} / failed ${snap.sentFailed}" +
-            "   seq ${snap.seq}   every ${BridgeService.SEND_INTERVAL_MS / 1000}s"
+        tvCounters.text = buildString {
+            append("packets: sent ").append(snap.sentOk)
+            append(" / failed ").append(snap.sentFailed)
+            append("   seq ").append(snap.seq)
+            append("\nsend when moved ")
+            if (snap.movedSinceSentM == null) {
+                append("-")
+            } else {
+                append(snap.movedSinceSentM.toInt())
+            }
+            append(" / ").append(snap.moveThresholdM.toInt()).append(" m")
+            append("   min ").append(SendPolicy.MIN_INTERVAL_MS / 1000).append("s")
+            append("   keep-alive ").append(SendPolicy.KEEPALIVE_INTERVAL_MS / 60000).append(" min")
+            snap.lastSendReason?.let { append("\nlast send reason: ").append(it) }
+        }
 
         val f = snap.logFile
         tvLogFile.text = when {

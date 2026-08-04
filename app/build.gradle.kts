@@ -3,6 +3,27 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// One place for the version. `versionName` is what the window, the notification
+// and every recording's header report, so it has to identify the exact tree the
+// APK came from -- a bare "0.2.0" on a sideloaded debug build tells you nothing
+// about which of six builds is actually on the phone. Same reasoning as the
+// firmware's TRAILINK_VERSION.
+val appVersion = "0.2.0"
+val appVersionCode = 2
+
+fun gitDescribe(): String {
+    fun run(vararg cmd: String): String = try {
+        val p = ProcessBuilder(*cmd).directory(rootDir).redirectErrorStream(true).start()
+        p.inputStream.bufferedReader().use { it.readText() }.trim()
+    } catch (t: Exception) {
+        ""
+    }
+    val sha = run("git", "rev-parse", "--short", "HEAD")
+    if (sha.isEmpty()) return ""
+    val dirty = if (run("git", "status", "--porcelain").isNotEmpty()) "-dirty" else ""
+    return "-g$sha$dirty"
+}
+
 android {
     namespace = "org.trailink.gpsbridge"
     compileSdk = 36
@@ -11,13 +32,15 @@ android {
         applicationId = "org.trailink.gpsbridge"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = appVersionCode
+        versionName = appVersion
     }
 
     buildTypes {
         debug {
             isMinifyEnabled = false
+            // Debug builds carry the commit they were built from.
+            versionNameSuffix = gitDescribe()
         }
     }
 

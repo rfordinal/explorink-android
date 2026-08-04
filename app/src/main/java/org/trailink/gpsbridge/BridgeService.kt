@@ -33,7 +33,7 @@ import java.util.TimeZone
 
 /**
  * The whole bridge lives here, not in the activity: BLE link, location updates,
- * the 5-second send timer, the counters and the recorder.
+ * the send policy, the counters and the recorder.
  *
  * It is a foreground service because the first field feedback was that sending
  * died the moment the screen locked, and holding a phone screen awake in a
@@ -59,8 +59,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
         private const val CHANNEL_ID = "bridge"
         private const val NOTIFICATION_ID = 1
 
-        /** Fixed cadence from the brief. No adaptive logic here. */
-        const val SEND_INTERVAL_MS = 5000L
+        /** How often the policy is re-evaluated. Cheap; the decision is not the cost. */
+        private const val TICK_MS = 1000L
 
         /** Ask Android for fixes faster than we send, so a send is never stale. */
         private const val LOCATION_INTERVAL_MS = 1000L
@@ -87,6 +87,12 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
         val logFile: File?,
         val logLines: Long,
         val events: List<String>,
+        /** Metres from the last sent position, or null before the first send. */
+        val movedSinceSentM: Double?,
+        /** Metres of movement that would trigger the next send. */
+        val moveThresholdM: Double,
+        /** Why the last packet went out: moved / heading / keepalive / first. */
+        val lastSendReason: String?,
     )
 
     interface Observer {
@@ -116,6 +122,11 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
     private var seq = 0
     private var sentOk = 0
     private var sentFailed = 0
+
+    /** The position the last packet carried, for the distance-driven policy. */
+    private var lastSentFix: Location? = null
+    private var lastSentHeading = -1
+    private var lastSendReason: String? = null
 
     private val events = ArrayDeque<String>()
     private var observer: Observer? = null
@@ -149,7 +160,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
         startLocation()
         ble.start()
         main.removeCallbacks(sender)
-        main.postDelayed(sender, SEND_INTERVAL_MS)
+        main.postDelayed(sender, TICK_MS)
         notifyObserver()
         // START_STICKY would resurrect the service with a null intent after a
         // low-memory kill, with no permission grants re-checked and no user
@@ -197,6 +208,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
         logFile = logger?.file ?: lastLogFile,
         logLines = logger?.linesWritten ?: 0L,
         events = events.toList(),
+        movedSinceSentM = movedSinceLastSent(),
+        moveThresholdM = moveThreshold(),
+        lastSendReason = lastSendReason,
     )
 
     // --- recording ------------------------------------------------------
@@ -244,7 +258,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
         startLocation()
         ble.retry()
         main.removeCallbacks(sender)
-        main.postDelayed(sender, SEND_INTERVAL_MS)
+        main.postDelayed(sender, TICK_MS)
         notifyObserver()
     }
 
@@ -352,8 +366,32 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
     private val sender = object : Runnable {
         override fun run() {
             trySend()
-            main.postDelayed(this, SEND_INTERVAL_MS)
+            main.postDelayed(this, TICK_MS)
         }
+    }
+
+    /** Metres between the last sent position and the current fix. */
+    private fun movedSinceLastSent(): Double? {
+        val from = lastSentFix ?: return null
+        val to = lastFix ?: return null
+        return from.distanceTo(to).toDouble()
+    }
+
+    private fun currentAccuracyM(): Double =
+        lastFix?.let { if (it.hasAccuracy()) it.accuracy.toDouble() else 0.0 } ?: 0.0
+
+    private fun moveThreshold(): Double = SendPolicy.moveThresholdM(currentAccuracyM())
+
+    /** null means "stay quiet"; otherwise the reason, which goes in the log. */
+    private fun sendReason(nowMs: Long): SendPolicy.Reason? {
+        val hasSent = lastSentFix != null && lastSentAtMs != 0L
+        return SendPolicy.decide(
+            hasSent = hasSent,
+            sinceLastMs = if (hasSent) nowMs - lastSentAtMs else 0L,
+            movedM = movedSinceLastSent() ?: 0.0,
+            accuracyM = currentAccuracyM(),
+            headingChanged = PositionPacket.headingSector(lastBearingDeg) != lastSentHeading,
+        )
     }
 
     private fun trySend() {
@@ -361,6 +399,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
         if (!ble.isConnected) return
 
         val nowMs = System.currentTimeMillis()
+        val reason = sendReason(nowMs) ?: return
+        val movedM = movedSinceLastSent()
+        val sinceLastMs = if (lastSentAtMs == 0L) -1L else nowMs - lastSentAtMs
         val heading = PositionPacket.headingSector(lastBearingDeg)
         val accuracyM = if (fix.hasAccuracy()) fix.accuracy.toDouble() else 0.0
         val speedKmh = if (fix.hasSpeed()) fix.speed.toDouble() * 3.6 else 0.0
@@ -380,9 +421,19 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
             speedKmh = speedKmh,
         )
 
+        // The policy advances on the attempt, not on the ack: a failed write
+        // that reset nothing would be retried every tick against a device that
+        // just told us it cannot take it.
+        lastSentAtMs = nowMs
+        // Copied, not aliased: the policy compares against this for up to an
+        // hour and must not share an object with whatever the provider hands
+        // back next.
+        lastSentFix = Location(fix)
+        lastSentHeading = heading
+        lastSendReason = reason.logName
+
         ble.write(bytes) { ok, error ->
             if (ok) sentOk++ else sentFailed++
-            lastSentAtMs = System.currentTimeMillis()
             logger?.logPacket(
                 bytes = bytes,
                 ok = ok,
@@ -393,6 +444,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
                 accuracyM = accuracyM,
                 speedKmh = speedKmh,
                 error = error,
+                reason = reason.logName,
+                movedM = movedM,
+                sinceLastMs = sinceLastMs,
             )
             if (!ok) addEvent("write failed: ${error ?: "unknown"}")
             notifyObserver()
@@ -499,7 +553,13 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
             BleLink.State.IDLE -> "Idle"
         }
         val rec = if (isRecording) "REC ${logger?.linesWritten ?: 0} lines" else "not recording"
-        val text = "sent $sentOk / failed $sentFailed  ·  $rec"
+        val moved = movedSinceLastSent()
+        val policy = if (moved == null) {
+            "no send yet"
+        } else {
+            "${moved.toInt()}/${moveThreshold().toInt()} m"
+        }
+        val text = "sent $sentOk / failed $sentFailed  ·  $policy  ·  $rec"
 
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
