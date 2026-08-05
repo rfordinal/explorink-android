@@ -61,6 +61,10 @@ android {
         viewBinding = false
         buildConfig = true
     }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -70,7 +74,11 @@ dependencies {
     // which is what this app targets. 1.19.0 demands SDK 37 / AGP 9.
     implementation("androidx.core:core-ktx:1.17.0")
 
-    // The 19-byte encoder is pure JVM code, so it is checked on the laptop
-    // rather than only on the phone.
+    // The 19-byte encoder, the transfer wire format and the tile-fetch state
+    // machine are pure JVM code, so they are checked on the laptop rather than
+    // only on the phone. `unitTests.isReturnDefaultValues` above is what lets
+    // classes that call android.util.Log run here: without it every log line in
+    // a class under test throws "not mocked", which would push the state machine
+    // out of reach of the tests that matter most for it.
     testImplementation("junit:junit:4.13.2")
 }

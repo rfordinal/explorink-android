@@ -345,6 +345,10 @@ class MainActivity : Activity(), BridgeService.Observer {
             append("   min ").append(SendPolicy.MIN_INTERVAL_MS / 1000).append("s")
             append("   keep-alive ").append(SendPolicy.KEEPALIVE_INTERVAL_MS / 60000).append(" min")
             snap.lastSendReason?.let { append("\nlast send reason: ").append(it) }
+            // Only once a fetch has happened: the rider starts one from the
+            // device's own menu, so an idle line here would be noise on every
+            // ride that never asks for tiles.
+            snap.tileFetchStatus?.let { append("\ntiles: ").append(it) }
         }
 
         val f = snap.logFile

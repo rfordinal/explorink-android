@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
@@ -24,12 +25,36 @@ import android.util.Log
 import java.util.UUID
 
 /**
- * Connect-and-write BLE central for the TrailInk X4's position characteristic.
+ * BLE central for the TrailInk X4's map service: position out, console and tile
+ * transfers both ways.
  *
  * No pairing, no bonding, no encryption -- the firmware advertises the service
  * with no security (see `BlePositionServer.h`), and the channel is 0.5-1 m of
- * air inside a handlebar bag. Scan, connect, write 19 bytes, nothing else. The
- * command characteristic (`...0003`) is deliberately not touched.
+ * air inside a handlebar bag.
+ *
+ * Four characteristics, all on the one connection (`docs/ble-map-transfer-protocol.md`):
+ *
+ *  - `...0002` position, write only. 19 bytes per fix.
+ *  - `...0003` command console, write out and **indicate in**. The device sends
+ *    `NEED_TILES <n>` here unprompted when the rider asks for missing tiles.
+ *  - `...0004` transfer frames, write only.
+ *  - `...0005` transfer status, indicate in: `RDY`/`OK`/`ERR`.
+ *
+ * The last three are optional at discovery: an older firmware build has only
+ * the position characteristic, and the bridge must still work against it.
+ *
+ * ## One GATT operation at a time
+ *
+ * Android runs exactly one GATT operation per connection and reports it on a
+ * callback; issuing a second before the first completes loses it silently. With
+ * position writes, console writes, transfer chunks and CCCD writes all in play,
+ * that is no longer something a single "is a write pending" flag can express, so
+ * every operation goes through one queue ([enqueue]) and the completion callback
+ * pumps the next.
+ *
+ * A transfer does not starve the position channel: the fetcher sends its next
+ * chunk only from the previous chunk's callback, so a position write waits at
+ * most one chunk.
  *
  * Everything public runs on the main thread; GATT callbacks arrive on binder
  * threads and are immediately reposted to the main looper, so there is one
@@ -46,9 +71,23 @@ class BleLink(
         const val DEVICE_NAME = "XteinkX4Map"
         val SERVICE_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0001")
         val POSITION_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0002")
+        val COMMAND_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0003")
+        val TRANSFER_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0004")
+        val TRANSFER_STATUS_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0005")
+
+        private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         /** A write that gets no callback in this long counts as failed. */
         private const val WRITE_TIMEOUT_MS = 3000L
+
+        /**
+         * MTU asked for once the service is found. A tile is kilobytes and the
+         * default 23-byte MTU leaves 15 payload bytes per write, measured at
+         * 0.2 KB/s against the X4 (`tools/blepush.py`). 517 is the ATT maximum;
+         * the stack and the device negotiate it down to whatever they support,
+         * and [mtu] holds the answer.
+         */
+        private const val DESIRED_MTU = 517
 
         /** Delay before a reconnect or rescan after a drop. */
         private const val RECONNECT_DELAY_MS = 1500L
@@ -81,6 +120,12 @@ class BleLink(
     interface Listener {
         fun onBleState(state: State, detail: String?)
         fun onBleEvent(kind: String, message: String?, extras: Map<String, Any?>?)
+
+        /** One line indicated on the command characteristic (`...0003`). */
+        fun onCommandLine(line: String) {}
+
+        /** One line indicated on the transfer status characteristic (`...0005`). */
+        fun onTransferStatus(line: String) {}
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -92,7 +137,32 @@ class BleLink(
     private var scanning = false
     private var gatt: BluetoothGatt? = null
     private var posChar: BluetoothGattCharacteristic? = null
+    private var cmdChar: BluetoothGattCharacteristic? = null
+    private var transferChar: BluetoothGattCharacteristic? = null
+    private var statusChar: BluetoothGattCharacteristic? = null
     private var wantRunning = false
+
+    /**
+     * The link's negotiated ATT MTU, or the 23-byte default until the device
+     * agrees to more. [maxChunkPayload] is what callers actually want.
+     */
+    var mtu: Int = 23
+        private set
+
+    /** Payload bytes that fit in one transfer chunk on this link. */
+    fun maxChunkPayload(): Int = TransferFrames.maxChunkPayload(mtu)
+
+    /** True once both indicate channels are subscribed -- a fetch needs them. */
+    var tileChannelReady: Boolean = false
+        private set
+
+    /**
+     * Indications arrive as whole `\n`-terminated lines today, but nothing in
+     * GATT guarantees one line per indication, so each channel keeps a small
+     * assembler. A partial line at a disconnect is dropped with the buffer.
+     */
+    private val commandBuffer = StringBuilder()
+    private val statusBuffer = StringBuilder()
 
     /**
      * Address of the device we last talked to. A direct reconnect to it beats a
@@ -111,9 +181,22 @@ class BleLink(
     var connectedAddress: String? = null
         private set
 
-    /** Set while a write is in flight; only one GATT op at a time is legal. */
-    private var pendingWrite: ((Boolean, String?) -> Unit)? = null
-    private var writeTimeout: Runnable? = null
+    /**
+     * One queued GATT operation. Either a characteristic write or a descriptor
+     * write; Android reports both on their own callback and permits exactly one
+     * outstanding at a time per connection.
+     */
+    private class Op(
+        val label: String,
+        val bytes: ByteArray,
+        val characteristic: BluetoothGattCharacteristic?,
+        val descriptor: BluetoothGattDescriptor?,
+        val done: (Boolean, String?) -> Unit,
+    )
+
+    private val ops = ArrayDeque<Op>()
+    private var inFlight: Op? = null
+    private var opTimeout: Runnable? = null
 
     val isConnected: Boolean
         get() = state == State.CONNECTED && posChar != null
@@ -163,10 +246,17 @@ class BleLink(
     private fun teardown() {
         stopScan()
         cancelConnectTimeout()
-        cancelPendingWrite("torn down")
+        failAllOps("torn down")
         val g = gatt
         gatt = null
         posChar = null
+        cmdChar = null
+        transferChar = null
+        statusChar = null
+        tileChannelReady = false
+        mtu = 23
+        commandBuffer.setLength(0)
+        statusBuffer.setLength(0)
         connectedName = null
         connectedAddress = null
         // Not just tidying: start() bails out early while state == CONNECTING,
@@ -379,8 +469,15 @@ class BleLink(
                     }
 
                     BluetoothProfile.STATE_DISCONNECTED -> {
-                        cancelPendingWrite("disconnected")
+                        failAllOps("disconnected")
                         posChar = null
+                        cmdChar = null
+                        transferChar = null
+                        statusChar = null
+                        tileChannelReady = false
+                        mtu = 23
+                        commandBuffer.setLength(0)
+                        statusBuffer.setLength(0)
                         try {
                             g.close()
                         } catch (t: Throwable) {
@@ -423,6 +520,13 @@ class BleLink(
                     return@post
                 }
                 posChar = ch
+                // Optional: an older firmware build has only the position
+                // characteristic, and the bridge's whole job -- forwarding
+                // fixes -- still works against it. A missing one costs the tile
+                // feature, not the connection.
+                cmdChar = svc.getCharacteristic(COMMAND_CHAR_UUID)
+                transferChar = svc.getCharacteristic(TRANSFER_CHAR_UUID)
+                statusChar = svc.getCharacteristic(TRANSFER_STATUS_CHAR_UUID)
                 cancelConnectTimeout()
                 directReconnects = 0
                 lastAddress = connectedAddress ?: lastAddress
@@ -430,6 +534,55 @@ class BleLink(
                 // just the address.
                 setState(State.CONNECTED, connectedAddress)
                 listener.onBleEvent("ready", "position characteristic found", null)
+                subscribeTileChannels(g)
+            }
+        }
+
+        override fun onCharacteristicChanged(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray,
+        ) {
+            val copy = value.copyOf()
+            main.post { handleIndication(characteristic.uuid, copy) }
+        }
+
+        // The pre-Android-13 form, where the value lives on the characteristic
+        // instead of arriving as a parameter. Not optional: minSdk is 31, and on
+        // Android 12 this is the only one the framework calls.
+        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+        override fun onCharacteristicChanged(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+        ) {
+            val copy = characteristic.value?.copyOf() ?: return
+            main.post { handleIndication(characteristic.uuid, copy) }
+        }
+
+        override fun onDescriptorWrite(
+            g: BluetoothGatt,
+            descriptor: BluetoothGattDescriptor,
+            status: Int,
+        ) {
+            main.post {
+                if (inFlight?.descriptor !== descriptor) return@post
+                val ok = status == BluetoothGatt.GATT_SUCCESS
+                completeOp(ok, if (ok) null else "descriptor status $status")
+            }
+        }
+
+        override fun onMtuChanged(g: BluetoothGatt, newMtu: Int, status: Int) {
+            main.post {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    Log.w(TAG, "MTU request failed, status $status; staying at $mtu")
+                    return@post
+                }
+                mtu = newMtu
+                listener.onBleEvent(
+                    "mtu",
+                    "$newMtu bytes, ${maxChunkPayload()} per chunk",
+                    mapOf("mtu" to newMtu),
+                )
             }
         }
 
@@ -439,10 +592,133 @@ class BleLink(
             status: Int,
         ) {
             main.post {
-                if (characteristic.uuid != POSITION_CHAR_UUID) return@post
+                // Matched against the op in flight, not against one UUID: the
+                // same callback now carries position writes, console lines and
+                // transfer chunks.
+                if (inFlight?.characteristic !== characteristic) return@post
                 val ok = status == BluetoothGatt.GATT_SUCCESS
-                finishPendingWrite(ok, if (ok) null else "gatt status $status")
+                completeOp(ok, if (ok) null else "gatt status $status")
             }
+        }
+    }
+
+    // --- indicate channels ----------------------------------------------
+
+    /**
+     * Subscribes to the command and transfer-status characteristics.
+     *
+     * Indications, not notifications: the device sends multi-line replies faster
+     * than the connection interval drains them, and an unacknowledged
+     * notification can have its tail dropped by the controller with no error --
+     * measured on real hardware, see `BlePositionServer::sendCommandReply()`.
+     *
+     * The device refuses to start a transfer with nobody subscribed to the
+     * status channel (`ERR status not subscribed`), so this has to be done up
+     * front, not when the first tile is asked for.
+     */
+    @SuppressLint("MissingPermission")
+    private fun subscribeTileChannels(g: BluetoothGatt) {
+        val command = cmdChar
+        val status = statusChar
+        if (command == null || status == null || transferChar == null) {
+            listener.onBleEvent("tiles_unavailable", "firmware has no transfer channel", null)
+            return
+        }
+
+        var pending = 2
+        var failures = 0
+        val each = { ok: Boolean, error: String? ->
+            if (!ok) {
+                failures++
+                Log.w(TAG, "subscribe failed: $error")
+            }
+            pending--
+            if (pending == 0) {
+                tileChannelReady = failures == 0
+                if (tileChannelReady) {
+                    listener.onBleEvent("tiles_ready", "command + status subscribed", null)
+                    // After subscribing, not before: the MTU only affects chunk
+                    // size, and a fetch cannot start until the subscriptions are
+                    // in place anyway. Chaining them keeps one GATT operation in
+                    // flight at a time, which is all the stack allows.
+                    requestBiggerMtu(g)
+                } else {
+                    listener.onBleEvent("tiles_unavailable", "$failures subscribe(s) failed", null)
+                }
+            }
+        }
+
+        enableIndications(g, command, each)
+        enableIndications(g, status, each)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun enableIndications(
+        g: BluetoothGatt,
+        ch: BluetoothGattCharacteristic,
+        done: (Boolean, String?) -> Unit,
+    ) {
+        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+            done(false, "BLUETOOTH_CONNECT not granted")
+            return
+        }
+        val cccd = ch.getDescriptor(CCCD_UUID)
+        if (cccd == null) {
+            done(false, "no CCCD on ${ch.uuid}")
+            return
+        }
+        // Both halves are needed: the local flag routes incoming packets to the
+        // callback, the CCCD write tells the device to send them at all.
+        val localOk = try {
+            g.setCharacteristicNotification(ch, true)
+        } catch (t: Throwable) {
+            Log.w(TAG, "setCharacteristicNotification", t)
+            false
+        }
+        if (!localOk) {
+            done(false, "setCharacteristicNotification refused")
+            return
+        }
+        enqueue(
+            Op(
+                label = "subscribe ${ch.uuid}",
+                bytes = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE,
+                characteristic = null,
+                descriptor = cccd,
+                done = done,
+            )
+        )
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestBiggerMtu(g: BluetoothGatt) {
+        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) return
+        try {
+            if (!g.requestMtu(DESIRED_MTU)) Log.w(TAG, "requestMtu refused; staying at $mtu")
+        } catch (t: Throwable) {
+            Log.w(TAG, "requestMtu", t)
+        }
+    }
+
+    /**
+     * Splits an indication's bytes into whole lines and hands them to the
+     * listener. Each channel keeps its own assembler: a line split across two
+     * indications must not be spliced onto the other channel's half-line.
+     */
+    private fun handleIndication(uuid: UUID, data: ByteArray) {
+        val buffer = when (uuid) {
+            COMMAND_CHAR_UUID -> commandBuffer
+            TRANSFER_STATUS_CHAR_UUID -> statusBuffer
+            else -> return
+        }
+        buffer.append(String(data, Charsets.US_ASCII))
+        while (true) {
+            val nl = buffer.indexOf("\n")
+            if (nl < 0) break
+            val line = buffer.substring(0, nl).trim()
+            buffer.delete(0, nl + 1)
+            if (line.isEmpty()) continue
+            if (uuid == COMMAND_CHAR_UUID) listener.onCommandLine(line) else listener.onTransferStatus(line)
         }
     }
 
@@ -456,77 +732,173 @@ class BleLink(
     // --- writing --------------------------------------------------------
 
     /**
-     * Writes one 19-byte packet. [done] is called exactly once, on the main
-     * thread, with the outcome. Returns false if the write could not even be
-     * attempted, in which case [done] has already been called.
+     * Writes one 19-byte position packet. [done] is called exactly once, on the
+     * main thread. Returns false if the write could not even be queued, in which
+     * case [done] has already been called.
+     *
+     * A position write in flight is not queued behind again: the queue would
+     * fill with fixes that are stale by the time they go out, and the newest
+     * position is the only one worth sending. Everything else -- a console line,
+     * a transfer chunk -- does queue.
      */
-    @SuppressLint("MissingPermission")
     fun write(bytes: ByteArray, done: (Boolean, String?) -> Unit): Boolean {
-        val g = gatt
         val ch = posChar
-        if (g == null || ch == null || state != State.CONNECTED) {
+        if (ch == null) {
             done(false, "not connected")
             return false
         }
-        if (pendingWrite != null) {
+        if (ops.any { it.characteristic === ch } || inFlight?.characteristic === ch) {
             done(false, "previous write still in flight")
+            return false
+        }
+        return enqueueWrite("position", ch, bytes, done)
+    }
+
+    /** Writes one ASCII console line to `...0003`. The newline is added here. */
+    fun writeCommand(line: String, done: (Boolean, String?) -> Unit): Boolean {
+        val ch = cmdChar
+        if (ch == null) {
+            done(false, "no command characteristic")
+            return false
+        }
+        return enqueueWrite("cmd", ch, (line + "\n").toByteArray(Charsets.US_ASCII), done)
+    }
+
+    /** Writes one binary transfer frame to `...0004`. */
+    fun writeTransferFrame(frame: ByteArray, done: (Boolean, String?) -> Unit): Boolean {
+        val ch = transferChar
+        if (ch == null) {
+            done(false, "no transfer characteristic")
+            return false
+        }
+        return enqueueWrite("frame", ch, frame, done)
+    }
+
+    private fun enqueueWrite(
+        label: String,
+        ch: BluetoothGattCharacteristic,
+        bytes: ByteArray,
+        done: (Boolean, String?) -> Unit,
+    ): Boolean {
+        if (state != State.CONNECTED || gatt == null) {
+            done(false, "not connected")
             return false
         }
         if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
             done(false, "BLUETOOTH_CONNECT not granted")
             return false
         }
-
-        pendingWrite = done
-        val timeout = Runnable { finishPendingWrite(false, "write timed out") }
-        writeTimeout = timeout
-        main.postDelayed(timeout, WRITE_TIMEOUT_MS)
-
-        // WRITE_TYPE_DEFAULT (a write request, acknowledged) because the
-        // firmware characteristic declares plain WRITE, not WRITE_NR.
-        val started: Boolean = try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                val rc = g.writeCharacteristic(
-                    ch,
-                    bytes,
-                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT,
-                )
-                if (rc != BluetoothStatusCodes.SUCCESS) {
-                    finishPendingWrite(false, "writeCharacteristic rc $rc")
-                    return false
-                }
-                true
-            } else {
-                @Suppress("DEPRECATION")
-                run {
-                    ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                    ch.value = bytes
-                    g.writeCharacteristic(ch)
-                }
-            }
-        } catch (t: Throwable) {
-            Log.e(TAG, "writeCharacteristic", t)
-            finishPendingWrite(false, "write threw ${t.javaClass.simpleName}")
-            return false
-        }
-
-        if (!started) {
-            finishPendingWrite(false, "writeCharacteristic returned false")
-            return false
-        }
+        enqueue(Op(label, bytes, ch, null, done))
         return true
     }
 
-    private fun finishPendingWrite(ok: Boolean, error: String?) {
-        val cb = pendingWrite ?: return
-        pendingWrite = null
-        writeTimeout?.let { main.removeCallbacks(it) }
-        writeTimeout = null
-        cb(ok, error)
+    // --- the GATT operation queue ---------------------------------------
+
+    private fun enqueue(op: Op) {
+        ops.addLast(op)
+        pumpOps()
     }
 
-    private fun cancelPendingWrite(reason: String) {
-        finishPendingWrite(false, reason)
+    private fun pumpOps() {
+        if (inFlight != null) return
+        val next = ops.removeFirstOrNull() ?: return
+        inFlight = next
+        val timeout = Runnable { completeOp(false, "${next.label} timed out") }
+        opTimeout = timeout
+        main.postDelayed(timeout, WRITE_TIMEOUT_MS)
+        if (!startOp(next)) {
+            // startOp already completed it with the failure.
+            return
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startOp(op: Op): Boolean {
+        val g = gatt
+        if (g == null) {
+            completeOp(false, "not connected")
+            return false
+        }
+        return try {
+            val started = when {
+                op.descriptor != null -> writeDescriptor(g, op)
+                op.characteristic != null -> writeCharacteristic(g, op)
+                else -> false
+            }
+            if (!started) completeOp(false, "${op.label} refused by the stack")
+            started
+        } catch (t: Throwable) {
+            Log.e(TAG, "startOp ${op.label}", t)
+            completeOp(false, "${op.label} threw ${t.javaClass.simpleName}")
+            false
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun writeCharacteristic(g: BluetoothGatt, op: Op): Boolean {
+        val ch = op.characteristic ?: return false
+        // WRITE_TYPE_DEFAULT (a write request, acknowledged) because every
+        // firmware characteristic here declares plain WRITE, not WRITE_NR -- and
+        // on the transfer channel that acknowledgement is the flow control: the
+        // device answers it only once the bytes are on the SD card.
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val rc = g.writeCharacteristic(ch, op.bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            if (rc != BluetoothStatusCodes.SUCCESS) {
+                completeOp(false, "${op.label} rc $rc")
+                false
+            } else {
+                true
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                ch.value = op.bytes
+                g.writeCharacteristic(ch)
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun writeDescriptor(g: BluetoothGatt, op: Op): Boolean {
+        val d = op.descriptor ?: return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val rc = g.writeDescriptor(d, op.bytes)
+            if (rc != BluetoothStatusCodes.SUCCESS) {
+                completeOp(false, "${op.label} rc $rc")
+                false
+            } else {
+                true
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                d.value = op.bytes
+                g.writeDescriptor(d)
+            }
+        }
+    }
+
+    private fun completeOp(ok: Boolean, error: String?) {
+        val op = inFlight ?: return
+        inFlight = null
+        opTimeout?.let { main.removeCallbacks(it) }
+        opTimeout = null
+        op.done(ok, error)
+        // After the callback, not before: a callback that queues the next chunk
+        // (the transfer path does exactly that) must find the slot free.
+        pumpOps()
+    }
+
+    /**
+     * Fails everything outstanding. Called from teardown, so a caller waiting on
+     * a write always hears an outcome instead of hanging on a dead link.
+     */
+    private fun failAllOps(reason: String) {
+        val queued = ops.toList()
+        ops.clear()
+        completeOp(false, reason)
+        queued.forEach { it.done(false, reason) }
     }
 
     // --- permissions ----------------------------------------------------

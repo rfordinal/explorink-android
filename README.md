@@ -15,11 +15,99 @@ minSdk 31, targetSdk 36, compileSdk 36. Debug-signed only.
    every link event to one JSON Lines file per recording — started and stopped
    by the user.
 
+4. Answers the device when it asks for the map tiles it is missing: pages the
+   list off the command characteristic and pushes the tiles back over the
+   transfer channel. See "Fetching missing tiles" below.
+
 All of it runs in a foreground service, so it keeps going with the screen
 locked and the app swiped away.
 
-It does not touch the command characteristic (`...0003`). No route logic, no
-cloud.
+No route logic, no cloud.
+
+## Fetching missing tiles
+
+The rider starts it **on the device**, from the map screen's CONFIRM menu. The
+phone never decides to do this on its own -- it is a transfer of kilobytes over
+a link the rider is relying on for position, so the rider says when.
+
+The conversation (`docs/ble-map-transfer-protocol.md` and
+`firmware/trailink/docs/missing-tiles.md` in the parent repo):
+
+1. Device indicates `NEED_TILES <count> fmt <version>` on `...0003`.
+2. App pages the list with `missing` / `missing <offset>` until
+   `missing_next=done`.
+3. For each tile **in the order the device gave them** -- already fetch
+   priority, regional LOD first -- the app reads the bytes from its
+   `TileSource` and pushes them over `...0004`: begin, wait for `RDY`, chunks,
+   `OK`.
+4. A tile it does not have, or one built to a format version this device cannot
+   read, becomes `skip <z> <col> <row> <reason>`, so the device's progress
+   screen counts it as failed instead of waiting for a file that is never
+   coming.
+5. `FETCH_CANCEL` (the rider pressed Back) stops everything and aborts whatever
+   is in flight.
+
+**The format version is checked before a single byte goes out.** A tile built
+to another `.tib` version transfers fine, passes CRC, is renamed into place --
+and is then refused by the device's reader on the next render, after the entry
+has already been dropped from its missing list. That is a transfer wasted on
+every fetch, not once. `TileHeader` reads the magic and the u16 version; a
+mismatch is `skip ... fmt<found>`, which is deliberately distinct from a plain
+miss: "no tile here" and "wrong tile here" want different fixes.
+
+### Where tiles come from: the CDN seam
+
+`TileSource` is `(z, col, row) -> bytes or miss`, and that shape is the point.
+The real source is meant to be a public tile CDN (`docs/roadmap.md`), which
+does not exist yet. Today the only implementation is `FileTileSource`, reading
+a directory on the phone laid out exactly like the CDN's `out_dir`:
+
+```
+<getExternalFilesDir("tiles")>/base/<z>/<col>/<row>.tib
+```
+
+App-private, so no storage permission. Fill it for testing with:
+
+```bash
+adb push out_dir/base /sdcard/Android/data/org.trailink.gpsbridge/files/tiles/
+```
+
+When the CDN is real, an HTTP implementation replaces `FileTileSource` behind
+the same one call. Nothing else in the app changes -- which is why the shape
+must not grow a batch call or a suspend function.
+
+### One GATT operation at a time
+
+Android runs exactly one GATT operation per connection and reports it on a
+callback; a second issued before the first completes is lost silently. With
+position writes, console lines, transfer chunks and CCCD writes all in play,
+`BleLink` puts every operation through one queue and pumps the next from the
+completion callback.
+
+A transfer does not starve the position channel: the fetcher sends its next
+chunk only from the previous chunk's callback, so a position write waits at
+most one chunk. A position write already in flight is *not* queued behind
+again -- the queue would fill with fixes that are stale by the time they go
+out, and only the newest position is worth sending.
+
+Chunks use write-with-response, and that is load-bearing rather than politeness:
+the ATT response arrives only once the device has the bytes on its SD card, so
+driving the loop off it means the sender physically cannot outrun the card.
+
+The app requests a 517-byte MTU after subscribing. On the default 23-byte MTU a
+chunk carries 15 payload bytes, measured at 0.2 KB/s against the X4 -- a 4 KB
+tile took 25 seconds.
+
+The command and status channels are **indications**, not notifications: the
+device sends multi-line replies faster than the connection interval drains
+them, and an unacknowledged notification can have its tail dropped by the
+controller with no error. The device also refuses to start a transfer with
+nobody subscribed to the status channel, so both subscriptions happen at
+discovery, not at the first tile.
+
+All three extra characteristics are optional at discovery. An older firmware
+build has only the position characteristic, and forwarding fixes -- the app's
+whole original job -- still works against it.
 
 ## Two things the brief got wrong, reversed after first field use
 
@@ -151,15 +239,28 @@ android/
                          counters, notification. Survives a locked screen.
     MainActivity.kt      the one window. Binds, renders a snapshot, four
                          buttons. Holds no state of its own.
-    BleLink.kt           scan, connect, reconnect, write; UUIDs and name
+    BleLink.kt           scan, connect, reconnect, the GATT operation queue,
+                         all four characteristics, indications; UUIDs and name
     SendPolicy.kt        when a position is worth a BLE write. No Android
                          types, so it is unit-tested.
     FixGate.kt           which fix is trusted as the position at all,
                          upstream of the send policy. No Android types.
+    HeadingTrend.kt      heading from recent fixes rather than one bearing
     PositionPacket.kt    the 19-byte encoder and heading sectors
     SessionLogger.kt     JSON Lines recording file, fsynced per line
-  app/src/test/java/...  PositionPacketTest.kt + SendPolicyTest.kt +
-                         FixGateTest.kt, 30 tests, pure JVM
+    TileFetcher.kt       the whole fetch conversation as a state machine.
+                         BLE behind Transport, time behind Scheduler, so it
+                         is unit-tested without either.
+    TransferFrames.kt    the transfer wire format: frames, CRC32, chunk
+                         sizing, path rules, status lines. Pure.
+    MissingList.kt       parses NEED_TILES and the paged `missing` replies
+    TileHeader.kt        magic + format version of a .tib, enough to know
+                         whether the device will accept it
+    TileSource.kt        the CDN seam, and today's directory-backed stand-in
+  app/src/test/java/...  PositionPacketTest, SendPolicyTest, FixGateTest,
+                         HeadingTrendTest, TransferFramesTest,
+                         MissingListTest, TileFetcherTest -- 69 tests, pure
+                         JVM
 ```
 
 ## Build
@@ -270,7 +371,17 @@ jq -c 'select(.type=="packet")' trailink-gps-*.jsonl | head
 
 ## Verification status
 
-Laptop: clean build, zero Kotlin warnings, 9/9 packet-encoder unit tests.
+Laptop: clean build, zero Kotlin warnings, 69/69 unit tests.
+
+**The tile fetch has never run against the real device.** Verified on the
+laptop only: the frame layout byte for byte against the protocol doc, CRC32
+against zlib's known value, the paging, the format-version refusal, and the
+ugly paths through the state machine -- a tile the source lacks, a device `ERR`,
+a stalled transfer, a cancel, a dropped link. What none of that proves is the
+part that needs hardware: MTU negotiation with the X4, indication delivery on
+both channels at once, and whether a real tile transfer holds up over a link
+that is also carrying position packets. Running a fetch against a card with a
+real `missing_tiles.json` is what would settle it.
 
 Emulator: verified end to end against a throwaway test peripheral on a second
 Android 16 emulator, both launched with `-packet-streamer-endpoint default` so

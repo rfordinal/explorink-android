@@ -46,7 +46,7 @@ import java.util.TimeZone
  * ACCESS_BACKGROUND_LOCATION. A partial wake lock keeps the CPU up so the send
  * timer still fires in Doze.
  */
-class BridgeService : Service(), BleLink.Listener, LocationListener {
+class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher.Listener {
 
     companion object {
         private const val TAG = "BridgeService"
@@ -93,6 +93,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
         val moveThresholdM: Double,
         /** Why the last packet went out: moved / heading / keepalive / first. */
         val lastSendReason: String?,
+        /** One line about the last or current tile fetch, or null if there has been none. */
+        val tileFetchStatus: String?,
     )
 
     interface Observer {
@@ -108,6 +110,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.US)
 
     private lateinit var ble: BleLink
+    private lateinit var tileFetcher: TileFetcher
+    /** Last line about a tile fetch, for the one window. Null until one happens. */
+    private var tileFetchStatus: String? = null
     private var locationManager: LocationManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -118,6 +123,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
     private var bleDetail: String? = null
     private var lastFix: Location? = null
     private var lastBearingDeg = 0f
+
+    /** Recent accepted fixes, oldest first, for [HeadingTrend]; capped at its window size. */
+    private val headingHistory = ArrayDeque<HeadingTrend.Point>()
 
     /** A fix that jumped too far too fast from [lastFix] to trust yet; see [FixGate]. */
     private var pendingFix: Location? = null
@@ -144,6 +152,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
         isRunning = true
         locationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         ble = BleLink(this, this)
+        tileFetcher = TileFetcher(FileTileSource(tileRoot()), fetchTransport, fetchScheduler, this)
         createChannel()
         registerReceiver(btReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
         addEvent("service started")
@@ -185,6 +194,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
             Log.w(TAG, "unregisterReceiver", t)
         }
         stopLocation()
+        // Before ble.stop(): the abort frame it may send needs a live link.
+        tileFetcher.stop()
         ble.stop()
         stopRecording()
         releaseWakeLock()
@@ -217,6 +228,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
         movedSinceSentM = movedSinceLastSent(),
         moveThresholdM = moveThreshold(),
         lastSendReason = lastSendReason,
+        tileFetchStatus = tileFetchStatus,
     )
 
     // --- recording ------------------------------------------------------
@@ -269,8 +281,12 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
     }
 
     override fun onBleState(state: BleLink.State, detail: String?) {
+        val wasConnected = bleState == BleLink.State.CONNECTED
         bleState = state
         bleDetail = detail
+        // A fetch in flight is dead the moment the link is: the transfer's
+        // offsets and the device's own .part file went with it.
+        if (wasConnected && state != BleLink.State.CONNECTED) tileFetcher.onDisconnected()
         notifyObserver()
     }
 
@@ -279,6 +295,84 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
         addEvent(if (message != null) "$kind: $message" else kind)
         notifyObserver()
     }
+
+    // --- tile fetch -----------------------------------------------------
+
+    override fun onCommandLine(line: String) {
+        // Logged whole: this channel is how the device asks for tiles, and a
+        // ride log without the ask is a log that cannot explain the transfers
+        // that followed it.
+        logger?.logEvent("cmd_in", line, null)
+        tileFetcher.onCommandLine(line)
+    }
+
+    override fun onTransferStatus(line: String) {
+        logger?.logEvent("xfer_in", line, null)
+        tileFetcher.onStatusLine(line)
+    }
+
+    override fun onFetchStarted(total: Int) {
+        tileFetchStatus = "fetching 0/$total"
+        addEvent("device asked for $total tiles")
+        logger?.logEvent("fetch_start", "$total tiles", mapOf("total" to total))
+        notifyObserver()
+    }
+
+    override fun onFetchProgress(sent: Int, skipped: Int, total: Int) {
+        tileFetchStatus = "fetching $sent/$total" + if (skipped > 0) ", $skipped skipped" else ""
+        notifyObserver()
+    }
+
+    override fun onFetchFinished(sent: Int, skipped: Int, total: Int, reason: String) {
+        tileFetchStatus = "$sent/$total sent" +
+            (if (skipped > 0) ", $skipped skipped" else "") +
+            " ($reason)"
+        addEvent("fetch $reason: $sent sent, $skipped skipped")
+        logger?.logEvent(
+            "fetch_end",
+            reason,
+            mapOf("sent" to sent, "skipped" to skipped, "total" to total),
+        )
+        notifyObserver()
+    }
+
+    /**
+     * Everything the fetcher needs from BLE, and nothing more. Written here
+     * rather than handing the fetcher a [BleLink] so the fetcher stays testable
+     * without a Bluetooth stack.
+     */
+    private val fetchTransport = object : TileFetcher.Transport {
+        override fun sendCommand(line: String, done: (Boolean, String?) -> Unit) {
+            ble.writeCommand(line, done)
+        }
+
+        override fun sendFrame(frame: ByteArray, done: (Boolean, String?) -> Unit) {
+            ble.writeTransferFrame(frame, done)
+        }
+
+        override fun maxChunkPayload(): Int = ble.maxChunkPayload()
+    }
+
+    private val fetchScheduler = object : TileFetcher.Scheduler {
+        override fun postDelayed(delayMs: Long, action: () -> Unit): TileFetcher.Scheduler.Cancellable {
+            val r = Runnable { action() }
+            main.postDelayed(r, delayMs)
+            return object : TileFetcher.Scheduler.Cancellable {
+                override fun cancel() = main.removeCallbacks(r)
+            }
+        }
+    }
+
+    /**
+     * Where tiles come from. A directory on the phone today, standing in for the
+     * public tile CDN that does not exist yet -- see [TileSource], which is the
+     * seam an HTTP implementation slots into.
+     *
+     * `getExternalFilesDir("tiles")/base/<z>/<col>/<row>.tib`. App-private, so
+     * no storage permission, and reachable over adb without root:
+     * `adb push out_dir/base /sdcard/Android/data/org.trailink.gpsbridge/files/tiles/`.
+     */
+    private fun tileRoot(): File = File(getExternalFilesDir("tiles") ?: filesDir, "")
 
     private val btReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -395,19 +489,17 @@ class BridgeService : Service(), BleLink.Listener, LocationListener {
 
     /** Makes [location] the trusted position: [lastFix], bearing, and the UI/notification. */
     private fun acceptFix(location: Location) {
-        val previous = lastFix
         lastFix = location
 
-        // Platform bearing when the phone is actually moving; otherwise the
-        // bearing between consecutive fixes, which is what a stationary or
-        // bearing-less provider leaves us. Last known bearing is kept when
-        // neither is usable, rather than snapping back to North.
-        val speedMps = if (location.hasSpeed()) location.speed else 0f
-        if (location.hasBearing() && speedMps > 0.5f) {
-            lastBearingDeg = location.bearing
-        } else if (previous != null && previous.distanceTo(location) >= 3f) {
-            lastBearingDeg = previous.bearingTo(location)
-        }
+        headingHistory.addLast(
+            HeadingTrend.Point(location.latitude, location.longitude, location.elapsedRealtimeNanos)
+        )
+        while (headingHistory.size > HeadingTrend.WINDOW_SIZE) headingHistory.removeFirst()
+
+        // Never the phone's own orientation -- it rides in a backpack or tank
+        // bag. Last known bearing is kept when the window isn't a confident
+        // trend yet, rather than snapping back to North.
+        HeadingTrend.heading(headingHistory)?.let { lastBearingDeg = it.toFloat() }
         notifyObserver()
     }
 
