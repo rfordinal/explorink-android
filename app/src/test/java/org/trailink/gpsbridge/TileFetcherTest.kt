@@ -1,6 +1,7 @@
 package org.trailink.gpsbridge
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -58,6 +59,15 @@ class TileFetcherTest {
         }
 
         override fun maxChunkPayload(): Int = payload
+
+        // Named apart from the interface method: a `var fastLink` would generate
+        // a setFastLink(Z)V setter that clashes with it on the JVM.
+        var fastLinkHeld = false
+        var fastLinkGrabs = 0
+        override fun setFastLink(fast: Boolean) {
+            fastLinkHeld = fast
+            if (fast) fastLinkGrabs++
+        }
 
         fun chunkFrames(): List<ByteArray> = frames.filter { it[0] == TransferFrames.OP_CHUNK }
         fun beginFrames(): List<ByteArray> = frames.filter { it[0] == TransferFrames.OP_BEGIN }
@@ -266,6 +276,40 @@ class TileFetcherTest {
         // A late status line from the abandoned transfer must not restart it.
         h.fetcher.onStatusLine("OK 500 00000000")
         assertEquals(TileFetcher.Phase.IDLE, h.fetcher.phase)
+    }
+
+    @Test
+    fun `the fast link is held for the fetch and given back at the end`() {
+        val h = Harness()
+        h.source.tiles["12/1/1"] = tileBytes(50)
+
+        h.fetcher.onCommandLine("NEED_TILES 1 fmt 2")
+        // A high-priority connection holds the radio at a fast interval
+        // continuously, so it must not outlive the transfer it exists for.
+        assertTrue(h.transport.fastLinkHeld)
+
+        h.list(MissingTile(12, 1, 1, 1))
+        h.fetcher.onStatusLine("RDY 50")
+        h.fetcher.onStatusLine("OK 50 00000000")
+        assertFalse(h.transport.fastLinkHeld)
+        assertEquals(1, h.transport.fastLinkGrabs)
+    }
+
+    @Test
+    fun `the fast link is given back when a fetch dies rather than finishes`() {
+        // Every exit has to release it, not just the happy one -- a link lost
+        // mid-transfer would otherwise leave the radio fast until the app dies.
+        for (kill in listOf<(Harness) -> Unit>(
+            { it.fetcher.onDisconnected() },
+            { it.fetcher.onCommandLine("FETCH_CANCEL") },
+            { it.fetcher.stop() },
+        )) {
+            val h = Harness()
+            h.fetcher.onCommandLine("NEED_TILES 3 fmt 2")
+            assertTrue(h.transport.fastLinkHeld)
+            kill(h)
+            assertFalse(h.transport.fastLinkHeld)
+        }
     }
 
     @Test

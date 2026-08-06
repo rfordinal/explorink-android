@@ -152,6 +152,50 @@ class BleLink(
     /** Payload bytes that fit in one transfer chunk on this link. */
     fun maxChunkPayload(): Int = TransferFrames.maxChunkPayload(mtu)
 
+    /**
+     * Asks the stack for a fast connection interval while a tile sync runs, and
+     * gives it back the moment the sync ends.
+     *
+     * Measured on the first real fetch: 450 kB over nine tiles took 183 s, a
+     * steady 2.4 kB/s. The link negotiated a 256-byte MTU, so a chunk carries
+     * 248 bytes -- but the connection interval was 50 ms and a chunk is
+     * write-with-response, which costs one interval out and one back. That is
+     * the whole ceiling: 248 B per 100 ms. At the ~15 ms this asks for, the same
+     * transfer is roughly three times quicker.
+     *
+     * **Scoped to the sync on purpose.** A high-priority connection holds the
+     * radio at a fast interval continuously, which is battery a rider is
+     * spending for nothing once the tiles have landed. Position packets go out
+     * every few seconds at most and do not care about interval at all.
+     *
+     * Android usually ignores a peripheral's own request for faster parameters,
+     * so this has to come from the central -- there is no device-side substitute
+     * (`firmware/trailink/docs/optimization/03-ble-link.md`).
+     */
+    @SuppressLint("MissingPermission")
+    fun requestHighPriority(high: Boolean) {
+        val g = gatt ?: return
+        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) return
+        val priority = if (high) {
+            BluetoothGatt.CONNECTION_PRIORITY_HIGH
+        } else {
+            BluetoothGatt.CONNECTION_PRIORITY_BALANCED
+        }
+        val ok = try {
+            g.requestConnectionPriority(priority)
+        } catch (t: Throwable) {
+            Log.w(TAG, "requestConnectionPriority", t)
+            false
+        }
+        // Logged either way: the stack may refuse, and the real interval only
+        // shows up in the device's own onConnect log.
+        listener.onBleEvent(
+            "conn_priority",
+            (if (high) "high" else "balanced") + (if (ok) "" else " (refused)"),
+            null,
+        )
+    }
+
     /** True once both indicate channels are subscribed -- a fetch needs them. */
     var tileChannelReady: Boolean = false
         private set

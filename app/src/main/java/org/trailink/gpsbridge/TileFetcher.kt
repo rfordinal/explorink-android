@@ -70,6 +70,17 @@ class TileFetcher(
 
         /** Payload bytes per chunk on the current link -- MTU dependent. */
         fun maxChunkPayload(): Int
+
+        /**
+         * Ask the link for a fast connection interval, or give it back.
+         *
+         * Held only while a fetch is running. The interval is the transfer's
+         * real ceiling -- a chunk is write-with-response, so it costs one
+         * interval each way -- but a fast interval also keeps the radio busy
+         * continuously, which is battery spent for nothing once the tiles have
+         * landed.
+         */
+        fun setFastLink(fast: Boolean)
     }
 
     /** Delayed work, injectable so tests do not wait for real seconds. */
@@ -199,6 +210,8 @@ class TileFetcher(
         phase = Phase.LISTING
         total = need.count
         wantedFormat = need.formatVersion
+        // For the duration of this fetch and no longer -- released in finish().
+        transport.setFastLink(true)
         listener.onFetchStarted(need.count)
         requestPage(0)
     }
@@ -387,6 +400,10 @@ class TileFetcher(
     }
 
     private fun finish(reason: String) {
+        // Every exit from a fetch comes through here -- done, cancelled, link
+        // lost, stopped -- which is what makes this the one place the fast link
+        // has to be handed back.
+        transport.setFastLink(false)
         val wasSent = sent
         val wasSkipped = skipped
         val wasTotal = total

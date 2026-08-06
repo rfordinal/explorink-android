@@ -96,7 +96,25 @@ driving the loop off it means the sender physically cannot outrun the card.
 
 The app requests a 517-byte MTU after subscribing. On the default 23-byte MTU a
 chunk carries 15 payload bytes, measured at 0.2 KB/s against the X4 -- a 4 KB
-tile took 25 seconds.
+tile took 25 seconds. **Measured against the real device 2026-08-06**: the link
+settles on 256, so a chunk carries 248 bytes.
+
+It also asks for a high-priority connection **for the duration of a fetch and no
+longer**. The first real fetch moved 450 kB over nine tiles in 183 s -- a steady
+2.4 kB/s -- with a 50 ms connection interval. A chunk is write-with-response, so
+it costs one interval out and one back: 248 bytes per 100 ms is the whole
+ceiling, and the MTU was never the limit. At the ~15 ms a high-priority
+connection asks for, the same transfer should be roughly three times quicker.
+
+Scoped to the fetch because a fast interval holds the radio busy continuously,
+which is battery spent for nothing once the tiles have landed; position packets
+go out every few seconds and do not care about interval at all. Released on
+every exit -- done, cancelled, link lost, service stopping -- which is why
+`TileFetcher.finish()` is the single place that hands it back, and why there is a
+test that each of those paths does.
+
+Android usually ignores a peripheral's request for faster parameters, so this has
+to come from the phone; the device cannot ask for it on its own.
 
 The command and status channels are **indications**, not notifications: the
 device sends multi-line replies faster than the connection interval drains

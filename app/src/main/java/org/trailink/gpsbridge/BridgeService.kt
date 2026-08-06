@@ -351,6 +351,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         }
 
         override fun maxChunkPayload(): Int = ble.maxChunkPayload()
+
+        override fun setFastLink(fast: Boolean) {
+            ble.requestHighPriority(fast)
+        }
     }
 
     private val fetchScheduler = object : TileFetcher.Scheduler {
