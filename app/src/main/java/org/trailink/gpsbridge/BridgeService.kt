@@ -153,10 +153,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         isRunning = true
         locationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         ble = BleLink(this, this)
-        // Local first, then the CDN, and CDN hits are cached into the same
-        // directory -- see ChainTileSource. The local half is also where a
-        // mapbuilder out_dir gets pushed by hand for testing.
-        tileSource = ChainTileSource(FileTileSource(tileRoot()), CdnTileSource())
+        // Straight to the CDN. Nothing is kept on the phone: it is the pipe
+        // between the CDN and the X4 (TileSource).
+        tileSource = CdnTileSource()
         tileFetcher = TileFetcher(tileSource, fetchTransport, fetchScheduler, this)
         createChannel()
         registerReceiver(btReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
@@ -373,16 +372,6 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         }
     }
 
-    /**
-     * Where tiles come from. A directory on the phone today, standing in for the
-     * public tile CDN that does not exist yet -- see [TileSource], which is the
-     * seam an HTTP implementation slots into.
-     *
-     * `getExternalFilesDir("tiles")/base/<z>/<col>/<row>.tib`. App-private, so
-     * no storage permission, and reachable over adb without root:
-     * `adb push out_dir/base /sdcard/Android/data/org.trailink.gpsbridge/files/tiles/`.
-     */
-    private fun tileRoot(): File = File(getExternalFilesDir("tiles") ?: filesDir, "")
 
     private val btReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {

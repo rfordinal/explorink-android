@@ -57,45 +57,33 @@ every fetch, not once. `TileHeader` reads the magic and the u16 version; a
 mismatch is `skip ... fmt<found>`, which is deliberately distinct from a plain
 miss: "no tile here" and "wrong tile here" want different fixes.
 
-### Where tiles come from: local, then the CDN
+### Where tiles come from: the CDN, and only the CDN
 
-`ChainTileSource` asks the phone's own directory first and the public tile CDN
-second, and keeps what the CDN gives back.
+`https://tiles.trailink-app.com/v<format>/base/<z>/<col>/<row>.tib`
+(`docs/tile-cdn-plan.md`). Static files, no API -- a miss is a 404 and that is
+the whole protocol. **Verified 2026-08-06** from the laptop and from the phone
+over LTE: a real tile answers 200 byte-identical to the local build, a
+nonexistent one answers 404.
 
-- **Local first**, if anything is there at all. Empty is the normal state --
-  nothing writes to this directory. It exists so a rider can put an area on the
-  phone deliberately for a trip with no signal, and so a test build can be
-  pushed by hand:
+**Nothing is stored on the phone.** There was a directory on it once -- a
+stand-in from before the CDN existed, then briefly a cache for what the CDN
+served. Both are gone. A tile belongs on the X4 or on the CDN; the phone is the
+pipe between them, holding one in memory for the length of its transfer and
+dropping it the moment it lands.
 
-  ```bash
-  adb push out_dir/base /sdcard/Android/data/org.trailink.gpsbridge/files/tiles/
-  ```
-
-  `<getExternalFilesDir("tiles")>/base/<z>/<col>/<row>.tib`, app-private, so no
-  storage permission.
-
-- **Then the CDN**: `https://tiles.trailink-app.com/v<format>/base/<z>/<col>/<row>.tib`
-  (`docs/tile-cdn-plan.md`). Static files, no API -- a miss is a 404 and that is
-  the whole protocol. **Verified 2026-08-06**: `/v2/mapset.json` and a real tile
-  both answer 200, a nonexistent tile answers 404, and the tile came back
-  byte-identical to the local build (same md5, 723,448 B, `TIB1` v2).
-
-- **Nothing is cached, on purpose.** The phone is the pipe between the CDN and
-  the X4, not a store: a tile belongs on the device or on the CDN. It is held in
-  memory for the length of its transfer -- where the bytes already are, to push
-  them -- and dropped the moment it lands.
-
-  Caching would trade a repeated download, which happens only when a link dies
-  mid-sync, for a phone that silently accumulates a continent of map data it
-  never reads itself. Re-fetching on a retry is the cheaper mistake by a wide
-  margin.
+Caching would have traded a repeated download -- which happens only when a link
+dies mid-sync -- for a phone that silently accumulates a continent of map data it
+never reads itself. A second source would also be somewhere for the two to
+disagree.
 
 **The format version in the URL is the device's, not the app's.** The CDN
 publishes one path per `.tib` `FORMAT_VERSION`, and the device states which it
 reads in `NEED_TILES ... fmt N`. Passing that straight through makes a format
-mismatch impossible by construction instead of something detected after a
-wasted transfer. An older firmware that does not say leaves it null, and only
-then does the app fall back to a compiled-in guess.
+mismatch impossible by construction instead of something detected after a wasted
+transfer -- and it paid off immediately: the firmware moved to format 3 the same
+day, and the app followed with no change at all, because it had never hardcoded
+2. An older firmware that does not say leaves it null, and only then does the app
+fall back to a compiled-in guess.
 
 ### The source is asynchronous, and has to be
 

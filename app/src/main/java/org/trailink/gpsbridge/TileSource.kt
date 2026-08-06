@@ -1,7 +1,6 @@
 package org.trailink.gpsbridge
 
 import android.util.Log
-import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
@@ -21,6 +20,13 @@ import java.util.concurrent.Executors
  * `.tib` format version, so passing the device's number straight through makes
  * a format mismatch impossible by construction rather than by a check after the
  * fact.
+ *
+ * **One implementation, and it is the CDN.** There used to be a directory on the
+ * phone as well -- a stand-in from before the CDN existed, then briefly a cache.
+ * Both are gone: a tile belongs on the X4 or on the CDN, the phone is the pipe
+ * between them, and a second source is only somewhere for the two to disagree.
+ * The interface stays because it is what keeps the network out of the state
+ * machine and out of its tests.
  */
 interface TileSource {
     /** Hands back the tile's bytes, or null if this source does not have it. */
@@ -31,66 +37,6 @@ interface TileSource {
 
     /** Releases any threads. Called when the service stops. */
     fun close() {}
-}
-
-/**
- * Reads tiles out of a directory on the phone, if somebody put them there.
- *
- * **Opt-in and nothing writes to it.** A `mapbuilder out_dir` pushed by hand,
- * for testing or for an area a rider wants available with no signal. Empty is
- * the normal state, and an empty directory costs one failed `isFile` per tile.
- *
- * Layout under [root] is the same one `mapbuilder` writes and the device reads:
- *
- *     <root>/base/<z>/<col>/<row>.tib
- */
-class FileTileSource(private val root: File) : TileSource {
-
-    companion object {
-        private const val TAG = "FileTileSource"
-
-        /**
-         * A tile larger than this is not pushed. The device refuses a begin over
-         * 8 MB outright (`docs/ble-map-transfer-protocol.md`), and this channel
-         * is the small/urgent path anyway.
-         */
-        const val MAX_TILE_BYTES = TransferFrames.MAX_FILE_BYTES
-    }
-
-    // One thread: reads are serialised anyway (the fetcher asks for one tile at
-    // a time), and a pool would only add threads that sit idle mid-ride.
-    private val io = Executors.newSingleThreadExecutor { r -> Thread(r, "tile-file") }
-
-    override fun read(z: Int, col: Long, row: Long, formatVersion: Int?, done: (ByteArray?) -> Unit) {
-        io.execute {
-            val bytes = readBlocking(z, col, row)
-            MainThread.post { done(bytes) }
-        }
-    }
-
-    /** Blocking read, for use from a worker -- [ChainTileSource] calls this too. */
-    fun readBlocking(z: Int, col: Long, row: Long): ByteArray? {
-        val file = File(root, TransferFrames.tileRelPath(z, col, row))
-        if (!file.isFile) return null
-        val length = file.length()
-        if (length <= 0 || length > MAX_TILE_BYTES) {
-            Log.w(TAG, "skipping ${file.path}: $length bytes")
-            return null
-        }
-        return try {
-            file.readBytes()
-        } catch (t: Throwable) {
-            // A miss, not a crash: the fetch tells the device `skip` and moves on.
-            Log.w(TAG, "read failed ${file.path}", t)
-            null
-        }
-    }
-
-    override fun describe(): String = "local ${root.path}"
-
-    override fun close() {
-        io.shutdown()
-    }
 }
 
 /**
@@ -121,6 +67,13 @@ class CdnTileSource(
          */
         const val DEFAULT_FORMAT_VERSION = 2
 
+        /**
+         * A tile larger than this is not pushed. The device refuses a begin over
+         * 8 MB outright (`docs/ble-map-transfer-protocol.md`), so downloading
+         * one only to be refused is work for nothing.
+         */
+        const val MAX_TILE_BYTES = TransferFrames.MAX_FILE_BYTES
+
         private const val CONNECT_TIMEOUT_MS = 10_000
         private const val READ_TIMEOUT_MS = 20_000
     }
@@ -148,7 +101,7 @@ class CdnTileSource(
             when (val code = conn.responseCode) {
                 200 -> {
                     val bytes = conn.inputStream.use { it.readBytes() }
-                    if (bytes.size > FileTileSource.MAX_TILE_BYTES) {
+                    if (bytes.size > MAX_TILE_BYTES) {
                         Log.w(TAG, "$url is ${bytes.size} bytes, over the transfer cap")
                         null
                     } else {
@@ -177,54 +130,5 @@ class CdnTileSource(
 
     override fun close() {
         io.shutdown()
-    }
-}
-
-/**
- * Local first if anything is there, otherwise the CDN.
- *
- * **The phone stores nothing.** A tile belongs on the X4 or on the CDN; the
- * phone is the pipe between them and holds a tile only as long as it takes to
- * push it -- in memory, where the bytes already are for the transfer, and gone
- * the moment it lands ([TileFetcher] clears them on completion).
- *
- * This deliberately does not cache. Keeping what the CDN serves would trade a
- * repeated download -- rare, only after a link dies mid-sync -- for a phone that
- * silently accumulates a continent of map data it never reads itself. Re-fetching
- * on a retry is the cheaper mistake by a wide margin.
- *
- * The local half stays because a rider may want an area available with no
- * signal, and because it is where a test build gets pushed. Nothing writes to
- * it.
- */
-class ChainTileSource(
-    private val local: FileTileSource,
-    private val cdn: CdnTileSource,
-) : TileSource {
-
-    companion object {
-        private const val TAG = "ChainTileSource"
-    }
-
-    private val io = Executors.newSingleThreadExecutor { r -> Thread(r, "tile-chain") }
-
-    override fun read(z: Int, col: Long, row: Long, formatVersion: Int?, done: (ByteArray?) -> Unit) {
-        io.execute {
-            var bytes = local.readBlocking(z, col, row)
-            if (bytes == null) {
-                bytes = cdn.readBlocking(z, col, row, formatVersion)
-                if (bytes != null) Log.i(TAG, "cdn hit $z/$col/$row (${bytes.size} B)")
-            }
-            val result = bytes
-            MainThread.post { done(result) }
-        }
-    }
-
-    override fun describe(): String = "${local.describe()} then ${cdn.describe()}"
-
-    override fun close() {
-        io.shutdown()
-        local.close()
-        cdn.close()
     }
 }
