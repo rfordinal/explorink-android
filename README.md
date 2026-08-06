@@ -26,9 +26,11 @@ No route logic, no cloud.
 
 ## Fetching missing tiles
 
-The rider starts it **on the device**, from the map screen's CONFIRM menu. The
-phone never decides to do this on its own -- it is a transfer of kilobytes over
-a link the rider is relying on for position, so the rider says when.
+The rider starts it **on the device**, from the home menu's **Sync map tiles**.
+The phone never decides to do this on its own -- it is a transfer of kilobytes
+over a link the rider is relying on for position, so the rider says when. It is
+also preparation done before a ride, not something anyone stops mid-trail for,
+which is why it is a screen of its own rather than an item in the map's menu.
 
 The conversation (`docs/ble-map-transfer-protocol.md` and
 `firmware/trailink/docs/missing-tiles.md` in the parent repo):
