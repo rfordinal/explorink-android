@@ -111,6 +111,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
     private lateinit var ble: BleLink
     private lateinit var tileFetcher: TileFetcher
+    private lateinit var tileSource: TileSource
     /** Last line about a tile fetch, for the one window. Null until one happens. */
     private var tileFetchStatus: String? = null
     private var locationManager: LocationManager? = null
@@ -152,7 +153,11 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         isRunning = true
         locationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         ble = BleLink(this, this)
-        tileFetcher = TileFetcher(FileTileSource(tileRoot()), fetchTransport, fetchScheduler, this)
+        // Local first, then the CDN, and CDN hits are cached into the same
+        // directory -- see ChainTileSource. The local half is also where a
+        // mapbuilder out_dir gets pushed by hand for testing.
+        tileSource = ChainTileSource(FileTileSource(tileRoot()), CdnTileSource())
+        tileFetcher = TileFetcher(tileSource, fetchTransport, fetchScheduler, this)
         createChannel()
         registerReceiver(btReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
         addEvent("service started")
@@ -196,6 +201,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         stopLocation()
         // Before ble.stop(): the abort frame it may send needs a live link.
         tileFetcher.stop()
+        tileSource.close()
         ble.stop()
         stopRecording()
         releaseWakeLock()

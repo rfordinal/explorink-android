@@ -57,26 +57,52 @@ every fetch, not once. `TileHeader` reads the magic and the u16 version; a
 mismatch is `skip ... fmt<found>`, which is deliberately distinct from a plain
 miss: "no tile here" and "wrong tile here" want different fixes.
 
-### Where tiles come from: the CDN seam
+### Where tiles come from: local, then the CDN
 
-`TileSource` is `(z, col, row) -> bytes or miss`, and that shape is the point.
-The real source is meant to be a public tile CDN (`docs/roadmap.md`), which
-does not exist yet. Today the only implementation is `FileTileSource`, reading
-a directory on the phone laid out exactly like the CDN's `out_dir`:
+`ChainTileSource` asks the phone's own directory first and the public tile CDN
+second, and keeps what the CDN gives back.
 
-```
-<getExternalFilesDir("tiles")>/base/<z>/<col>/<row>.tib
-```
+- **Local first** because it costs no data and no latency, and a tile already on
+  the phone is one the CDN served before. It is also where a `mapbuilder
+  out_dir` gets pushed by hand for testing:
 
-App-private, so no storage permission. Fill it for testing with:
+  ```bash
+  adb push out_dir/base /sdcard/Android/data/org.trailink.gpsbridge/files/tiles/
+  ```
 
-```bash
-adb push out_dir/base /sdcard/Android/data/org.trailink.gpsbridge/files/tiles/
-```
+  `<getExternalFilesDir("tiles")>/base/<z>/<col>/<row>.tib`, app-private, so no
+  storage permission.
 
-When the CDN is real, an HTTP implementation replaces `FileTileSource` behind
-the same one call. Nothing else in the app changes -- which is why the shape
-must not grow a batch call or a suspend function.
+- **Then the CDN**: `https://tiles.trailink-app.com/v<format>/base/<z>/<col>/<row>.tib`
+  (`docs/tile-cdn-plan.md`). Static files, no API -- a miss is a 404 and that is
+  the whole protocol. **Verified 2026-08-06**: `/v2/mapset.json` and a real tile
+  both answer 200, a nonexistent tile answers 404, and the tile came back
+  byte-identical to the local build (same md5, 723,448 B, `TIB1` v2).
+
+- **What the CDN serves is cached** into the local directory before it is handed
+  on. A transfer takes tens of seconds and a link that dies during it must not
+  cost the download twice. Written to `.part` and renamed, so an interrupted
+  write never leaves a half tile that reads as whole -- the same rule the device
+  applies to its own arrivals.
+
+**The format version in the URL is the device's, not the app's.** The CDN
+publishes one path per `.tib` `FORMAT_VERSION`, and the device states which it
+reads in `NEED_TILES ... fmt N`. Passing that straight through makes a format
+mismatch impossible by construction instead of something detected after a
+wasted transfer. An older firmware that does not say leaves it null, and only
+then does the app fall back to a compiled-in guess.
+
+### The source is asynchronous, and has to be
+
+`TileSource.read()` takes a callback rather than returning bytes. The fetch runs
+on the service's main thread because that is where BLE lives, and Android throws
+`NetworkOnMainThreadException` for an HTTP call there. Every implementation does
+its work on a worker and comes back on the main thread, so the state machine
+keeps its single-threaded contract.
+
+That opened one case worth a test of its own: a read can land *after* the fetch
+it belongs to has been cancelled or lost its link. A late answer must not open a
+transfer on a run that is already over.
 
 ### One GATT operation at a time
 

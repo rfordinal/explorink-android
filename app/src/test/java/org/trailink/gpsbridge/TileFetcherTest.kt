@@ -27,7 +27,17 @@ class TileFetcherTest {
 
     private class FakeSource : TileSource {
         val tiles = mutableMapOf<String, ByteArray>()
-        override fun read(z: Int, col: Long, row: Long): ByteArray? = tiles["$z/$col/$row"]
+        /** Format version the fetcher passed down, so a test can prove it did. */
+        var lastFormatAsked: Int? = -1
+
+        // Completes inline. The real sources come back on the main thread from a
+        // worker; the fetcher only requires "exactly once, on my thread", which
+        // this satisfies without a looper in the test.
+        override fun read(z: Int, col: Long, row: Long, formatVersion: Int?, done: (ByteArray?) -> Unit) {
+            lastFormatAsked = formatVersion
+            done(tiles["$z/$col/$row"])
+        }
+
         override fun describe(): String = "fake"
     }
 
@@ -276,6 +286,55 @@ class TileFetcherTest {
         // A late status line from the abandoned transfer must not restart it.
         h.fetcher.onStatusLine("OK 500 00000000")
         assertEquals(TileFetcher.Phase.IDLE, h.fetcher.phase)
+    }
+
+    @Test
+    fun `the device's format version is what the source is asked for`() {
+        // The CDN publishes one path per .tib format version, so this number
+        // picks the URL. Passing the device's own answer through makes a format
+        // mismatch impossible rather than something to detect afterwards.
+        val h = Harness()
+        h.source.tiles["12/1/1"] = tileBytes(50)
+        h.fetcher.onCommandLine("NEED_TILES 1 fmt 2")
+        h.list(MissingTile(12, 1, 1, 1))
+        assertEquals(2, h.source.lastFormatAsked)
+
+        // An older firmware that does not say leaves it null -- the source picks
+        // its own fallback, and nothing here pretends to know.
+        val old = Harness()
+        old.source.tiles["12/1/1"] = tileBytes(50)
+        old.fetcher.onCommandLine("NEED_TILES 1")
+        old.list(MissingTile(12, 1, 1, 1))
+        assertEquals(null, old.source.lastFormatAsked)
+    }
+
+    @Test
+    fun `a read that lands after the fetch ended starts nothing`() {
+        // The source is asynchronous now, so a cancel or a dropped link can
+        // arrive while a read is in flight. The late answer must not open a
+        // transfer on a fetch that is already over.
+        val h = Harness()
+        var deliver: ((ByteArray?) -> Unit)? = null
+        val slow = object : TileSource {
+            override fun read(z: Int, col: Long, row: Long, formatVersion: Int?, done: (ByteArray?) -> Unit) {
+                deliver = done
+            }
+            override fun describe(): String = "slow"
+        }
+        val fetcher = TileFetcher(slow, h.transport, h.scheduler, h.recorder)
+        fetcher.onCommandLine("NEED_TILES 1 fmt 2")
+        fetcher.onCommandLine("INFO missing_total=1")
+        fetcher.onCommandLine("INFO missing_offset=0")
+        fetcher.onCommandLine("INFO missing_12_1_1=1")
+        fetcher.onCommandLine("INFO missing_next=done")
+        fetcher.onCommandLine("OK")
+
+        fetcher.onDisconnected()
+        assertEquals(TileFetcher.Phase.IDLE, fetcher.phase)
+
+        deliver?.invoke(tileBytes(50))
+        assertEquals(0, h.transport.beginFrames().size)
+        assertEquals(TileFetcher.Phase.IDLE, fetcher.phase)
     }
 
     @Test

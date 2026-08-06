@@ -269,7 +269,25 @@ class TileFetcher(
             return
         }
 
-        val data = source.read(next.z, next.col, next.row)
+        // Asynchronous: the source may be the CDN, and an HTTP GET cannot run
+        // on the thread BLE lives on. The callback comes back on this thread.
+        source.read(next.z, next.col, next.row, wantedFormat) { data ->
+            onTileBytes(next, relPath, data)
+        }
+    }
+
+    /**
+     * The source answered for [next]. Everything from the begin frame onward.
+     *
+     * Guarded against a fetch that ended while the read was in flight: a
+     * cancelled or dropped run must not start a transfer on the way out, and by
+     * then `phase` has already moved on.
+     */
+    private fun onTileBytes(next: MissingTile, relPath: String, data: ByteArray?) {
+        if (phase != Phase.PUSHING) {
+            Log.i(TAG, "dropping a late read for ${describe(next)}; the fetch has ended")
+            return
+        }
         if (data == null) {
             skip(next, SKIP_NO_SOURCE)
             return
