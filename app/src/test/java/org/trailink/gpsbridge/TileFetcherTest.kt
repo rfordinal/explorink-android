@@ -82,6 +82,7 @@ class TileFetcherTest {
         fun chunkFrames(): List<ByteArray> = frames.filter { it[0] == TransferFrames.OP_CHUNK }
         fun beginFrames(): List<ByteArray> = frames.filter { it[0] == TransferFrames.OP_BEGIN }
         fun abortFrames(): List<ByteArray> = frames.filter { it[0] == TransferFrames.OP_ABORT }
+
     }
 
     /** Holds the pending timeout instead of running it, so a test can fire it. */

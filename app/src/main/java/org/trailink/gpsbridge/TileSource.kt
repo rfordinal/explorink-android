@@ -34,10 +34,11 @@ interface TileSource {
 }
 
 /**
- * Reads tiles out of a directory on the phone.
+ * Reads tiles out of a directory on the phone, if somebody put them there.
  *
- * Two jobs: a place to drop a `mapbuilder out_dir` by hand for testing, and the
- * on-disk cache [CdnTileSource]'s results land in via [ChainTileSource].
+ * **Opt-in and nothing writes to it.** A `mapbuilder out_dir` pushed by hand,
+ * for testing or for an area a rider wants available with no signal. Empty is
+ * the normal state, and an empty directory costs one failed `isFile` per tile.
  *
  * Layout under [root] is the same one `mapbuilder` writes and the device reads:
  *
@@ -82,24 +83,6 @@ class FileTileSource(private val root: File) : TileSource {
             // A miss, not a crash: the fetch tells the device `skip` and moves on.
             Log.w(TAG, "read failed ${file.path}", t)
             null
-        }
-    }
-
-    /** Stores a tile fetched elsewhere, so the next ask does not pay for it twice. */
-    fun write(z: Int, col: Long, row: Long, bytes: ByteArray): Boolean {
-        val file = File(root, TransferFrames.tileRelPath(z, col, row))
-        return try {
-            file.parentFile?.mkdirs()
-            // Written beside the target and renamed, so an interrupted write
-            // never leaves a half tile that reads as whole -- the same rule the
-            // device applies to its own arrivals (MapTransferReceiver).
-            val part = File(file.path + ".part")
-            part.writeBytes(bytes)
-            if (file.exists()) file.delete()
-            part.renameTo(file)
-        } catch (t: Throwable) {
-            Log.w(TAG, "cache write failed ${file.path}", t)
-            false
         }
     }
 
@@ -198,15 +181,21 @@ class CdnTileSource(
 }
 
 /**
- * Local first, then the CDN, and what the CDN gives back is kept.
+ * Local first if anything is there, otherwise the CDN.
  *
- * Local first because it costs no data and no latency, and because a tile
- * already on the phone is by definition one the CDN served before. The cache
- * write is what makes a retried sync -- link dropped halfway, rider tries again
- * -- free the second time.
+ * **The phone stores nothing.** A tile belongs on the X4 or on the CDN; the
+ * phone is the pipe between them and holds a tile only as long as it takes to
+ * push it -- in memory, where the bytes already are for the transfer, and gone
+ * the moment it lands ([TileFetcher] clears them on completion).
  *
- * The cache is deliberately the same directory a `mapbuilder out_dir` gets
- * pushed into by hand. One layout, one place to look, no second concept.
+ * This deliberately does not cache. Keeping what the CDN serves would trade a
+ * repeated download -- rare, only after a link dies mid-sync -- for a phone that
+ * silently accumulates a continent of map data it never reads itself. Re-fetching
+ * on a retry is the cheaper mistake by a wide margin.
+ *
+ * The local half stays because a rider may want an area available with no
+ * signal, and because it is where a test build gets pushed. Nothing writes to
+ * it.
  */
 class ChainTileSource(
     private val local: FileTileSource,
@@ -224,13 +213,7 @@ class ChainTileSource(
             var bytes = local.readBlocking(z, col, row)
             if (bytes == null) {
                 bytes = cdn.readBlocking(z, col, row, formatVersion)
-                if (bytes != null) {
-                    // Cached before it is handed on: the transfer that follows
-                    // takes tens of seconds, and a link that dies during it must
-                    // not cost the download again.
-                    val cached = local.write(z, col, row, bytes)
-                    Log.i(TAG, "cdn hit $z/$col/$row (${bytes.size} B)" + if (cached) ", cached" else "")
-                }
+                if (bytes != null) Log.i(TAG, "cdn hit $z/$col/$row (${bytes.size} B)")
             }
             val result = bytes
             MainThread.post { done(result) }

@@ -62,9 +62,10 @@ miss: "no tile here" and "wrong tile here" want different fixes.
 `ChainTileSource` asks the phone's own directory first and the public tile CDN
 second, and keeps what the CDN gives back.
 
-- **Local first** because it costs no data and no latency, and a tile already on
-  the phone is one the CDN served before. It is also where a `mapbuilder
-  out_dir` gets pushed by hand for testing:
+- **Local first**, if anything is there at all. Empty is the normal state --
+  nothing writes to this directory. It exists so a rider can put an area on the
+  phone deliberately for a trip with no signal, and so a test build can be
+  pushed by hand:
 
   ```bash
   adb push out_dir/base /sdcard/Android/data/org.trailink.gpsbridge/files/tiles/
@@ -79,11 +80,15 @@ second, and keeps what the CDN gives back.
   both answer 200, a nonexistent tile answers 404, and the tile came back
   byte-identical to the local build (same md5, 723,448 B, `TIB1` v2).
 
-- **What the CDN serves is cached** into the local directory before it is handed
-  on. A transfer takes tens of seconds and a link that dies during it must not
-  cost the download twice. Written to `.part` and renamed, so an interrupted
-  write never leaves a half tile that reads as whole -- the same rule the device
-  applies to its own arrivals.
+- **Nothing is cached, on purpose.** The phone is the pipe between the CDN and
+  the X4, not a store: a tile belongs on the device or on the CDN. It is held in
+  memory for the length of its transfer -- where the bytes already are, to push
+  them -- and dropped the moment it lands.
+
+  Caching would trade a repeated download, which happens only when a link dies
+  mid-sync, for a phone that silently accumulates a continent of map data it
+  never reads itself. Re-fetching on a retry is the cheaper mistake by a wide
+  margin.
 
 **The format version in the URL is the device's, not the app's.** The CDN
 publishes one path per `.tib` `FORMAT_VERSION`, and the device states which it
