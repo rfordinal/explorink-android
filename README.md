@@ -75,6 +75,20 @@ What the app does differently, and nothing else changes:
 `view` is a bare flag word with no value, so an older device simply never sends
 it and the app pages `missing` as before (`MissingList.parseNeedTiles`).
 
+**Verified end to end on real hardware, 2026-08-07.** A tile under the rider's
+own position was deleted off the X4's card, the map was reopened and the app
+connected:
+
+```
+device wants 1 tiles, format 3, scope viewport, source is CDN
+list complete: 1 tiles of 1              191 ms, one request, no paging
+landed z13 4485/2843 (317895 bytes)
+fetch finished: done (1 sent, 0 skipped of 1)
+```
+
+317,895 B in 34.6 s = **9.0 kB/s**, at the 12.5 ms interval the app asks for and
+gives back 180 ms after the fetch ends. The device redrew itself with the tile.
+
 **The format version is checked before a single byte goes out.** A tile built
 to another `.tib` version transfers fine, passes CRC, is renamed into place --
 and is then refused by the device's reader on the next render, after the entry
