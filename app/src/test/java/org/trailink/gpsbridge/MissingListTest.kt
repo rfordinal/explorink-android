@@ -133,4 +133,56 @@ class MissingListTest {
         assertFalse(page.feed("INFO missing_12_1_1=x"))        // count not a number
         assertTrue(page.tiles.isEmpty())
     }
+
+    @Test
+    fun `the view word is parsed off NEED_TILES and defaults to false`() {
+        val plain = MissingList.parseNeedTiles("NEED_TILES 4 fmt 3")!!
+        assertFalse(plain.viewportOnly)
+
+        val scoped = MissingList.parseNeedTiles("NEED_TILES 4 fmt 3 view")!!
+        assertTrue(scoped.viewportOnly)
+        assertEquals(4, scoped.count)
+        assertEquals(3, scoped.formatVersion)
+    }
+
+    @Test
+    fun `the viewport reader queues only the missing tiles`() {
+        val view = MissingList.ViewportReader()
+        assertTrue(view.feed("INFO tile_13_4496_2846=missing"))
+        // An `ok` line belongs to this listing and is deliberately not queued:
+        // the card already holds it, and pushing it would spend the rider's
+        // data to overwrite a file with itself.
+        assertTrue(view.feed("INFO tile_13_4496_2847=ok"))
+        assertTrue(view.feed("OK"))
+
+        assertTrue(view.complete)
+        assertEquals(1, view.tiles.size)
+        assertEquals(MissingTile(13, 4496, 2846, 0), view.tiles[0])
+        assertEquals(1, view.total)
+        // No paging in this shape -- the viewport is at most 32 tiles.
+        assertNull(view.nextOffset)
+        assertTrue(view.done)
+    }
+
+    @Test
+    fun `tiles=none is not the same as an empty viewport`() {
+        val view = MissingList.ViewportReader()
+        assertTrue(view.feed("INFO tiles=none"))
+        assertTrue(view.unavailable)
+
+        val empty = MissingList.ViewportReader()
+        assertTrue(empty.feed("OK"))
+        assertFalse(empty.unavailable)
+        assertTrue(empty.tiles.isEmpty())
+    }
+
+    @Test
+    fun `the viewport reader refuses malformed tile lines`() {
+        val view = MissingList.ViewportReader()
+        assertFalse(view.feed("INFO tile_13_4496=missing"))   // a component short
+        assertFalse(view.feed("INFO tile_13_x_2846=missing")) // not a number
+        assertFalse(view.feed("INFO tile_999_1_1=missing"))   // z past a uint8
+        assertFalse(view.feed("INFO zoom=2"))                 // not ours at all
+        assertTrue(view.tiles.isEmpty())
+    }
 }

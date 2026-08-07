@@ -405,6 +405,67 @@ class TileFetcherTest {
     }
 
     @Test
+    fun `a view ask reads the viewport with tiles, not the whole missing list`() {
+        val h = Harness()
+        h.fetcher.onCommandLine("NEED_TILES 2 fmt 2 view")
+
+        // The command that went out is what this whole feature is about: asking
+        // for the whole 200-entry list mid-ride is the thing being avoided.
+        assertEquals(listOf("tiles"), h.transport.commands)
+
+        h.fetcher.onCommandLine("INFO tile_13_4496_2846=missing")
+        h.fetcher.onCommandLine("INFO tile_13_4496_2847=ok")
+        h.fetcher.onCommandLine("INFO tile_13_4497_2846=missing")
+        h.fetcher.onCommandLine("OK")
+
+        // Two missing, one already on the card. Neither missing tile is in the
+        // source, so both are skipped -- which is what proves they were queued
+        // and that the `ok` one was not.
+        assertEquals(2, h.recorder.finalSkipped)
+        assertEquals("done", h.recorder.finished)
+    }
+
+    @Test
+    fun `a view ask never pages`() {
+        val h = Harness()
+        h.fetcher.onCommandLine("NEED_TILES 1 fmt 2 view")
+        h.fetcher.onCommandLine("INFO tile_12_1_1=missing")
+        h.fetcher.onCommandLine("OK")
+        // No `missing` in the whole conversation. A second listing command would
+        // be an offset the device never offered, and the fetch would hang on it
+        // until the timeout. (`skip` lines are in here too -- the source has
+        // nothing -- so this asserts about the listing commands, not the count.)
+        assertTrue(h.transport.commands.none { it.startsWith("missing") })
+        assertEquals("tiles", h.transport.commands.first())
+    }
+
+    @Test
+    fun `without the view word the whole list is still read`() {
+        val h = Harness()
+        h.fetcher.onCommandLine("NEED_TILES 1 fmt 2")
+        assertEquals(listOf("missing"), h.transport.commands)
+    }
+
+    @Test
+    fun `a viewport with nothing missing finishes rather than waiting`() {
+        val h = Harness()
+        h.fetcher.onCommandLine("NEED_TILES 0 fmt 2 view")
+        h.fetcher.onCommandLine("INFO tile_12_1_1=ok")
+        h.fetcher.onCommandLine("OK")
+        assertEquals("done", h.recorder.finished)
+        assertEquals(0, h.recorder.finalSent)
+    }
+
+    @Test
+    fun `a device with no viewport yet ends the fetch with its own words`() {
+        val h = Harness()
+        h.fetcher.onCommandLine("NEED_TILES 1 fmt 2 view")
+        h.fetcher.onCommandLine("INFO tiles=none")
+        h.fetcher.onCommandLine("OK")
+        assertEquals("device has no viewport yet", h.recorder.finished)
+    }
+
+    @Test
     fun `a device with no missing list ends the fetch instead of hanging`() {
         val h = Harness()
         h.fetcher.onCommandLine("NEED_TILES 1 fmt 2")

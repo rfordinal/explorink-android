@@ -108,7 +108,14 @@ class TileFetcher(
     var phase: Phase = Phase.IDLE
         private set
 
-    private var page: MissingList.PageReader? = null
+    private var page: MissingList.Listing? = null
+
+    /**
+     * True while answering a `view` ask: the device wants the tiles on its
+     * screen right now, read with `tiles`, not its whole hatched history read
+     * with `missing`. Set per fetch from [MissingList.NeedTiles.viewportOnly].
+     */
+    private var viewportOnly = false
     private val queue = ArrayDeque<MissingTile>()
     private var total = 0
     private var sent = 0
@@ -205,11 +212,13 @@ class TileFetcher(
         Log.i(
             TAG,
             "device wants ${need.count} tiles, format ${need.formatVersion ?: "unstated"}, " +
+                "scope ${if (need.viewportOnly) "viewport" else "whole list"}, " +
                 "source is ${source.describe()}",
         )
         phase = Phase.LISTING
         total = need.count
         wantedFormat = need.formatVersion
+        viewportOnly = need.viewportOnly
         // For the duration of this fetch and no longer -- released in finish().
         transport.setFastLink(true)
         listener.onFetchStarted(need.count)
@@ -217,9 +226,17 @@ class TileFetcher(
     }
 
     private fun requestPage(offset: Int) {
-        page = MissingList.PageReader()
+        // `view` asks are answered from the viewport and never paged -- at most
+        // 32 tiles, one reply. Only offset 0 can reach here in that mode.
+        val line: String
+        if (viewportOnly) {
+            page = MissingList.ViewportReader()
+            line = "tiles"
+        } else {
+            page = MissingList.PageReader()
+            line = if (offset == 0) "missing" else "missing $offset"
+        }
         armTimeout()
-        val line = if (offset == 0) "missing" else "missing $offset"
         transport.sendCommand(line) { ok, error ->
             if (!ok) finish("could not ask for the list: ${error ?: "write failed"}")
         }
@@ -229,7 +246,10 @@ class TileFetcher(
         val reader = page ?: return
         if (!reader.feed(line)) return
         if (reader.unavailable) {
-            finish("device has no missing-tile list")
+            // Two different "cannot answer" cases, and they want different
+            // words: no store wired to the console at all, versus no viewport
+            // yet because no fix has landed since the device started.
+            finish(if (viewportOnly) "device has no viewport yet" else "device has no missing-tile list")
             return
         }
         if (!reader.complete) return
@@ -439,6 +459,7 @@ class TileFetcher(
         sent = 0
         skipped = 0
         wantedFormat = null
+        viewportOnly = false
         tile = null
         bytes = null
         offset = 0

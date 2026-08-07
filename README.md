@@ -26,18 +26,22 @@ No route logic, no cloud.
 
 ## Fetching missing tiles
 
-The rider starts it **on the device**, from the home menu's **Sync map tiles**.
-The phone never decides to do this on its own -- it is a transfer of kilobytes
-over a link the rider is relying on for position, so the rider says when. It is
-also preparation done before a ride, not something anyone stops mid-trail for,
-which is why it is a screen of its own rather than an item in the map's menu.
+The rider starts it **on the device**, never the phone -- it is a transfer of
+kilobytes over a link the rider is relying on for position, so the rider says
+when. Two places start it, and they ask for different amounts:
+
+- **Home menu > Sync map tiles.** The whole list, up to 200 entries.
+  Preparation, done at home before a ride.
+- **The map screen's autosync**, if the rider turned it on in Settings > Map.
+  Sends the same ask with a trailing **`view`**, mid-ride, the moment a frame
+  hatches. See "The `view` ask" below.
 
 The conversation (`docs/ble-map-transfer-protocol.md` and
 `firmware/trailink/docs/missing-tiles.md` in the parent repo):
 
-1. Device indicates `NEED_TILES <count> fmt <version>` on `...0003`.
-2. App pages the list with `missing` / `missing <offset>` until
-   `missing_next=done`.
+1. Device indicates `NEED_TILES <count> fmt <version> [view]` on `...0003`.
+2. App reads the list: `tiles` for a `view` ask, otherwise pages `missing` /
+   `missing <offset>` until `missing_next=done`.
 3. For each tile **in the order the device gave them** -- already fetch
    priority, regional LOD first -- the app reads the bytes from its
    `TileSource` and pushes them over `...0004`: begin, wait for `RDY`, chunks,
@@ -48,6 +52,28 @@ The conversation (`docs/ble-map-transfer-protocol.md` and
    coming.
 5. `FETCH_CANCEL` (the rider pressed Back) stops everything and aborts whatever
    is in flight.
+
+### The `view` ask
+
+`NEED_TILES <n> fmt <v> view` means **answer from `tiles`, not from `missing`**.
+
+`tiles` reports the tiles under the device's screen right now, at most 32, each
+flagged `missing` or `ok`. `missing` reports every tile it has ever hatched, up
+to 200. Mid-ride those are very different amounts of the rider's mobile data,
+and only the first is what they are looking at.
+
+What the app does differently, and nothing else changes:
+
+- Sends `tiles` once. **Never pages** -- there is no `tiles <offset>`, and asking
+  for one would hang the fetch until the timeout.
+- Pushes only the entries flagged `missing`. An `ok` tile is already on the
+  card, and pushing it would spend data to overwrite a file with itself.
+- `INFO tiles=none` ends the fetch with "device has no viewport yet" -- the
+  device has had no fix since it started, which is a different problem from
+  having nothing to ask for.
+
+`view` is a bare flag word with no value, so an older device simply never sends
+it and the app pages `missing` as before (`MissingList.parseNeedTiles`).
 
 **The format version is checked before a single byte goes out.** A tile built
 to another `.tib` version transfers fine, passes CRC, is renamed into place --
