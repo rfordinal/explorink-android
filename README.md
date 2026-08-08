@@ -37,7 +37,7 @@ when. Two places start it, and they ask for different amounts:
   hatches. See "The `view` ask" below.
 
 The conversation (`docs/ble-map-transfer-protocol.md` and
-`firmware/trailink/docs/missing-tiles.md` in the parent repo):
+`firmware/explorink/docs/missing-tiles.md` in the parent repo):
 
 1. Device indicates `NEED_TILES <count> fmt <version> [view]` on `...0003`.
 2. App reads the list: `tiles` for a `view` ask, otherwise pages `missing` /
