@@ -99,7 +99,7 @@ miss: "no tile here" and "wrong tile here" want different fixes.
 
 ### Where tiles come from: the CDN, and only the CDN
 
-`https://tiles.trailink-app.com/v<format>/base/<z>/<col>/<row>.tib`
+`https://tiles.explorink.com/v<format>/base/<z>/<col>/<row>.tib`
 (`docs/tile-cdn-plan.md`). Static files, no API -- a miss is a 404 and that is
 the whole protocol. **Verified 2026-08-06** from the laptop and from the phone
 over LTE: a real tile answers 200 byte-identical to the local build, a
