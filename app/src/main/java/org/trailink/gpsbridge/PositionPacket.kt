@@ -6,7 +6,7 @@ import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 /**
- * The 19-byte position packet the TrailInk firmware expects on the position
+ * The 21-byte position packet the ExplorInk firmware expects on the position
  * characteristic. Layout is fixed by
  * `firmware/explorink/lib/BlePositionServer/include/BlePositionServer.h`:
  *
@@ -16,9 +16,14 @@ import kotlin.math.roundToLong
  *   [12..13] tz_offset  int16,  minutes east of UTC
  *   [14]     heading    0-15, 16 sectors, 0 = North, clockwise
  *   [15]     seq        rolling counter
- *   [16]     flags      bit0 = off-route warning (always 0 here, no route)
+ *   [16]     flags      bit0 = off-route warning (always 0 here, no route),
+ *                       bit1 = altitude present
  *   [17]     accuracy   metres, saturating
  *   [18]     speed      km/h, saturating
+ *   [19..20] altitude   int16, metres above sea level; only meaningful if
+ *                       flags bit1 is set. Zero is a real altitude (sea
+ *                       level), so "no vertical fix" needs the flag bit
+ *                       rather than a sentinel value.
  *
  * Little endian, no padding. A write of any other length is dropped by the
  * firmware, so the buffer is built byte by byte rather than by any
@@ -26,7 +31,7 @@ import kotlin.math.roundToLong
  */
 object PositionPacket {
 
-    const val SIZE = 19
+    const val SIZE = 21
 
     fun build(
         latDeg: Double,
@@ -38,7 +43,11 @@ object PositionPacket {
         flags: Int,
         accuracyMetres: Double,
         speedKmh: Double,
+        altitudeMetres: Double? = null,
     ): ByteArray {
+        val hasAltitude = altitudeMetres != null && !altitudeMetres.isNaN()
+        val effectiveFlags = flags or (if (hasAltitude) 0x02 else 0)
+
         val b = ByteBuffer.allocate(SIZE).order(ByteOrder.LITTLE_ENDIAN)
         b.putInt(degreesToE7(latDeg))
         b.putInt(degreesToE7(lonDeg))
@@ -46,10 +55,16 @@ object PositionPacket {
         b.putShort(tzOffsetMinutes.coerceIn(-32768, 32767).toShort())
         b.put((heading and 0x0F).toByte())
         b.put((seq and 0xFF).toByte())
-        b.put((flags and 0xFF).toByte())
+        b.put((effectiveFlags and 0xFF).toByte())
         b.put(saturateByte(accuracyMetres))
         b.put(saturateByte(speedKmh))
+        b.putShort(if (hasAltitude) altitudeToInt16(altitudeMetres!!) else 0)
         return b.array()
+    }
+
+    private fun altitudeToInt16(metres: Double): Short {
+        val rounded = metres.roundToLong()
+        return rounded.coerceIn(Short.MIN_VALUE.toLong(), Short.MAX_VALUE.toLong()).toShort()
     }
 
     private fun degreesToE7(deg: Double): Int {

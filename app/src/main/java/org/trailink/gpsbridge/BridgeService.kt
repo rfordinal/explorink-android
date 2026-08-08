@@ -563,6 +563,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         val heading = PositionPacket.headingSector(lastBearingDeg)
         val accuracyM = if (fix.hasAccuracy()) fix.accuracy.toDouble() else 0.0
         val speedKmh = if (fix.hasSpeed()) fix.speed.toDouble() * 3.6 else 0.0
+        val altitudeM = if (fix.hasAltitude()) fix.altitude else null
         val tzOffsetMin = TimeZone.getDefault().getOffset(nowMs) / 60000
 
         seq = (seq + 1) and 0xFF
@@ -577,6 +578,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             flags = 0, // no route in this app, so no off-route bit
             accuracyMetres = accuracyM,
             speedKmh = speedKmh,
+            altitudeMetres = altitudeM,
         )
 
         // The policy advances on the attempt, not on the ack: a failed write
@@ -601,6 +603,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
                 lonDeg = fix.longitude,
                 accuracyM = accuracyM,
                 speedKmh = speedKmh,
+                altitudeM = altitudeM,
                 error = error,
                 reason = reason.logName,
                 movedM = movedM,

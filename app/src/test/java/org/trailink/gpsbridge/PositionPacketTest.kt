@@ -7,17 +7,17 @@ import java.nio.ByteOrder
 
 /**
  * Checks the packet against the firmware's declared layout
- * (`BlePositionServer.h`): 19 bytes, little endian, no padding. A wrong length
+ * (`BlePositionServer.h`): 21 bytes, little endian, no padding. A wrong length
  * or a wrong field offset is silently dropped or misread by the device, so this
  * is the one thing worth testing off the phone.
  */
 class PositionPacketTest {
 
     @Test
-    fun lengthIsExactlyNineteen() {
+    fun lengthIsExactlyTwentyOne() {
         val p = PositionPacket.build(0.0, 0.0, 0L, 0, 0, 0, 0, 0.0, 0.0)
-        assertEquals(19, p.size)
-        assertEquals(19, PositionPacket.SIZE)
+        assertEquals(21, p.size)
+        assertEquals(21, PositionPacket.SIZE)
     }
 
     @Test
@@ -45,9 +45,57 @@ class PositionPacketTest {
         assertEquals(120, b.getShort(12).toInt())
         assertEquals(5, bytes[14].toInt())
         assertEquals(200, bytes[15].toInt() and 0xFF)
-        assertEquals(0, bytes[16].toInt())
+        assertEquals(0, bytes[16].toInt())  // no altitude given, so bit1 stays clear
         assertEquals(7, bytes[17].toInt() and 0xFF)
         assertEquals(64, bytes[18].toInt() and 0xFF)
+        assertEquals(0, b.getShort(19).toInt())  // altitude bytes unused when absent
+    }
+
+    @Test
+    fun altitudeSetsTheFlagBitAndRoundTrips() {
+        val bytes = PositionPacket.build(
+            latDeg = 48.1485965,
+            lonDeg = 17.1077477,
+            utcSeconds = 0L,
+            tzOffsetMinutes = 0,
+            heading = 0,
+            seq = 0,
+            flags = 0,
+            accuracyMetres = 0.0,
+            speedKmh = 0.0,
+            altitudeMetres = 412.0,
+        )
+        assertEquals(0x02, bytes[16].toInt())
+        val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(412, b.getShort(19).toInt())
+    }
+
+    @Test
+    fun altitudeCanBeBelowSeaLevel() {
+        val bytes = PositionPacket.build(
+            0.0, 0.0, 0L, 0, 0, 0, 0, 0.0, 0.0, altitudeMetres = -420.0,
+        )
+        assertEquals(0x02, bytes[16].toInt())
+        val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(-420, b.getShort(19).toInt())
+    }
+
+    @Test
+    fun altitudeFlagCombinesWithOtherFlagBits() {
+        val bytes = PositionPacket.build(
+            0.0, 0.0, 0L, 0, 0, 0, flags = 0x01, accuracyMetres = 0.0, speedKmh = 0.0,
+            altitudeMetres = 100.0,
+        )
+        assertEquals(0x03, bytes[16].toInt())  // off-route bit and altitude-present bit both set
+    }
+
+    @Test
+    fun altitudeSaturatesAtInt16Range() {
+        val bytes = PositionPacket.build(
+            0.0, 0.0, 0L, 0, 0, 0, 0, 0.0, 0.0, altitudeMetres = 100_000.0,
+        )
+        val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(Short.MAX_VALUE.toInt(), b.getShort(19).toInt())
     }
 
     @Test

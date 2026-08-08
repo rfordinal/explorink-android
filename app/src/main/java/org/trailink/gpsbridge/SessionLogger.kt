@@ -150,6 +150,8 @@ class SessionLogger(private val dir: File, private val appVersion: String) {
         lonDeg: Double,
         accuracyM: Double,
         speedKmh: Double,
+        /** Metres above sea level, null when the fix carried no altitude. */
+        altitudeM: Double? = null,
         error: String?,
         /** Why the send policy fired: first / moved / heading / keepalive. */
         reason: String? = null,
@@ -175,6 +177,7 @@ class SessionLogger(private val dir: File, private val appVersion: String) {
             o.put("lon", lonDeg)
             o.put("accuracy_m", accuracyM)
             o.put("speed_kmh", speedKmh)
+            if (altitudeM != null) o.put("alt_m", altitudeM)
             // The send policy's own reasoning, so a replay can tell a packet
             // that was earned by movement from an hourly keep-alive, and can
             // re-derive a different cadence from the raw fixes around it.
