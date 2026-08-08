@@ -170,7 +170,7 @@ class BleLink(
      *
      * Android usually ignores a peripheral's own request for faster parameters,
      * so this has to come from the central -- there is no device-side substitute
-     * (`firmware/trailink/docs/optimization/03-ble-link.md`).
+     * (`firmware/explorink/docs/optimization/03-ble-link.md`).
      */
     @SuppressLint("MissingPermission")
     fun requestHighPriority(high: Boolean) {

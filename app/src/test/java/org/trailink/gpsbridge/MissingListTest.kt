@@ -6,7 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** The device's own reply shape, from `firmware/trailink/docs/missing-tiles.md`. */
+/** The device's own reply shape, from `firmware/explorink/docs/missing-tiles.md`. */
 class MissingListTest {
 
     @Test

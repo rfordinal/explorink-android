@@ -8,7 +8,7 @@ import kotlin.math.roundToLong
 /**
  * The 19-byte position packet the TrailInk firmware expects on the position
  * characteristic. Layout is fixed by
- * `firmware/trailink/lib/BlePositionServer/include/BlePositionServer.h`:
+ * `firmware/explorink/lib/BlePositionServer/include/BlePositionServer.h`:
  *
  *   [0..3]   lat        int32,  degrees * 1e7
  *   [4..7]   lon        int32,  degrees * 1e7

@@ -5,7 +5,7 @@ package org.trailink.gpsbridge
  *
  * The device sends them already in fetch priority -- regional LOD first, then
  * overview, then detail, hit count breaking ties inside a tier
- * (`firmware/trailink/src/MissingTilePriority.h`). **Keep that order.** A fetch
+ * (`firmware/explorink/src/MissingTilePriority.h`). **Keep that order.** A fetch
  * that gets interrupted should have delivered the tiles the rider's normal view
  * needs, and re-sorting this list here would throw that away.
  */
@@ -25,7 +25,7 @@ data class MissingTile(
  * Reads the device's replies to `missing [<offset>]` and the one line it sends
  * unprompted, `NEED_TILES <count>`.
  *
- * Wire shape (`firmware/trailink/docs/missing-tiles.md`):
+ * Wire shape (`firmware/explorink/docs/missing-tiles.md`):
  *
  *     INFO missing_total=25
  *     INFO missing_offset=0
