@@ -22,7 +22,7 @@ import java.util.concurrent.RejectedExecutionException
  *
  *  - first line is a header with a format version
  *  - two streams in the one session file, tagged by `type`: `fix` for every
- *    raw Location the phone produced, `packet` for every 19 bytes actually
+ *    raw Location the phone produced, `packet` for every 21 bytes actually
  *    written to the characteristic (successes and failures both). `event`
  *    lines carry connect / disconnect / scan so a gap in the recording is
  *    explained rather than mysterious.

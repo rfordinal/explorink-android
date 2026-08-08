@@ -34,7 +34,7 @@ import java.util.UUID
  *
  * Four characteristics, all on the one connection (`docs/ble-map-transfer-protocol.md`):
  *
- *  - `...0002` position, write only. 19 bytes per fix.
+ *  - `...0002` position, write only. 21 bytes per fix.
  *  - `...0003` command console, write out and **indicate in**. The device sends
  *    `NEED_TILES <n>` here unprompted when the rider asks for missing tiles.
  *  - `...0004` transfer frames, write only.
@@ -776,7 +776,7 @@ class BleLink(
     // --- writing --------------------------------------------------------
 
     /**
-     * Writes one 19-byte position packet. [done] is called exactly once, on the
+     * Writes one 21-byte position packet. [done] is called exactly once, on the
      * main thread. Returns false if the write could not even be queued, in which
      * case [done] has already been called.
      *

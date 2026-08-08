@@ -9,7 +9,7 @@ minSdk 31, targetSdk 36, compileSdk 36. Debug-signed only.
 ## What it does
 
 1. Scans for `XteinkX4Map`, connects, no pairing.
-2. Writes 19 bytes to characteristic `5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0002`
+2. Writes 21 bytes to characteristic `5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0002`
    whenever the position has actually moved — see the send policy below.
 3. Records every raw GPS fix, every packet written (including failures) and
    every link event to one JSON Lines file per recording — started and stopped
@@ -325,7 +325,7 @@ android/
     FixGate.kt           which fix is trusted as the position at all,
                          upstream of the send policy. No Android types.
     HeadingTrend.kt      heading from recent fixes rather than one bearing
-    PositionPacket.kt    the 19-byte encoder and heading sectors
+    PositionPacket.kt    the 21-byte encoder and heading sectors
     SessionLogger.kt     JSON Lines recording file, fsynced per line
     TileFetcher.kt       the whole fetch conversation as a state machine.
                          BLE behind Transport, time behind Scheduler, so it
