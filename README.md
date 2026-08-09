@@ -188,6 +188,75 @@ All three extra characteristics are optional at discovery. An older firmware
 build has only the position characteristic, and forwarding fixes -- the app's
 whole original job -- still works against it.
 
+## Checking freshness: is what the device already has still current?
+
+A different question from the fetch above, and the reason it has its own
+exchange. `missing` and `tiles` are about tiles the device does **not** have.
+This is about tiles it does: they open, they draw, and the map may have been
+rebuilt and republished since. Before this, no already-synced device ever found
+out -- a tram-line classification bug was fixed, the area rebuilt and pushed,
+and every device kept the wrong tile permanently.
+
+```
+device -> phone   CHECK_TILES <count>
+phone  -> device  have
+device -> phone   INFO have_total=<n>
+                  INFO have_<z>_<col>_<row>=<content_id hex>
+                  OK
+phone  -> device  stale <z> <col> <row>          one per differing tile
+phone  -> device  checked <n> | checked unknown
+```
+
+`content_id` is `crc32` over the six per-layer `crc32`s a tile already carries,
+so the device computes it with no seek and no read. Never a timestamp:
+`osm_epoch` does not move when only the build rules change, which is exactly the
+case the feature exists for.
+
+The app reads the CDN's freshness index by **byte range** -- a dense array of
+16-byte slots, one file per z7 block, the slot's offset arithmetic on
+`(z, col, row)` (`TileIndex.kt`, ported by hand from
+`mapbuilder/tile_index.py`, pinned against it by `TileIndexTest`).
+
+**One range request per zoom plane, not one per tile.** Slots are row-major, so
+a whole viewport sits between one lowest and one highest offset: a few kB in one
+request. Thirty-two sequential HTTPS round trips would not finish inside the
+device's 15-second patience on mobile data.
+
+Three answers the app is careful to keep apart:
+
+- **stale** -- the index has this ground and its `content_id` differs. Certain.
+- **current** -- the index has it and agrees. Also certain.
+- **`checked unknown`** -- no signal, a server error, or only part of the index
+  read. **Nothing is claimed.** Answering "stale" here would push the rider's
+  whole viewport over a 7 kB/s link to replace tiles that were already right;
+  answering "current" would bury the bug. The app also backs off, doubling from
+  1 minute to 30, so an offline phone is not asked the same unanswerable
+  question every cooldown -- and a device asking again inside that window is
+  answered `unknown` without the window growing.
+
+A slot that is not present is **not** stale. It means the CDN publishes nothing
+for that ground; there is nothing to fetch, so there is nothing to say.
+
+### `?crc=` is what makes the fetch actually replace the tile
+
+A stale tile joins the ordinary fetch. The app requests it as
+`<path>.tib?crc=<content_id>`, the version the index promised.
+
+The path does not change when a tile is rebuilt and the edge caches a path for
+**seven days with no purge mechanism**. Without the query the fetch gets back
+the exact copy it is replacing, the device writes it, finds it still differs,
+and asks again -- forever. The query makes every content version its own cache
+key.
+
+The app verifies the arriving tile's `content_id` anyway (`TileHeader.contentId`,
+the third implementation of that number and pinned to the other two), retries
+once past the cache, then gives up with `skip` rather than push a tile it cannot
+vouch for.
+
+**Not yet run against hardware.** The firmware side -- the setting, the stale
+list, `CHECK_TILES` -- is separate work; everything here is unit-tested and
+nothing has been on the glass.
+
 ## Two things the brief got wrong, reversed after first field use
 
 The brief listed a background service as a non-goal and left the logging toggle
@@ -332,14 +401,23 @@ android/
                          is unit-tested without either.
     TransferFrames.kt    the transfer wire format: frames, CRC32, chunk
                          sizing, path rules, status lines. Pure.
-    MissingList.kt       parses NEED_TILES and the paged `missing` replies
-    TileHeader.kt        magic + format version of a .tib, enough to know
-                         whether the device will accept it
-    TileSource.kt        the CDN seam, and today's directory-backed stand-in
+    FreshnessChecker.kt  the CHECK_TILES conversation as a state machine, and
+                         the offline backoff. Same no-BLE-no-Android contract
+                         as TileFetcher, so it is unit-tested too.
+    MissingList.kt       parses NEED_TILES, CHECK_TILES, and the `missing`,
+                         `tiles` and `have` replies
+    TileIndex.kt         the CDN freshness index: slot offsets, slot parsing,
+                         and grouping a viewport into one byte range per zoom
+                         plane. A hand port of mapbuilder/tile_index.py.
+    TileHeader.kt        magic + format version of a .tib, and content_id from
+                         its layer directory
+    TileSource.kt        the CDN seam: tiles, with ?crc= and verification
+    IndexSource.kt       the CDN seam for index byte ranges
   app/src/test/java/...  PositionPacketTest, SendPolicyTest, FixGateTest,
                          HeadingTrendTest, TransferFramesTest,
-                         MissingListTest, TileFetcherTest -- 69 tests, pure
-                         JVM
+                         MissingListTest, TileFetcherTest, TileIndexTest,
+                         TileHeaderTest, FreshnessCheckerTest -- 117 tests,
+                         pure JVM
 ```
 
 ## Build

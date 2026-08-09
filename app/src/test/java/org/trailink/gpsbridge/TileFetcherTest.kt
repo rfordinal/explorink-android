@@ -29,12 +29,22 @@ class TileFetcherTest {
         val tiles = mutableMapOf<String, ByteArray>()
         /** Format version the fetcher passed down, so a test can prove it did. */
         var lastFormatAsked: Int? = -1
+        /** Expected content id the fetcher passed down, so a test can prove it did. */
+        var lastCrcAsked: Long? = -1L
 
         // Completes inline. The real sources come back on the main thread from a
         // worker; the fetcher only requires "exactly once, on my thread", which
         // this satisfies without a looper in the test.
-        override fun read(z: Int, col: Long, row: Long, formatVersion: Int?, done: (ByteArray?) -> Unit) {
+        override fun read(
+            z: Int,
+            col: Long,
+            row: Long,
+            formatVersion: Int?,
+            expectedContentId: Long?,
+            done: (ByteArray?) -> Unit,
+        ) {
             lastFormatAsked = formatVersion
+            lastCrcAsked = expectedContentId
             done(tiles["$z/$col/$row"])
         }
 
@@ -317,7 +327,14 @@ class TileFetcherTest {
         val h = Harness()
         var deliver: ((ByteArray?) -> Unit)? = null
         val slow = object : TileSource {
-            override fun read(z: Int, col: Long, row: Long, formatVersion: Int?, done: (ByteArray?) -> Unit) {
+            override fun read(
+                z: Int,
+                col: Long,
+                row: Long,
+                formatVersion: Int?,
+                expectedContentId: Long?,
+                done: (ByteArray?) -> Unit,
+            ) {
                 deliver = done
             }
             override fun describe(): String = "slow"

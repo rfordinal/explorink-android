@@ -29,8 +29,25 @@ import java.util.concurrent.Executors
  * machine and out of its tests.
  */
 interface TileSource {
-    /** Hands back the tile's bytes, or null if this source does not have it. */
-    fun read(z: Int, col: Long, row: Long, formatVersion: Int?, done: (ByteArray?) -> Unit)
+    /**
+     * Hands back the tile's bytes, or null if this source does not have it.
+     *
+     * [expectedContentId] is what the freshness index says this tile's content
+     * should be, when a check has established it ([ExpectedContentIds]), and
+     * null otherwise. It is not a filter -- it is a **cache key and a receipt**.
+     * The CDN caches a tile path for seven days with no purge mechanism, so a
+     * rebuilt tile lives at the same URL as the copy it replaces; fetching it
+     * without saying which version is wanted gets the old one back and the
+     * device asks again forever.
+     */
+    fun read(
+        z: Int,
+        col: Long,
+        row: Long,
+        formatVersion: Int?,
+        expectedContentId: Long?,
+        done: (ByteArray?) -> Unit,
+    )
 
     /** For the UI and the log: what this source is, in a few words. */
     fun describe(): String
@@ -42,7 +59,7 @@ interface TileSource {
 /**
  * Fetches tiles from the public tile CDN.
  *
- * `https://tiles.trailink-app.com/v<format>/base/<z>/<col>/<row>.tib` --
+ * `https://tiles.explorink.com/v<format>/base/<z>/<col>/<row>.tib` --
  * versioned by `.tib` `FORMAT_VERSION`, one path per version, so a device on v2
  * and a device on v3 read different trees and neither goes silently stale
  * (`docs/tile-cdn-plan.md`, "Versioning: path prefix").
@@ -57,7 +74,7 @@ class CdnTileSource(
     companion object {
         private const val TAG = "CdnTileSource"
 
-        const val DEFAULT_BASE_URL = "https://tiles.trailink-app.com"
+        const val DEFAULT_BASE_URL = "https://tiles.explorink.com"
 
         /**
          * Used only when the device did not say which format it reads -- an
@@ -80,16 +97,73 @@ class CdnTileSource(
 
     private val io = Executors.newSingleThreadExecutor { r -> Thread(r, "tile-cdn") }
 
-    override fun read(z: Int, col: Long, row: Long, formatVersion: Int?, done: (ByteArray?) -> Unit) {
+    /** Distinct cache-buster per retry. Never reused, which is the whole job. */
+    private val busts = java.util.concurrent.atomic.AtomicLong(0)
+
+    override fun read(
+        z: Int,
+        col: Long,
+        row: Long,
+        formatVersion: Int?,
+        expectedContentId: Long?,
+        done: (ByteArray?) -> Unit,
+    ) {
         io.execute {
-            val bytes = readBlocking(z, col, row, formatVersion)
+            val bytes = readVerified(z, col, row, formatVersion, expectedContentId)
             MainThread.post { done(bytes) }
         }
     }
 
-    fun readBlocking(z: Int, col: Long, row: Long, formatVersion: Int?): ByteArray? {
+    /**
+     * Fetches the tile and checks it is the version that was asked for.
+     *
+     * The `?crc=` query makes each content version its own cache key, so this
+     * should always agree first time. It is checked anyway, because the failure
+     * it guards against is silent: an edge that serves the wrong body leaves the
+     * device with a tile it thinks is current, and the whole freshness check
+     * then reports it stale again on the next pass -- a loop with a rider's
+     * battery behind it.
+     *
+     * One retry with a cache-buster, then give up. Giving up is honest: the
+     * fetch answers `skip`, the device counts it as failed and stops waiting.
+     */
+    private fun readVerified(
+        z: Int,
+        col: Long,
+        row: Long,
+        formatVersion: Int?,
+        expectedContentId: Long?,
+    ): ByteArray? {
+        val first = readBlocking(z, col, row, formatVersion, expectedContentId)
+        if (expectedContentId == null || first == null) return first
+        if (TileHeader.contentId(first) == expectedContentId) return first
+
+        val bust = busts.incrementAndGet()
+        Log.w(
+            TAG,
+            "z$z $col/$row came back as content ${TileHeader.contentId(first)?.toString(16)}, " +
+                "expected ${expectedContentId.toString(16)} -- retrying past the cache",
+        )
+        val again = readBlocking(z, col, row, formatVersion, expectedContentId, bust)
+        if (again != null && TileHeader.contentId(again) == expectedContentId) return again
+        Log.w(TAG, "z$z $col/$row still not the expected version; not pushing it")
+        return null
+    }
+
+    fun readBlocking(
+        z: Int,
+        col: Long,
+        row: Long,
+        formatVersion: Int?,
+        expectedContentId: Long? = null,
+        bust: Long? = null,
+    ): ByteArray? {
         val version = formatVersion ?: defaultFormatVersion
-        val url = "$baseUrl/v$version/${TransferFrames.tileRelPath(z, col, row)}"
+        val query = buildString {
+            if (expectedContentId != null) append("?crc=%08x".format(expectedContentId))
+            if (bust != null) append(if (isEmpty()) "?cb=$bust" else "&cb=$bust")
+        }
+        val url = "$baseUrl/v$version/${TransferFrames.tileRelPath(z, col, row)}$query"
         var conn: HttpURLConnection? = null
         return try {
             conn = (URL(url).openConnection() as HttpURLConnection).apply {

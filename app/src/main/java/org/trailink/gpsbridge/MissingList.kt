@@ -89,6 +89,103 @@ object MissingList {
     fun isFetchCancel(line: String): Boolean = line.trim() == "FETCH_CANCEL"
 
     /**
+     * The device asking whether the tiles it already holds are still current:
+     * `CHECK_TILES <count>`.
+     *
+     * A different question from [NeedTiles], which is about tiles it does not
+     * have at all. This one names tiles that open fine and draw fine, and asks
+     * whether the CDN has since published different content for them
+     * (`docs/tile-index-spec.md`; `firmware/explorink/docs/tile-freshness.md`).
+     *
+     * Returns the count the device stated, or null if the line is something
+     * else. Zero is possible and means "nothing to check" -- the phone answers
+     * `checked 0` without asking for a list.
+     */
+    fun parseCheckTiles(line: String): Int? {
+        val t = line.trim()
+        if (!t.startsWith("CHECK_TILES")) return null
+        val tokens = t.removePrefix("CHECK_TILES").trim().split(' ').filter { it.isNotEmpty() }
+        return tokens.getOrNull(0)?.toIntOrNull()
+    }
+
+    /**
+     * Reads the reply to `have`: the tiles the device holds, with the content id
+     * it holds each at.
+     *
+     *     INFO have_total=4
+     *     INFO have_13_4482_2839=0ebd55c8
+     *     INFO have_13_4482_2840=f7a3de8d
+     *     OK
+     *
+     * The content id is lowercase hex, up to 8 digits, no `0x`. Hex rather than
+     * decimal because the same number is printed that way in the device's log
+     * and in `mapbuilder`'s output, and a freshness bug gets diagnosed by eye
+     * across all three.
+     *
+     * `INFO have=none` means the device cannot answer at all -- no viewport yet.
+     * Kept distinct from an empty list for the same reason
+     * `missing=unavailable` is: "cannot answer" must never read as "everything
+     * is current".
+     *
+     * Never paged. A check is bounded by what the device is looking at (at most
+     * 32 tiles, `MapViewport::kMaxTiles`), which fits one reply -- and the phone
+     * turns the whole reply into a single byte-range read per zoom plane, so a
+     * list big enough to need paging would also be one the check could not
+     * answer inside the reply timeout.
+     */
+    class HaveReader {
+        private val entries = mutableListOf<HeldTile>()
+        val tiles: List<HeldTile> get() = entries
+
+        var complete: Boolean = false
+            private set
+
+        /** The device has no viewport yet, so there is nothing to check. */
+        var unavailable: Boolean = false
+            private set
+
+        var total: Int? = null
+            private set
+
+        /** Feeds one reply line. Returns true if the line belonged to this listing. */
+        fun feed(line: String): Boolean {
+            val t = line.trim()
+            if (t == "OK") {
+                complete = true
+                return true
+            }
+            if (!t.startsWith("INFO ")) return false
+            val body = t.removePrefix("INFO ").trim()
+
+            if (body == "have=none") {
+                unavailable = true
+                return true
+            }
+            val eq = body.indexOf('=')
+            if (eq <= 0) return false
+            val key = body.substring(0, eq)
+            val value = body.substring(eq + 1)
+
+            if (key == "have_total") {
+                total = value.toIntOrNull()
+                return true
+            }
+            if (!key.startsWith("have_")) return false
+            val parts = key.removePrefix("have_").split('_')
+            if (parts.size != 3) return false
+            val z = parts[0].toIntOrNull() ?: return false
+            val col = parts[1].toLongOrNull() ?: return false
+            val row = parts[2].toLongOrNull() ?: return false
+            // Unsigned 32-bit, so it does not fit an Int and must not be parsed
+            // as one -- half the possible content ids are negative in that type.
+            val contentId = value.toLongOrNull(16) ?: return false
+            if (z !in 0..255 || contentId < 0 || contentId > 0xFFFFFFFFL) return false
+            entries.add(HeldTile(z, col, row, contentId))
+            return true
+        }
+    }
+
+    /**
      * What the fetcher needs from a listing, whichever command produced it.
      *
      * Two wire shapes answer "which tiles do you want": paged `missing`, and

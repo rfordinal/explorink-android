@@ -33,6 +33,16 @@ class TileFetcher(
     private val transport: Transport,
     private val scheduler: Scheduler,
     private val listener: Listener,
+    /**
+     * What the freshness check learned the CDN's current content id is, per
+     * tile. Consulted for every fetch, empty by default.
+     *
+     * It is what turns a stale-tile fetch into an actual replacement: the CDN
+     * caches a tile path for seven days with no purge, so a rebuilt tile has to
+     * be asked for as `?crc=<content_id>` or the edge hands back the copy being
+     * replaced ([TileSource.read]).
+     */
+    private val expected: ExpectedContentIds = ExpectedContentIds(),
 ) {
 
     companion object {
@@ -291,7 +301,10 @@ class TileFetcher(
 
         // Asynchronous: the source may be the CDN, and an HTTP GET cannot run
         // on the thread BLE lives on. The callback comes back on this thread.
-        source.read(next.z, next.col, next.row, wantedFormat) { data ->
+        source.read(
+            next.z, next.col, next.row, wantedFormat,
+            expected.get(next.z, next.col, next.row),
+        ) { data ->
             onTileBytes(next, relPath, data)
         }
     }

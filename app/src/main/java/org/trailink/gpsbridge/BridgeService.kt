@@ -46,7 +46,8 @@ import java.util.TimeZone
  * ACCESS_BACKGROUND_LOCATION. A partial wake lock keeps the CPU up so the send
  * timer still fires in Doze.
  */
-class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher.Listener {
+class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher.Listener,
+    FreshnessChecker.Listener {
 
     companion object {
         private const val TAG = "BridgeService"
@@ -112,6 +113,15 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private lateinit var ble: BleLink
     private lateinit var tileFetcher: TileFetcher
     private lateinit var tileSource: TileSource
+    private lateinit var indexSource: IndexSource
+    private lateinit var freshness: FreshnessChecker
+
+    /**
+     * Content ids the freshness check read out of the CDN's index, shared with
+     * the fetcher so a stale tile is fetched as the version the index promised
+     * and not the one the edge still has cached.
+     */
+    private val expectedContentIds = ExpectedContentIds()
     /** Last line about a tile fetch, for the one window. Null until one happens. */
     private var tileFetchStatus: String? = null
     private var locationManager: LocationManager? = null
@@ -156,7 +166,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // Straight to the CDN. Nothing is kept on the phone: it is the pipe
         // between the CDN and the X4 (TileSource).
         tileSource = CdnTileSource()
-        tileFetcher = TileFetcher(tileSource, fetchTransport, fetchScheduler, this)
+        indexSource = CdnIndexSource()
+        tileFetcher = TileFetcher(tileSource, fetchTransport, fetchScheduler, this, expectedContentIds)
+        freshness = FreshnessChecker(indexSource, expectedContentIds, fetchTransport, fetchScheduler, this)
         createChannel()
         registerReceiver(btReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
         addEvent("service started")
@@ -199,8 +211,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         }
         stopLocation()
         // Before ble.stop(): the abort frame it may send needs a live link.
+        freshness.stop()
         tileFetcher.stop()
         tileSource.close()
+        indexSource.close()
         ble.stop()
         stopRecording()
         releaseWakeLock()
@@ -291,7 +305,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         bleDetail = detail
         // A fetch in flight is dead the moment the link is: the transfer's
         // offsets and the device's own .part file went with it.
-        if (wasConnected && state != BleLink.State.CONNECTED) tileFetcher.onDisconnected()
+        if (wasConnected && state != BleLink.State.CONNECTED) {
+            tileFetcher.onDisconnected()
+            freshness.onDisconnected()
+        }
         notifyObserver()
     }
 
@@ -309,6 +326,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // that followed it.
         logger?.logEvent("cmd_in", line, null)
         tileFetcher.onCommandLine(line)
+        // Both read this channel, and their asks never overlap: NEED_TILES is
+        // about tiles the device does not have, CHECK_TILES about tiles it does.
+        freshness.onCommandLine(line)
     }
 
     override fun onTransferStatus(line: String) {
@@ -337,6 +357,21 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             "fetch_end",
             reason,
             mapOf("sent" to sent, "skipped" to skipped, "total" to total),
+        )
+        notifyObserver()
+    }
+
+    override fun onCheckFinished(examined: Int, stale: Int, reason: String) {
+        tileFetchStatus = when {
+            stale < 0 -> "freshness unknown ($reason)"
+            stale == 0 -> "$examined tiles current"
+            else -> "$stale of $examined tiles out of date"
+        }
+        addEvent("freshness check: $reason")
+        logger?.logEvent(
+            "check_end",
+            reason,
+            mapOf("examined" to examined, "stale" to stale),
         )
         notifyObserver()
     }
