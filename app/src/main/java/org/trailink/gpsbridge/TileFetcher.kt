@@ -208,6 +208,35 @@ class TileFetcher(
         finish("stopped")
     }
 
+    /**
+     * Pushes tiles nobody asked for, in the order given.
+     *
+     * The one entry point that skips the listing phase, and it exists for the
+     * freshness check: those tiles were found by this phone reading the CDN's
+     * index, so the device has nothing to add by naming them back. Their
+     * expected content ids are already in [expected], which is what makes the
+     * fetch a replacement rather than a re-download of the copy being replaced.
+     *
+     * Refused while a fetch is running. Not queued behind it either: by the time
+     * that one finishes the viewport may have moved, and the next check will
+     * find whatever is still out of date.
+     */
+    fun pushTiles(tiles: List<MissingTile>, formatVersion: Int?) {
+        if (phase != Phase.IDLE) {
+            Log.i(TAG, "not pushing ${tiles.size} stale tile(s): a fetch is already running")
+            return
+        }
+        if (tiles.isEmpty()) return
+        Log.i(TAG, "pushing ${tiles.size} stale tile(s) unasked")
+        phase = Phase.PUSHING
+        wantedFormat = formatVersion
+        total = tiles.size
+        queue.addAll(tiles)
+        transport.setFastLink(true)
+        listener.onFetchStarted(total)
+        nextTile()
+    }
+
     // --- listing ------------------------------------------------------------
 
     private fun startListing(need: MissingList.NeedTiles) {

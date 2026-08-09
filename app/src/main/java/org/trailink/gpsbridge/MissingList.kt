@@ -128,7 +128,8 @@ object MissingList {
      * is current".
      *
      * Never paged. A check is bounded by what the device is looking at (at most
-     * 32 tiles, `MapViewport::kMaxTiles`), which fits one reply -- and the phone
+     * 9 tiles -- `MapViewport::kMaxTiles`, a 3x3 worst case), so it fits one
+     * reply comfortably -- and the phone
      * turns the whole reply into a single byte-range read per zoom plane, so a
      * list big enough to need paging would also be one the check could not
      * answer inside the reply timeout.

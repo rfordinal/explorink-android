@@ -70,6 +70,19 @@ class FreshnessChecker(
     interface Listener {
         /** A check ended. [stale] is -1 when the answer was `unknown`. */
         fun onCheckFinished(examined: Int, stale: Int, reason: String)
+
+        /**
+         * These tiles are out of date, and this phone knows which content id
+         * each should be at. **Push them; do not wait to be asked.**
+         *
+         * The device could ask -- it has the list, it just received it -- but
+         * that would be the device relaying a list back to the side that wrote
+         * it, and the expected content ids would have to survive the round trip
+         * to be any use. The transfer channel already accepts an unsolicited
+         * push while the map or the sync screen is up
+         * (`docs/ble-map-transfer-protocol.md`).
+         */
+        fun onStaleTilesFound(tiles: List<HeldTile>)
     }
 
     enum class Phase { IDLE, LISTING, READING }
@@ -262,6 +275,7 @@ class FreshnessChecker(
                 if (!ok) Log.w(TAG, "stale write failed: $error")
             }
         }
+        if (staleTiles.isNotEmpty()) listener?.onStaleTilesFound(staleTiles.toList())
         if (incomplete) {
             sendUnknown()
             finish("index unreachable, ${staleTiles.size} stale found anyway")

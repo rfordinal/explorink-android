@@ -122,6 +122,14 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
      * and not the one the edge still has cached.
      */
     private val expectedContentIds = ExpectedContentIds()
+
+    /**
+     * The `.tib` format version the device last stated in `NEED_TILES`. Needed
+     * for a stale-tile push, which has no `NEED_TILES` of its own to carry it.
+     * Null until the device says, which is an older build; the CDN source then
+     * falls back to its compiled-in guess.
+     */
+    private var deviceTileFormat: Int? = null
     /** Last line about a tile fetch, for the one window. Null until one happens. */
     private var tileFetchStatus: String? = null
     private var locationManager: LocationManager? = null
@@ -325,6 +333,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // ride log without the ask is a log that cannot explain the transfers
         // that followed it.
         logger?.logEvent("cmd_in", line, null)
+        MissingList.parseNeedTiles(line)?.formatVersion?.let { deviceTileFormat = it }
         tileFetcher.onCommandLine(line)
         // Both read this channel, and their asks never overlap: NEED_TILES is
         // about tiles the device does not have, CHECK_TILES about tiles it does.
@@ -359,6 +368,14 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             mapOf("sent" to sent, "skipped" to skipped, "total" to total),
         )
         notifyObserver()
+    }
+
+    override fun onStaleTilesFound(tiles: List<HeldTile>) {
+        // Pushed without a further ask: this phone found them and holds their
+        // expected content ids, so a round trip through the device would only
+        // lose that. The transfer channel accepts an unsolicited push while the
+        // map or the sync screen is up.
+        tileFetcher.pushTiles(tiles.map { MissingTile(it.z, it.col, it.row, 0) }, deviceTileFormat)
     }
 
     override fun onCheckFinished(examined: Int, stale: Int, reason: String) {

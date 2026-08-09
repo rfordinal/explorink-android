@@ -219,8 +219,8 @@ The app reads the CDN's freshness index by **byte range** -- a dense array of
 
 **One range request per zoom plane, not one per tile.** Slots are row-major, so
 a whole viewport sits between one lowest and one highest offset: a few kB in one
-request. Thirty-two sequential HTTPS round trips would not finish inside the
-device's 15-second patience on mobile data.
+request. A round trip per tile would not finish inside the device's 15-second
+patience on mobile data.
 
 Three answers the app is careful to keep apart:
 
