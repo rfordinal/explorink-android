@@ -90,22 +90,35 @@ object MissingList {
 
     /**
      * The device asking whether the tiles it already holds are still current:
-     * `CHECK_TILES <count>`.
+     * `CHECK_TILES <count> fmt <version>`.
      *
      * A different question from [NeedTiles], which is about tiles it does not
      * have at all. This one names tiles that open fine and draw fine, and asks
      * whether the CDN has since published different content for them
      * (`docs/tile-index-spec.md`; `firmware/explorink/docs/tile-freshness.md`).
      *
-     * Returns the count the device stated, or null if the line is something
-     * else. Zero is possible and means "nothing to check" -- the phone answers
-     * `checked 0` without asking for a list.
+     * [formatVersion] matters here for the same reason as [NeedTiles]: the
+     * index lives under the same `/v<N>/` prefix as the tiles it describes.
+     * Without it, [FreshnessChecker] had nothing to go on until a `NEED_TILES`
+     * happened to arrive first -- which a device with zero missing tiles never
+     * sends -- so it silently checked against a stale format's index tree,
+     * every time, for exactly the devices this feature exists to keep current.
      */
-    fun parseCheckTiles(line: String): Int? {
+    data class CheckTiles(val count: Int, val formatVersion: Int?)
+
+    /**
+     * Returns the count and format version the device stated, or null if the
+     * line is something else. Count zero is possible and means "nothing to
+     * check" -- the phone answers `checked 0` without asking for a list.
+     */
+    fun parseCheckTiles(line: String): CheckTiles? {
         val t = line.trim()
         if (!t.startsWith("CHECK_TILES")) return null
         val tokens = t.removePrefix("CHECK_TILES").trim().split(' ').filter { it.isNotEmpty() }
-        return tokens.getOrNull(0)?.toIntOrNull()
+        val count = tokens.getOrNull(0)?.toIntOrNull() ?: return null
+        val fmtAt = tokens.indexOf("fmt")
+        val version = if (fmtAt >= 0) tokens.getOrNull(fmtAt + 1)?.toIntOrNull() else null
+        return CheckTiles(count, version)
     }
 
     /**

@@ -106,10 +106,17 @@ class FreshnessChecker(
     private var incomplete = false
 
     /**
-     * The `.tib` format version the device reads, remembered from the last
-     * `NEED_TILES`. The index lives under the same `/v<N>/` prefix as the tiles
-     * it describes, so a device on an older format must be answered from its own
-     * tree or every slot would look wrong at once.
+     * The `.tib` format version the device reads, stated on the most recent
+     * `CHECK_TILES` or `NEED_TILES`, whichever was last. The index lives under
+     * the same `/v<N>/` prefix as the tiles it describes, so a device on an
+     * older format must be answered from its own tree or every slot would look
+     * wrong at once.
+     *
+     * `CHECK_TILES` states its own now -- it used to rely entirely on
+     * `NEED_TILES` having arrived first, which never happens for a device with
+     * nothing missing, so this defaulted to [CdnTileSource.DEFAULT_FORMAT_VERSION]
+     * (a stale constant) for exactly the devices this check exists to keep
+     * current.
      */
     private var formatVersion: Int? = null
 
@@ -126,9 +133,10 @@ class FreshnessChecker(
     fun onCommandLine(line: String) {
         MissingList.parseNeedTiles(line)?.let { formatVersion = it.formatVersion ?: formatVersion }
 
-        val count = MissingList.parseCheckTiles(line)
-        if (count != null) {
-            start(count)
+        val checkTiles = MissingList.parseCheckTiles(line)
+        if (checkTiles != null) {
+            formatVersion = checkTiles.formatVersion ?: formatVersion
+            start(checkTiles.count)
             return
         }
         if (MissingList.isFetchCancel(line)) {

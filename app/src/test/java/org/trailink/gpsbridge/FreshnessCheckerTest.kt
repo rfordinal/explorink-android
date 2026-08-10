@@ -164,6 +164,19 @@ class FreshnessCheckerTest {
         assertEquals(3, h.index.reads.single().formatVersion)
     }
 
+    @Test
+    fun `CHECK_TILES states its own format version, no NEED_TILES required`() {
+        // A device with nothing missing never sends NEED_TILES at all -- this
+        // used to leave formatVersion null forever, falling back to a stale
+        // default and checking the wrong /v<N>/ index tree for exactly these
+        // devices.
+        val h = Harness()
+        h.index.put(13, 4482, 2839, slotA)
+        h.checker.onCommandLine("CHECK_TILES 1 fmt 3")
+        h.have(HeldTile(13, 4482, 2839, slotA))
+        assertEquals(3, h.index.reads.single().formatVersion)
+    }
+
     // --- harness ------------------------------------------------------------
 
     private class Harness {

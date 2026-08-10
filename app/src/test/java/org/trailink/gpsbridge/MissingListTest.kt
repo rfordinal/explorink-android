@@ -33,6 +33,27 @@ class MissingListTest {
     }
 
     @Test
+    fun `check tiles carries the count and the format version`() {
+        val check = MissingList.parseCheckTiles("CHECK_TILES 4 fmt 3")
+        assertEquals(4, check?.count)
+        assertEquals(3, check?.formatVersion)
+    }
+
+    @Test
+    fun `check tiles without a format version is an older firmware`() {
+        val check = MissingList.parseCheckTiles("CHECK_TILES 4")
+        assertEquals(4, check?.count)
+        assertNull(check?.formatVersion)
+    }
+
+    @Test
+    fun `other lines are not check tiles`() {
+        assertNull(MissingList.parseCheckTiles("INFO zoom=2"))
+        assertNull(MissingList.parseCheckTiles("CHECK_TILES"))
+        assertNull(MissingList.parseCheckTiles("OK"))
+    }
+
+    @Test
     fun `fetch cancel is recognised`() {
         assertTrue(MissingList.isFetchCancel("FETCH_CANCEL"))
         assertTrue(MissingList.isFetchCancel("  FETCH_CANCEL  "))
