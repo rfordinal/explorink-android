@@ -1,4 +1,4 @@
-package org.trailink.gpsbridge
+package org.explorink.gpsbridge
 
 import android.os.Handler
 import android.os.Looper

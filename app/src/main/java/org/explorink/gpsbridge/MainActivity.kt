@@ -1,4 +1,4 @@
-package org.trailink.gpsbridge
+package org.explorink.gpsbridge
 
 import android.Manifest
 import android.app.Activity
@@ -111,7 +111,7 @@ class MainActivity : Activity(), BridgeService.Observer {
 
         // Version, once, at the bottom. Debug builds carry the commit they were
         // built from, so "which build is on the phone" is answerable.
-        tvVersion.text = "TrailInk GPS ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+        tvVersion.text = "ExplorInk GPS ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
 
         render()
 

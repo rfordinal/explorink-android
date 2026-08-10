@@ -1,9 +1,9 @@
-# TrailInk GPS — Android companion app
+# ExplorInk GPS — Android companion app
 
 Sends the phone's GPS position to the Xteink X4 over BLE and records the ride
 for replay. One window. Built to `docs/android-app-brief.md`.
 
-Package `org.trailink.gpsbridge`, app label **TrailInk GPS**.
+Package `org.explorink.gpsbridge`, app label **ExplorInk GPS**.
 minSdk 31, targetSdk 36, compileSdk 36. Debug-signed only.
 
 ## What it does
@@ -371,7 +371,7 @@ commit they were built from, plus `-dirty` for an uncommitted tree, the same
 habit as the firmware's `TRAILINK_VERSION`:
 
 ```
-TrailInk GPS 0.2.0-g3f38ecd (2)
+ExplorInk GPS 0.2.0-g3f38ecd (2)
 ```
 
 Shown small and grey at the bottom of the one window, and written into every
@@ -382,7 +382,7 @@ builds is on the phone" is otherwise unanswerable.
 
 ```
 android/
-  app/src/main/java/org/trailink/gpsbridge/
+  app/src/main/java/org/explorink/gpsbridge/
     BridgeService.kt     the bridge: BLE, GPS, 5s send timer, recorder,
                          counters, notification. Survives a locked screen.
     MainActivity.kt      the one window. Binds, renders a snapshot, four
@@ -446,7 +446,7 @@ build-tools 36.0.0, `androidx.core:core-ktx:1.17.0` (the only dependency —
 ## Log format
 
 One file per session at
-`/sdcard/Android/data/org.trailink.gpsbridge/files/trailink-gps-<YYYYMMDD-HHmmss>.jsonl`.
+`/sdcard/Android/data/org.explorink.gpsbridge/files/explorink-gps-<YYYYMMDD-HHmmss>.jsonl`.
 
 First line is a header:
 
@@ -480,7 +480,7 @@ or absent; there is no half line.
 Read it back with anything:
 
 ```bash
-jq -c 'select(.type=="packet")' trailink-gps-*.jsonl | head
+jq -c 'select(.type=="packet")' explorink-gps-*.jsonl | head
 ```
 
 ## Calls made where the brief was silent

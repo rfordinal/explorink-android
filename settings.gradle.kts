@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "TrailInkGpsBridge"
+rootProject.name = "ExplorInkGpsBridge"
 include(":app")

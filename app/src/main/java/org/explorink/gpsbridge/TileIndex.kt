@@ -1,4 +1,4 @@
-package org.trailink.gpsbridge
+package org.explorink.gpsbridge
 
 /**
  * The CDN's tile freshness index, as read over HTTP byte ranges.

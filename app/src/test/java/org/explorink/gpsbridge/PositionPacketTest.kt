@@ -1,4 +1,4 @@
-package org.trailink.gpsbridge
+package org.explorink.gpsbridge
 
 import org.junit.Assert.assertEquals
 import org.junit.Test

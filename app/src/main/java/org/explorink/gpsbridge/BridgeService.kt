@@ -1,4 +1,4 @@
-package org.trailink.gpsbridge
+package org.explorink.gpsbridge
 
 import android.Manifest
 import android.app.Notification
@@ -52,10 +52,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     companion object {
         private const val TAG = "BridgeService"
 
-        const val ACTION_START = "org.trailink.gpsbridge.START"
-        const val ACTION_STOP = "org.trailink.gpsbridge.STOP"
-        const val ACTION_START_RECORDING = "org.trailink.gpsbridge.START_REC"
-        const val ACTION_STOP_RECORDING = "org.trailink.gpsbridge.STOP_REC"
+        const val ACTION_START = "org.explorink.gpsbridge.START"
+        const val ACTION_STOP = "org.explorink.gpsbridge.STOP"
+        const val ACTION_START_RECORDING = "org.explorink.gpsbridge.START_REC"
+        const val ACTION_STOP_RECORDING = "org.explorink.gpsbridge.STOP_REC"
 
         private const val CHANNEL_ID = "bridge"
         private const val NOTIFICATION_ID = 1
@@ -680,7 +680,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
         // Partial only: the CPU stays up so the 5 s timer and the BLE write
         // still happen with the screen off. The screen is not held on.
-        val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "trailink:bridge")
+        val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "explorink:bridge")
         wl.setReferenceCounted(false)
         wl.acquire()
         wakeLock = wl

@@ -1,4 +1,4 @@
-package org.trailink.gpsbridge
+package org.explorink.gpsbridge
 
 /**
  * Is a new fix too big a jump from the last accepted one to trust on its own?

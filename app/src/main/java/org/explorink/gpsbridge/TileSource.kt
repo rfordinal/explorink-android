@@ -1,4 +1,4 @@
-package org.trailink.gpsbridge
+package org.explorink.gpsbridge
 
 import android.util.Log
 import java.net.HttpURLConnection

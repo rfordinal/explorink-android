@@ -1,4 +1,4 @@
-package org.trailink.gpsbridge
+package org.explorink.gpsbridge
 
 import android.location.Location
 import android.util.Log
@@ -78,7 +78,7 @@ class SessionLogger(private val dir: File, private val appVersion: String) {
             try {
                 if (!dir.exists()) dir.mkdirs()
                 val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-                val f = File(dir, "trailink-gps-$stamp.jsonl")
+                val f = File(dir, "explorink-gps-$stamp.jsonl")
                 val fos = FileOutputStream(f, true)
                 out = fos
                 writer = OutputStreamWriter(fos, Charsets.UTF_8)
@@ -87,7 +87,7 @@ class SessionLogger(private val dir: File, private val appVersion: String) {
                 val h = JSONObject()
                 h.put("type", "header")
                 h.put("format", FORMAT_VERSION)
-                h.put("app", "org.trailink.gpsbridge")
+                h.put("app", "org.explorink.gpsbridge")
                 h.put("app_version", appVersion)
                 h.put("packet_encoding", PACKET_ENCODING)
                 h.put("packet_bytes", PositionPacket.SIZE)

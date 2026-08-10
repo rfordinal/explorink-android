@@ -1,4 +1,4 @@
-package org.trailink.gpsbridge
+package org.explorink.gpsbridge
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder

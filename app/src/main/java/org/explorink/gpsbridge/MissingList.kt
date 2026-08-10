@@ -1,4 +1,4 @@
-package org.trailink.gpsbridge
+package org.explorink.gpsbridge
 
 /**
  * One tile the device asked for, as the `missing` command reports it.
