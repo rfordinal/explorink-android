@@ -124,10 +124,16 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private val expectedContentIds = ExpectedContentIds()
 
     /**
-     * The `.tib` format version the device last stated in `NEED_TILES`. Needed
-     * for a stale-tile push, which has no `NEED_TILES` of its own to carry it.
-     * Null until the device says, which is an older build; the CDN source then
-     * falls back to its compiled-in guess.
+     * The `.tib` format version the device last stated, in `NEED_TILES` or
+     * `CHECK_TILES`, whichever was last. Needed for a stale-tile push, which
+     * has no fetch-ask of its own to carry it.
+     *
+     * A device with nothing missing never sends `NEED_TILES` at all, so this
+     * used to stay null for the whole connection whenever a push was
+     * triggered by the freshness check instead -- the CDN source then fell
+     * back to its compiled-in guess (`CdnTileSource.DEFAULT_FORMAT_VERSION`),
+     * one version behind, and every such push was refused `skip nosource`
+     * (found alongside the matching gap in [FreshnessChecker]).
      */
     private var deviceTileFormat: Int? = null
     /** Last line about a tile fetch, for the one window. Null until one happens. */
@@ -334,6 +340,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // that followed it.
         logger?.logEvent("cmd_in", line, null)
         MissingList.parseNeedTiles(line)?.formatVersion?.let { deviceTileFormat = it }
+        MissingList.parseCheckTiles(line)?.formatVersion?.let { deviceTileFormat = it }
         tileFetcher.onCommandLine(line)
         // Both read this channel, and their asks never overlap: NEED_TILES is
         // about tiles the device does not have, CHECK_TILES about tiles it does.
