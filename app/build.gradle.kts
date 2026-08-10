@@ -27,11 +27,11 @@ fun gitDescribe(): String {
 }
 
 android {
-    namespace = "org.trailink.gpsbridge"
+    namespace = "org.explorink.gpsbridge"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "org.trailink.gpsbridge"
+        applicationId = "org.explorink.gpsbridge"
         minSdk = 31
         targetSdk = 36
         versionCode = appVersionCode

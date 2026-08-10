@@ -1,4 +1,4 @@
-package org.trailink.gpsbridge
+package org.explorink.gpsbridge
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -25,7 +25,7 @@ import android.util.Log
 import java.util.UUID
 
 /**
- * BLE central for the TrailInk X4's map service: position out, console and tile
+ * BLE central for the ExplorInk X4's map service: position out, console and tile
  * transfers both ways.
  *
  * No pairing, no bonding, no encryption -- the firmware advertises the service

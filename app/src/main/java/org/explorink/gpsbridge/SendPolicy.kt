@@ -1,4 +1,4 @@
-package org.trailink.gpsbridge
+package org.explorink.gpsbridge
 
 /**
  * When is a position worth a BLE write?

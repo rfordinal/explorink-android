@@ -1,4 +1,4 @@
-package org.trailink.gpsbridge
+package org.explorink.gpsbridge
 
 import kotlin.math.abs
 import kotlin.math.atan2
