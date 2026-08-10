@@ -36,7 +36,8 @@ class TileIndexTest {
 
     @Test
     fun `a tile lands in the block that holds it`() {
-        // The real pair from the mirror: region1 and ride1-video both live here.
+        // region1 and ride1-video shared this block before ride1-video was
+        // removed as a redundant subset (see docs/tile-index-spec.md).
         assertEquals(70L, TileIndex.blockCol(13, 4482))
         assertEquals(44L, TileIndex.blockRow(13, 2839))
         assertEquals(70L, TileIndex.blockCol(12, 2241))
