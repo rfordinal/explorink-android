@@ -111,6 +111,32 @@ class TileFetcher(
 
         /** The fetch ended. [reason] is short and human-readable. */
         fun onFetchFinished(sent: Int, skipped: Int, total: Int, reason: String)
+
+        /**
+         * One square is finished, one way or the other: [ok] true means the device
+         * has it on the card and verified the CRC, false means it was skipped or
+         * refused. [bytes] is what landed, 0 for anything that did not.
+         * [detail] is the skip reason, empty on success.
+         *
+         * Aggregate counts alone could not answer the question a rider actually
+         * asks -- which squares did I get, which did I not, and why -- so this
+         * carries the identity of each one. Default no-op: only the UI needs it.
+         */
+        fun onTileDone(z: Int, col: Long, row: Long, bytes: Int, ok: Boolean, detail: String) {}
+
+        /** True while the current fetch is answering a viewport ask, not the whole list. */
+        fun onFetchScope(viewportOnly: Boolean) {}
+
+        /**
+         * [sentBytes] of [totalBytes] of one square are on the card. Fired per
+         * chunk, i.e. per write the device has already acknowledged, so it is a
+         * measure of what landed rather than of what was queued.
+         *
+         * The only honest source of a progress bar on this link: a tile is tens of
+         * kB at ~7 kB/s, so "sending" with no number reads as a hang. Default
+         * no-op.
+         */
+        fun onTileProgress(z: Int, col: Long, row: Long, sentBytes: Int, totalBytes: Int) {}
     }
 
     enum class Phase { IDLE, LISTING, PUSHING }
@@ -176,6 +202,7 @@ class TileFetcher(
             is TransferFrames.Status.Ok -> {
                 sent++
                 Log.i(TAG, "landed ${describe(tile)} (${status.bytes} bytes)")
+                tile?.let { listener.onTileDone(it.z, it.col, it.row, status.bytes, true, "") }
                 clearTransfer()
                 listener.onFetchProgress(sent, skipped, total)
                 nextTile()
@@ -260,6 +287,7 @@ class TileFetcher(
         viewportOnly = need.viewportOnly
         // For the duration of this fetch and no longer -- released in finish().
         transport.setFastLink(true)
+        listener.onFetchScope(need.viewportOnly)
         listener.onFetchStarted(need.count)
         requestPage(0)
     }
@@ -420,6 +448,7 @@ class TileFetcher(
             }
             offset = chunkOffset + take
             armTimeout()
+            listener.onTileProgress(current.z, current.col, current.row, offset, data.size)
             if (offset < data.size) sendNextChunk()
             // Else: every byte is on the card and the device is computing the
             // CRC. The `OK` (or `ERR crc mismatch`) is what moves this on.
@@ -428,6 +457,7 @@ class TileFetcher(
 
     private fun skip(missing: MissingTile, reason: String) {
         skipped++
+        listener.onTileDone(missing.z, missing.col, missing.row, 0, false, reason)
         listener.onFetchProgress(sent, skipped, total)
         transport.sendCommand("skip ${missing.z} ${missing.col} ${missing.row} $reason") { ok, error ->
             if (!ok) Log.w(TAG, "skip write failed: $error")

@@ -19,6 +19,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.widget.Button
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.FileProvider
@@ -64,6 +65,11 @@ class MainActivity : Activity(), BridgeService.Observer {
     private lateinit var tvState: TextView
     private lateinit var tvProblem: TextView
     private lateinit var tvWake: TextView
+    private lateinit var tvTilesHead: TextView
+    private lateinit var tvTiles: TextView
+    private lateinit var tvTileNow: TextView
+    private lateinit var pbTileBytes: ProgressBar
+    private lateinit var pbTileSquares: ProgressBar
     private lateinit var tvFix: TextView
     private lateinit var tvCounters: TextView
     private lateinit var tvLogFile: TextView
@@ -110,6 +116,11 @@ class MainActivity : Activity(), BridgeService.Observer {
         tvState = findViewById(R.id.tvState)
         tvProblem = findViewById(R.id.tvProblem)
         tvWake = findViewById(R.id.tvWake)
+        tvTilesHead = findViewById(R.id.tvTilesHead)
+        tvTiles = findViewById(R.id.tvTiles)
+        tvTileNow = findViewById(R.id.tvTileNow)
+        pbTileBytes = findViewById(R.id.pbTileBytes)
+        pbTileSquares = findViewById(R.id.pbTileSquares)
         tvFix = findViewById(R.id.tvFix)
         tvCounters = findViewById(R.id.tvCounters)
         tvLogFile = findViewById(R.id.tvLogFile)
@@ -423,6 +434,44 @@ class MainActivity : Activity(), BridgeService.Observer {
         btnForget.visibility = if (addr != null) View.VISIBLE else View.GONE
     }
 
+    /**
+     * The map-square block, hidden entirely until the device has asked for
+     * something. An empty labelled box reads like a broken feature; no box reads
+     * like a feature that has not happened yet, which is the truth.
+     */
+    private fun renderTiles(lines: List<String>, now: BridgeService.TileProgress?) {
+        val show = lines.isNotEmpty() || now != null
+        tvTilesHead.visibility = if (show) View.VISIBLE else View.GONE
+        tvTiles.visibility = if (lines.isNotEmpty()) View.VISIBLE else View.GONE
+        if (lines.isNotEmpty()) tvTiles.text = lines.joinToString("\n")
+
+        val live = if (now != null) View.VISIBLE else View.GONE
+        tvTileNow.visibility = live
+        pbTileBytes.visibility = live
+        pbTileSquares.visibility = live
+        if (now == null) return
+
+        // Both lines read the way the device's sync screen reads, on purpose:
+        // TileFormat is a port of it (decimal kB, rate over the whole fetch from
+        // completed squares only, skips counted apart).
+        tvTileNow.text = "now: z${now.z} ${now.col}/${now.row}   " +
+            "${TileFormat.bytes(now.sentBytes)} / ${TileFormat.bytes(now.totalBytes)}\n" +
+            TileFormat.summary(
+                now.completedSquares, now.skippedSquares, now.totalSquares,
+                now.movedBytes, now.completedBytes, now.elapsedMs,
+            )
+        // Percent, not bytes, on both bars: setMax per frame makes the bar jump
+        // when one square is bigger than the last.
+        pbTileBytes.progress =
+            if (now.totalBytes > 0) now.sentBytes * 100 / now.totalBytes else 0
+        // Skips fill the ask too -- they are settled, just not arrived -- or the
+        // bar stalls at a square nobody can supply.
+        pbTileSquares.progress =
+            if (now.totalSquares > 0)
+                (now.completedSquares + now.skippedSquares) * 100 / now.totalSquares
+            else 0
+    }
+
     private fun render() {
         renderWake()
         val snap = service?.snapshot()
@@ -433,6 +482,7 @@ class MainActivity : Activity(), BridgeService.Observer {
             tvCounters.text = "packets: sent 0 / failed 0"
             tvLogFile.text = "recording: off"
             tvEvents.text = ""
+            renderTiles(emptyList(), null)
             btnRecord.text = "Start recording"
             renderProblems(null)
             return
@@ -514,6 +564,7 @@ class MainActivity : Activity(), BridgeService.Observer {
         }
 
         btnRecord.text = if (snap.recording) "Stop recording" else "Start recording"
+        renderTiles(snap.tileLog, snap.tileProgress)
         tvEvents.text = snap.events.joinToString("\n")
     }
 

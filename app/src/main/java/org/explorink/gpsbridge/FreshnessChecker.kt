@@ -72,6 +72,13 @@ class FreshnessChecker(
         fun onCheckFinished(examined: Int, stale: Int, reason: String)
 
         /**
+         * The device asked whether the [count] squares it holds are still current,
+         * and this phone is about to find out. Default no-op: only the UI needs the
+         * ask itself, everything else cares about the verdict.
+         */
+        fun onCheckStarted(count: Int) {}
+
+        /**
          * These tiles are out of date, and this phone knows which content id
          * each should be at. **Push them; do not wait to be asked.**
          *
@@ -183,6 +190,7 @@ class FreshnessChecker(
         }
 
         Log.i(TAG, "device wants $count tile(s) checked, format ${formatVersion ?: "unstated"}")
+        listener?.onCheckStarted(count)
         phase = Phase.LISTING
         reader = MissingList.HaveReader()
         armTimeout(REPLY_TIMEOUT_MS)

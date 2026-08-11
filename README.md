@@ -45,6 +45,34 @@ the same name and the same service UUID, so unpaired the app connects to whichev
 answers first. Full mechanism, limits and the unverified list:
 `../docs/ble-app-wake.md`.
 
+## One conversation at a time on the command channel
+
+The device asks for things unprompted, and this app answers with a command. A reply
+listing ends with a plain `OK`, so two conversations open at once cannot be told
+apart -- each one can be ended by the other's terminator. Measured on hardware
+2026-08-11: the sync screen asked both questions 15 ms apart, this app answered
+both, and the fetcher read a 20-tile list as empty, pushed nothing, sent no skips,
+and left the device showing 20 rows of "waiting" with nothing to explain it.
+
+`BridgeService.onCommandLine` now defers a second ask and replays it when the
+channel is free. The device serializes its asks too, but this side does not rely on
+that -- an older build does not. Details and the wire evidence:
+`../docs/ble-map-transfer-protocol.md`, "One conversation at a time".
+
+## What the app shows about map squares
+
+A dedicated block, in words, not the shorthand link trace: what the device asked
+for, which square arrived or did not, the live transfer with two progress bars
+(bytes of the current square, and settled squares of the ask), and a summary line.
+Progress is in the notification too, so a phone in a bag says something useful
+without being unlocked.
+
+Every number goes through `TileFormat`, which is a port of the device's own sync
+screen (`TileSyncActivity.cpp`: decimal kB, rate over the whole fetch from
+completed squares only, skips counted apart). Its unit tests assert the values that
+C++ prints, so the panel and the phone cannot drift apart -- they had: kB was 1024
+bytes here and 1000 there, and the rate was per-square here and whole-fetch there.
+
 ## Fetching missing tiles
 
 The rider starts it **on the device**, never the phone -- it is a transfer of

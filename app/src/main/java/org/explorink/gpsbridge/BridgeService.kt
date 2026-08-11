@@ -76,6 +76,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
         private const val MAX_EVENTS = 12
 
+        /** Enough for one whole fetch plus the check that triggered it. */
+        private const val MAX_TILE_LINES = 10
+
         @Volatile
         var isRunning = false
             private set
@@ -104,6 +107,37 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         val lastSendReason: String?,
         /** One line about the last or current tile fetch, or null if there has been none. */
         val tileFetchStatus: String?,
+        /** The map-square story in plain words, oldest first. Empty until the device asks. */
+        val tileLog: List<String>,
+        /** The transfer happening right now, or null when nothing is in flight. */
+        val tileProgress: TileProgress?,
+    )
+
+    /**
+     * A fetch in flight, measured in what the device has acknowledged.
+     *
+     * Two scales, because they answer different questions: [completedSquares] of
+     * [totalSquares] is "how much of this ask is left", [sentBytes] of
+     * [totalBytes] is "is the current one moving at all". On a ~7 kB/s link the
+     * second one is what separates a slow transfer from a dead one.
+     *
+     * Every number here is stated through [TileFormat], which is a port of the
+     * device's own sync screen, so the panel and the phone cannot disagree.
+     */
+    class TileProgress(
+        val z: Int,
+        val col: Long,
+        val row: Long,
+        val sentBytes: Int,
+        val totalBytes: Int,
+        val completedSquares: Int,
+        val skippedSquares: Int,
+        val totalSquares: Int,
+        /** Bytes of completed squares plus what has landed of the one in flight. */
+        val movedBytes: Int,
+        /** Completed squares only -- what the rate is computed from. */
+        val completedBytes: Int,
+        val elapsedMs: Long,
     )
 
     interface Observer {
@@ -176,6 +210,28 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private var lastSendReason: String? = null
 
     private val events = ArrayDeque<String>()
+
+    /**
+     * The map-square story in plain words, newest last: what the device asked for,
+     * which square arrived or did not, and how the whole thing ended.
+     *
+     * Separate from [events], which is a link-level trace in shorthand. Both were
+     * one list before and the tile lines drowned in scan/connect noise -- a rider
+     * could not tell from it when the device asked for a download or what came of
+     * it, which is the one thing about tiles worth showing on a phone.
+     */
+    private val tileLog = ArrayDeque<String>()
+
+    /** "on screen" or "whole list", from the ask that started the current fetch. */
+    private var fetchScope = "whole list"
+    private var fetchStartedAtMs = 0L
+
+    /** Live transfer state, all of it null/zero while nothing is in flight. */
+    private var tileProgress: TileProgress? = null
+    private var fetchTotal = 0
+    private var fetchDone = 0
+    private var fetchSkipped = 0
+    private var fetchCompletedBytes = 0
     private var observer: Observer? = null
 
     // --- lifecycle ------------------------------------------------------
@@ -347,6 +403,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         moveThresholdM = moveThreshold(),
         lastSendReason = lastSendReason,
         tileFetchStatus = tileFetchStatus,
+        tileLog = tileLog.toList(),
+        tileProgress = tileProgress,
     )
 
     // --- recording ------------------------------------------------------
@@ -426,10 +484,53 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         logger?.logEvent("cmd_in", line, null)
         MissingList.parseNeedTiles(line)?.formatVersion?.let { deviceTileFormat = it }
         MissingList.parseCheckTiles(line)?.formatVersion?.let { deviceTileFormat = it }
+
+        // One conversation at a time on this channel.
+        //
+        // Both state machines read every line here, and a listing ends on a plain
+        // `OK`, so two open conversations means each one can be ended by the
+        // other's terminator. That is not theory: measured on hardware
+        // 2026-08-11, the sync screen sent CHECK_TILES and NEED_TILES 15 ms
+        // apart, this app answered both, and the fetcher read the 20-tile list as
+        // empty -- "list complete: 0 tiles of 20", nothing pushed, no skips sent,
+        // and the device left showing 20 rows of "waiting" with no explanation.
+        //
+        // The device now serializes its asks too, but this side must not depend
+        // on that: an older or a differently-timed build would put the app right
+        // back in the same hole. A deferred ask is replayed when the channel is
+        // free (onFetchFinished / onCheckFinished).
+        val needTiles = MissingList.parseNeedTiles(line) != null
+        val checkTiles = MissingList.parseCheckTiles(line) != null
+        if (needTiles && freshness.phase != FreshnessChecker.Phase.IDLE) {
+            addEvent("ask deferred: a freshness check is still running")
+            deferredAsk = line
+            return
+        }
+        if (checkTiles && tileFetcher.phase != TileFetcher.Phase.IDLE) {
+            addEvent("ask deferred: a fetch is still running")
+            deferredAsk = line
+            return
+        }
+
         tileFetcher.onCommandLine(line)
-        // Both read this channel, and their asks never overlap: NEED_TILES is
-        // about tiles the device does not have, CHECK_TILES about tiles it does.
         freshness.onCommandLine(line)
+    }
+
+    /**
+     * An ask that arrived while the other conversation held the channel. At most
+     * one: the device only has two kinds of ask, so a second deferral would mean
+     * the same kind twice, and the newer one describes the device's state better.
+     */
+    private var deferredAsk: String? = null
+
+    /** Runs a deferred ask once both state machines are idle again. */
+    private fun runDeferredAsk() {
+        val line = deferredAsk ?: return
+        if (tileFetcher.phase != TileFetcher.Phase.IDLE) return
+        if (freshness.phase != FreshnessChecker.Phase.IDLE) return
+        deferredAsk = null
+        addEvent("running the deferred ask")
+        onCommandLine(line)
     }
 
     override fun onTransferStatus(line: String) {
@@ -437,9 +538,20 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         tileFetcher.onStatusLine(line)
     }
 
+    override fun onFetchScope(viewportOnly: Boolean) {
+        fetchScope = if (viewportOnly) "on screen" else "whole list"
+    }
+
     override fun onFetchStarted(total: Int) {
         tileFetchStatus = "fetching 0/$total"
+        fetchStartedAtMs = System.currentTimeMillis()
+        fetchTotal = total
+        fetchDone = 0
+        fetchSkipped = 0
+        fetchCompletedBytes = 0
+        tileProgress = null
         addEvent("device asked for $total tiles")
+        addTileLine("X4 asked for $total ${squares(total)} ($fetchScope)")
         logger?.logEvent("fetch_start", "$total tiles", mapOf("total" to total))
         notifyObserver()
     }
@@ -449,20 +561,73 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         notifyObserver()
     }
 
+    override fun onTileProgress(z: Int, col: Long, row: Long, sentBytes: Int, totalBytes: Int) {
+        // Timed from the start of the whole fetch, not of this square, because that
+        // is what the device's own summary does -- see TileFormat.
+        tileProgress = TileProgress(
+            z = z,
+            col = col,
+            row = row,
+            sentBytes = sentBytes,
+            totalBytes = totalBytes,
+            completedSquares = fetchDone,
+            skippedSquares = fetchSkipped,
+            totalSquares = fetchTotal,
+            movedBytes = fetchCompletedBytes + sentBytes,
+            completedBytes = fetchCompletedBytes,
+            elapsedMs = System.currentTimeMillis() - fetchStartedAtMs,
+        )
+        notifyObserver()
+    }
+
+    override fun onTileDone(z: Int, col: Long, row: Long, bytes: Int, ok: Boolean, detail: String) {
+        if (ok) {
+            fetchDone++
+            fetchCompletedBytes += bytes
+        } else {
+            fetchSkipped++
+        }
+        tileProgress = null
+        // One line per square, with its own name on it. The counters say how many;
+        // only this says which, and a rider parked at the edge of coverage needs
+        // the difference to tell "my map is short here" from "the link is bad".
+        val where = "z$z ${col}/${row}"
+        addTileLine(
+            if (ok) "$where  ${TileFormat.bytes(bytes)}  arrived"
+            else "$where  not available ($detail)"
+        )
+        notifyObserver()
+    }
+
     override fun onFetchFinished(sent: Int, skipped: Int, total: Int, reason: String) {
         tileFetchStatus = "$sent/$total sent" +
             (if (skipped > 0) ", $skipped skipped" else "") +
             " ($reason)"
         addEvent("fetch $reason: $sent sent, $skipped skipped")
+        tileProgress = null
+        val secs = ((System.currentTimeMillis() - fetchStartedAtMs) / 1000L).coerceAtLeast(0)
+        addTileLine(
+            "finished: $sent of $total arrived" +
+                (if (skipped > 0) ", $skipped not available" else "") +
+                ", ${secs}s" +
+                (if (reason != "done") " -- $reason" else "")
+        )
         logger?.logEvent(
             "fetch_end",
             reason,
             mapOf("sent" to sent, "skipped" to skipped, "total" to total),
         )
         notifyObserver()
+        runDeferredAsk()
+    }
+
+    override fun onCheckStarted(count: Int) {
+        addTileLine("X4 asked: are my $count ${squares(count)} still current?")
+        notifyObserver()
     }
 
     override fun onStaleTilesFound(tiles: List<HeldTile>) {
+        addTileLine("${tiles.size} ${squares(tiles.size)} out of date -- sending new ones")
         // Pushed without a further ask: this phone found them and holds their
         // expected content ids, so a round trip through the device would only
         // lose that. The transfer channel accepts an unsolicited push while the
@@ -477,12 +642,22 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             else -> "$stale of $examined tiles out of date"
         }
         addEvent("freshness check: $reason")
+        addTileLine(
+            when {
+                // `unknown` is not a result and must not read like one -- the phone
+                // could not reach the map server, so nothing was learned.
+                stale < 0 -> "could not check ($reason) -- will try again later"
+                stale == 0 -> "checked $examined ${squares(examined)}: all current"
+                else -> "checked $examined ${squares(examined)}: $stale out of date"
+            }
+        )
         logger?.logEvent(
             "check_end",
             reason,
             mapOf("examined" to examined, "stale" to stale),
         )
         notifyObserver()
+        runDeferredAsk()
     }
 
     /**
@@ -880,11 +1055,27 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         } else {
             "${moved.toInt()}/${moveThreshold().toInt()} m"
         }
-        val text = "sent $sentOk / failed $sentFailed  ·  $policy  ·  $rec"
+        // A transfer takes tens of seconds on this link and the phone is usually in
+        // a bag, so while one runs the notification says that instead of the send
+        // counters -- it is the only surface the rider can see without unlocking.
+        val p = tileProgress
+        val text = if (p != null) {
+            "map squares  " + TileFormat.summary(
+                p.completedSquares, p.skippedSquares, p.totalSquares,
+                p.movedBytes, p.completedBytes, p.elapsedMs,
+            )
+        } else {
+            "sent $sentOk / failed $sentFailed  ·  $policy  ·  $rec"
+        }
 
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)
+            .apply {
+                if (p != null && p.totalBytes > 0) {
+                    setProgress(100, p.sentBytes * 100 / p.totalBytes, false)
+                }
+            }
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentIntent(open)
             .setOngoing(true)
@@ -906,6 +1097,15 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         events.addLast("${timeFmt.format(Date())}  $line")
         while (events.size > MAX_EVENTS) events.removeFirst()
     }
+
+    private fun addTileLine(line: String) {
+        tileLog.addLast("${timeFmt.format(Date())}  $line")
+        while (tileLog.size > MAX_TILE_LINES) tileLog.removeFirst()
+    }
+
+    /** "square" / "squares" -- the word a rider uses, not "tile". */
+    private fun squares(n: Int): String = if (n == 1) "square" else "squares"
+
 
     fun bluetoothAdapter(): BluetoothAdapter? =
         (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter

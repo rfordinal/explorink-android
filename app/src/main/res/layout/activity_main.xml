@@ -70,6 +70,58 @@
                 android:textSize="11sp"
                 android:text="log: -" />
 
+            <!-- Map squares, in words, above the shorthand link trace: what the
+                 device asked for and what came of it. Same text size as the fix and
+                 counter blocks, not the grey micro font, because it is a result
+                 rather than noise. -->
+            <TextView
+                android:id="@+id/tvTilesHead"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="2dp"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:text="map squares"
+                android:visibility="gone" />
+
+            <!-- Live transfer. Two bars because they answer different questions:
+                 which square of the ask, and whether this square is moving at all
+                 over a 7 kB/s link. Both gone when nothing is in flight. -->
+            <TextView
+                android:id="@+id/tvTileNow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:paddingTop="2dp"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <ProgressBar
+                android:id="@+id/pbTileBytes"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="100"
+                android:visibility="gone" />
+
+            <ProgressBar
+                android:id="@+id/pbTileSquares"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="100"
+                android:paddingBottom="4dp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tvTiles"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:paddingBottom="12dp"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
             <TextView
                 android:id="@+id/tvEvents"
                 android:layout_width="match_parent"
