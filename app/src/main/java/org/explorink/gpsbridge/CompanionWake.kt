@@ -77,8 +77,8 @@ object CompanionWake {
      * The result comes back to [Activity.onActivityResult] with [REQ_ASSOCIATE];
      * hand it to [onAssociationResult].
      */
-    fun requestAssociation(activity: Activity, onFailure: (CharSequence?) -> Unit) {
-        val cdm = manager(activity) ?: return onFailure("no companion device support")
+    fun requestAssociation(activity: Activity, report: (CharSequence?) -> Unit) {
+        val cdm = manager(activity) ?: return report("no companion device support")
         val filter = BluetoothLeDeviceFilter.Builder()
             .setScanFilter(
                 ScanFilter.Builder()
@@ -93,6 +93,9 @@ object CompanionWake {
             .addDeviceFilter(filter)
             .setSingleDevice(false)
             .build()
+        // `report`, never `onFailure`, inside this object: a bare onFailure(...)
+        // call here resolves to the override below, not to the caller's lambda,
+        // and recurses until the stack goes.
         val callback = object : CompanionDeviceManager.Callback() {
             // onAssociationPending (API 33+) defaults to calling this, so one
             // override covers every API level the app supports.
@@ -102,20 +105,20 @@ object CompanionWake {
                     activity.startIntentSenderForResult(chooserLauncher, REQ_ASSOCIATE, null, 0, 0, 0)
                 } catch (t: Throwable) {
                     Log.e(TAG, "startIntentSenderForResult", t)
-                    onFailure(t.javaClass.simpleName)
+                    report(t.javaClass.simpleName)
                 }
             }
 
             override fun onFailure(error: CharSequence?) {
                 Log.w(TAG, "association failed: $error")
-                onFailure(error)
+                report(error)
             }
         }
         try {
             cdm.associate(request, callback, null)
         } catch (t: Throwable) {
             Log.e(TAG, "associate", t)
-            onFailure(t.javaClass.simpleName)
+            report(t.javaClass.simpleName)
         }
     }
 
