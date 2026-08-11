@@ -37,6 +37,13 @@ class MainActivity : Activity(), BridgeService.Observer {
         private const val TAG = "MainActivity"
         private const val REQ_PERMISSIONS = 1
 
+        /**
+         * Background location is requested on its own, after the foreground
+         * grants: Android refuses a request that bundles it with them, and it is
+         * only needed for the wake path (docs/ble-app-wake.md).
+         */
+        private const val REQ_BACKGROUND_LOCATION = 2
+
         /** Redraw this often while visible, so the fix "age" line stays honest. */
         private const val UI_TICK_MS = 1000L
 
@@ -55,11 +62,13 @@ class MainActivity : Activity(), BridgeService.Observer {
 
     private lateinit var tvState: TextView
     private lateinit var tvProblem: TextView
+    private lateinit var tvWake: TextView
     private lateinit var tvFix: TextView
     private lateinit var tvCounters: TextView
     private lateinit var tvLogFile: TextView
     private lateinit var tvEvents: TextView
     private lateinit var tvVersion: TextView
+    private lateinit var btnWake: Button
     private lateinit var btnRetry: Button
     private lateinit var btnExport: Button
     private lateinit var btnRecord: Button
@@ -71,6 +80,10 @@ class MainActivity : Activity(), BridgeService.Observer {
     private var service: BridgeService? = null
     private var bound = false
     private var permissionsDenied = false
+
+    /** So a second press of the wake button goes to Settings, not to a dialog
+     * Android will not show twice. */
+    private var backgroundLocationAsked = false
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, b: IBinder?) {
@@ -94,16 +107,19 @@ class MainActivity : Activity(), BridgeService.Observer {
 
         tvState = findViewById(R.id.tvState)
         tvProblem = findViewById(R.id.tvProblem)
+        tvWake = findViewById(R.id.tvWake)
         tvFix = findViewById(R.id.tvFix)
         tvCounters = findViewById(R.id.tvCounters)
         tvLogFile = findViewById(R.id.tvLogFile)
         tvEvents = findViewById(R.id.tvEvents)
         tvVersion = findViewById(R.id.tvVersion)
+        btnWake = findViewById(R.id.btnWake)
         btnRetry = findViewById(R.id.btnRetry)
         btnExport = findViewById(R.id.btnExport)
         btnRecord = findViewById(R.id.btnRecord)
         btnStop = findViewById(R.id.btnStop)
 
+        btnWake.setOnClickListener { onWakePressed() }
         btnRetry.setOnClickListener { onRetryPressed() }
         btnExport.setOnClickListener { shareLog() }
         btnRecord.setOnClickListener { onRecordPressed() }
@@ -120,6 +136,10 @@ class MainActivity : Activity(), BridgeService.Observer {
         } else {
             requestPermissions(REQUIRED, REQ_PERMISSIONS)
         }
+
+        // Re-arm the OS-side presence watch on every launch. Idempotent, and an
+        // association nobody observes wakes nothing.
+        CompanionWake.startObserving(this)
     }
 
     override fun onStart() {
@@ -218,6 +238,67 @@ class MainActivity : Activity(), BridgeService.Observer {
         }
     }
 
+    /**
+     * One button for the whole auto-start setup, doing whichever step is missing.
+     * Two steps, in this order because the second is pointless without the first:
+     * pair the X4, then grant background location.
+     */
+    private fun onWakePressed() {
+        if (!CompanionWake.isPaired(this)) {
+            CompanionWake.requestAssociation(this) { error ->
+                main.post {
+                    Toast.makeText(
+                        this,
+                        "pairing failed: ${error ?: "no X4 found -- open the map screen on it"}",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+            return
+        }
+        if (!hasBackgroundLocation()) {
+            // On API 30+ this dialog is shown once. After that the only route is
+            // the app's settings page, which is where a second press goes.
+            if (backgroundLocationAsked) {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.fromParts("package", packageName, null),
+                    )
+                )
+            } else {
+                backgroundLocationAsked = true
+                requestPermissions(
+                    arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+                    REQ_BACKGROUND_LOCATION,
+                )
+            }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != CompanionWake.REQ_ASSOCIATE) return
+        if (resultCode != RESULT_OK) {
+            render()
+            return
+        }
+        val addr = CompanionWake.onAssociationResult(this)
+        Toast.makeText(
+            this,
+            if (addr != null) "paired with $addr" else "pairing did not complete",
+            Toast.LENGTH_LONG,
+        ).show()
+        // The link pins itself to the paired address on the next start; tell the
+        // running bridge now so the rider does not have to restart it.
+        if (addr != null) startBridge()
+        render()
+    }
+
+    private fun hasBackgroundLocation(): Boolean =
+        checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
     private fun onRecordPressed() {
         val s = service
         if (s == null) {
@@ -258,6 +339,12 @@ class MainActivity : Activity(), BridgeService.Observer {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_BACKGROUND_LOCATION) {
+            // Nothing to start or stop either way: the grant only matters the next
+            // time the X4 wakes this app. Just redraw the auto-start line.
+            render()
+            return
+        }
         if (requestCode != REQ_PERMISSIONS) return
         // The notification permission is a nice-to-have; the bridge can run
         // without it. Only the BLE and location grants are load-bearing.
@@ -271,7 +358,37 @@ class MainActivity : Activity(), BridgeService.Observer {
 
     // --- UI -------------------------------------------------------------
 
+    /**
+     * The auto-start line: whether opening the map on the X4 will start this app
+     * on its own, and if not, what is missing. Two states are not the same
+     * failure, so they do not share a message -- unpaired means no wake at all,
+     * paired-without-background-location means the wake fires and then has no
+     * fixes to send.
+     */
+    private fun renderWake() {
+        val addr = CompanionWake.pairedAddress(this)
+        when {
+            addr == null -> {
+                tvWake.text = "auto-start: off -- X4 not paired"
+                btnWake.text = "Pair the X4"
+                btnWake.visibility = View.VISIBLE
+            }
+
+            !hasBackgroundLocation() -> {
+                tvWake.text = "auto-start: paired $addr, but no background location"
+                btnWake.text = "Allow location all the time"
+                btnWake.visibility = View.VISIBLE
+            }
+
+            else -> {
+                tvWake.text = "auto-start: on -- paired $addr"
+                btnWake.visibility = View.GONE
+            }
+        }
+    }
+
     private fun render() {
+        renderWake()
         val snap = service?.snapshot()
 
         if (snap == null) {

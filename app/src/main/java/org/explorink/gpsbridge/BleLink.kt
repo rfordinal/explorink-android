@@ -134,6 +134,22 @@ class BleLink(
         (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
     }
 
+    /**
+     * The MAC address of the one X4 this phone is paired with, or null while
+     * unpaired. Set from the CompanionDeviceManager association
+     * ([CompanionWake.pairedAddress]).
+     *
+     * When set, it is the only device this link will look at or talk to. That
+     * matters because every X4 running this firmware advertises the same name and
+     * the same service UUID, so the name/UUID filters below cannot tell one from
+     * another: unpaired, the app connects to whichever advertises first, which
+     * with two devices in range is a coin flip. Pairing removes the guess.
+     */
+    var pinnedAddress: String? = null
+        set(value) {
+            field = value?.uppercase()
+        }
+
     private var scanning = false
     private var gatt: BluetoothGatt? = null
     private var posChar: BluetoothGattCharacteristic? = null
@@ -334,10 +350,17 @@ class BleLink(
         // device drops the link, app has to find it again. Two filters, OR'd:
         // by name, and by advertised service UUID for a device that leaves its
         // name out of the advertisement.
-        val filters = listOf(
-            ScanFilter.Builder().setDeviceName(DEVICE_NAME).build(),
-            ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build(),
-        )
+        // A paired X4 is filtered by address instead: exact, offloadable to the
+        // controller, and it cannot match the X4 in the next room.
+        val pinned = pinnedAddress
+        val filters = if (pinned != null) {
+            listOf(ScanFilter.Builder().setDeviceAddress(pinned).build())
+        } else {
+            listOf(
+                ScanFilter.Builder().setDeviceName(DEVICE_NAME).build(),
+                ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build(),
+            )
+        }
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
@@ -345,7 +368,7 @@ class BleLink(
         try {
             scanner.startScan(filters, settings, scanCallback)
             scanning = true
-            setState(State.SCANNING, "looking for $DEVICE_NAME")
+            setState(State.SCANNING, if (pinned != null) "looking for $pinned" else "looking for $DEVICE_NAME")
             listener.onBleEvent("scan_start", null, null)
         } catch (t: Throwable) {
             Log.e(TAG, "startScan", t)
@@ -393,9 +416,16 @@ class BleLink(
         } catch (t: Throwable) {
             null
         }
+        // Checked here as well as in the scan filter: a filter is a request to the
+        // controller and a batch result can carry more than was asked for, and this
+        // is the one decision where the wrong device means sending a stranger's
+        // position to a stranger's map.
+        val pinned = pinnedAddress
+        if (pinned != null && !result.device.address.equals(pinned, ignoreCase = true)) return
+
         val byName = advName == DEVICE_NAME || gattName == DEVICE_NAME
         val byUuid = rec?.serviceUuids?.any { it.uuid == SERVICE_UUID } == true
-        if (!byName && !byUuid) return
+        if (pinned == null && !byName && !byUuid) return
 
         stopScan()
         val device = result.device
@@ -420,6 +450,9 @@ class BleLink(
      */
     @SuppressLint("MissingPermission")
     private fun reconnectDirect() {
+        // Pairing wins over history: an address remembered from before the rider
+        // paired can be the other X4, and a direct connect does no filtering.
+        pinnedAddress?.let { if (lastAddress != it) lastAddress = it }
         val addr = lastAddress ?: return startScan()
         val a = adapter ?: return
         val device = try {
