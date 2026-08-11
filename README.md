@@ -553,11 +553,13 @@ jq -c 'select(.type=="packet")' explorink-gps-*.jsonl | head
 
 Laptop: clean build, zero Kotlin warnings, 69/69 unit tests.
 
-**Auto-start and MAC pinning have never run on a phone.** Built 2026-08-11: the
-APK builds and the unit tests pass, which proves nothing about them — presence
-callbacks, a background foreground-service start and background location all need
-a real phone and a real X4. `../docs/ble-app-wake.md` lists the six checks that
-would settle it.
+**Auto-start verified on hardware 2026-08-11**, Galaxy S24 (SM-S928B, Android 16)
+against the real X4: paired, app process killed, map reopened on the device, and
+the OS started a fresh process that connected at MTU 256 and sent one packet with
+nobody touching the phone. It also found a bug no test could — pairing needs the
+BLE link released first, or the device is not advertising and the dialog stays
+empty. Reboot survival, ignoring a second X4, and battery cost are still open:
+`../docs/ble-app-wake.md`.
 
 **The tile fetch has never run against the real device.** Verified on the
 laptop only: the frame layout byte for byte against the protocol doc, CRC32

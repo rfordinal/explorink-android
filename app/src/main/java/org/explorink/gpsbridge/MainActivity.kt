@@ -245,6 +245,11 @@ class MainActivity : Activity(), BridgeService.Observer {
      */
     private fun onWakePressed() {
         if (!CompanionWake.isPaired(this)) {
+            // The link has to go first. A connected X4 stops advertising, and the
+            // pairing dialog can only list what it sees advertising -- with the
+            // bridge up the dialog stays empty forever. Restored in
+            // onActivityResult, whichever way the dialog ends.
+            service?.pauseLinkForPairing()
             CompanionWake.requestAssociation(this) { error ->
                 main.post {
                     Toast.makeText(
@@ -252,6 +257,7 @@ class MainActivity : Activity(), BridgeService.Observer {
                         "pairing failed: ${error ?: "no X4 found -- open the map screen on it"}",
                         Toast.LENGTH_LONG,
                     ).show()
+                    service?.resumeLink()
                 }
             }
             return
@@ -279,6 +285,9 @@ class MainActivity : Activity(), BridgeService.Observer {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != CompanionWake.REQ_ASSOCIATE) return
+        // Unconditionally, before anything else: the link was released for the
+        // dialog and a cancelled pairing must not leave the rider with no bridge.
+        service?.resumeLink()
         if (resultCode != RESULT_OK) {
             render()
             return
@@ -289,9 +298,6 @@ class MainActivity : Activity(), BridgeService.Observer {
             if (addr != null) "paired with $addr" else "pairing did not complete",
             Toast.LENGTH_LONG,
         ).show()
-        // The link pins itself to the paired address on the next start; tell the
-        // running bridge now so the rider does not have to restart it.
-        if (addr != null) startBridge()
         render()
     }
 

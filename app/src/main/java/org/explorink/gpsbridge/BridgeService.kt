@@ -247,6 +247,37 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         }
     }
 
+    /**
+     * Drops the BLE link so the X4 goes back to advertising, and stops scanning so
+     * it is not grabbed again immediately.
+     *
+     * Needed because the two things fight: the X4 stops advertising the moment a
+     * central connects and only resumes on disconnect
+     * (`BlePositionServer.cpp`, `onDisconnect`), while Android's companion pairing
+     * dialog can only offer devices it can *see advertising*. So a running bridge
+     * makes the device unpairable -- measured on hardware 2026-08-11, the dialog
+     * sat empty at "make sure the device is nearby" with the link up the whole
+     * time.
+     *
+     * Paired only through [resumeLink], never automatically: the pause has to
+     * outlive the dialog, which is another process.
+     */
+    fun pauseLinkForPairing() {
+        addEvent("link released for pairing")
+        logger?.logEvent("pair_pause", null)
+        ble.stop()
+        notifyObserver()
+    }
+
+    /** Re-reads the paired address and starts looking again. */
+    fun resumeLink() {
+        ble.pinnedAddress = CompanionWake.pairedAddress(this)
+        addEvent("link resumed")
+        logger?.logEvent("pair_resume", ble.pinnedAddress)
+        ble.start()
+        notifyObserver()
+    }
+
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
