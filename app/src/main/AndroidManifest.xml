@@ -10,12 +10,18 @@
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- Real GPS fixes. Still no ACCESS_BACKGROUND_LOCATION: a foreground
-         service started while the app is visible and declaring the `location`
-         type counts as in-use, which is enough to keep getting fixes with the
-         screen locked. -->
+    <!-- Real GPS fixes. These two alone carry the rider-opened-the-app path: a
+         foreground service started while the app is visible and declaring the
+         `location` type counts as in-use, which is enough to keep getting fixes
+         with the screen locked. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Needed only for the wake path, and load-bearing there: a service the OS
+         starts while the app is invisible does not hold while-in-use location, so
+         without this the woken bridge connects to the X4 and has no fixes to send.
+         Asked for separately, after the foreground grants, and the app still works
+         without it (docs/ble-app-wake.md). -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
     <!-- The bridge keeps sending with the screen off, so it is a foreground
          service: it reads location and it talks to a connected BLE device. -->
@@ -33,9 +39,24 @@
     <!-- Only to show the service's own status line. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- The wake: the OS watches for the associated X4 and binds
+         X4PresenceService when it starts advertising. All three are normal
+         permissions, granted at install, no dialog. The third one is the
+         documented exemption from the rule that a background app may not start a
+         foreground service. Without it the wake lands and is then refused. -->
+    <uses-permission android:name="android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
+    <uses-permission
+        android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+
     <uses-feature
         android:name="android.hardware.bluetooth_le"
         android:required="true" />
+    <!-- required=false: a phone with no companion device support still runs the
+         app, it just cannot be woken and the rider opens it by hand. -->
+    <uses-feature
+        android:name="android.software.companion_device_setup"
+        android:required="false" />
     <uses-feature
         android:name="android.hardware.location.gps"
         android:required="false" />
@@ -62,6 +83,18 @@
             android:name=".BridgeService"
             android:exported="false"
             android:foregroundServiceType="location|connectedDevice" />
+
+        <!-- exported=true and that permission are both required by the platform:
+             the system binds this service, and the permission is what stops
+             anything else from doing so. -->
+        <service
+            android:name=".X4PresenceService"
+            android:exported="true"
+            android:permission="android.permission.BIND_COMPANION_DEVICE_SERVICE">
+            <intent-filter>
+                <action android:name="android.companion.CompanionDeviceService" />
+            </intent-filter>
+        </service>
 
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -8,7 +8,12 @@ minSdk 31, targetSdk 36, compileSdk 36. Debug-signed only.
 
 ## What it does
 
-1. Scans for `XteinkX4Map`, connects, no pairing.
+0. Starts itself when the rider opens the map screen on the paired X4 — the OS
+   watches for that device and wakes the app, with the app swiped away and
+   nothing tapped. Setup is one system dialog; see "Pairing and auto-start"
+   below and `../docs/ble-app-wake.md`.
+1. Scans for the paired X4 by MAC address (by `XteinkX4Map` and the service UUID
+   while unpaired), connects, no BLE pairing.
 2. Writes 21 bytes to characteristic `5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0002`
    whenever the position has actually moved — see the send policy below.
 3. Records every raw GPS fix, every packet written (including failures) and
@@ -23,6 +28,18 @@ All of it runs in a foreground service, so it keeps going with the screen
 locked and the app swiped away.
 
 No route logic, no cloud.
+
+## Pairing and auto-start
+
+Pairing is a **companion device association**, not BLE bonding — the link itself
+still needs no pairing. Once per phone: open the map on the X4, press **Pair the
+X4**, pick the device in Android's own dialog, then allow location all the time.
+
+It buys two things. The OS wakes this app when that X4 starts advertising, and
+the app connects to that one MAC only — every X4 running this firmware advertises
+the same name and the same service UUID, so unpaired the app connects to whichever
+answers first. Full mechanism, limits and the unverified list:
+`../docs/ble-app-wake.md`.
 
 ## Fetching missing tiles
 
@@ -388,7 +405,13 @@ android/
     MainActivity.kt      the one window. Binds, renders a snapshot, four
                          buttons. Holds no state of its own.
     BleLink.kt           scan, connect, reconnect, the GATT operation queue,
-                         all four characteristics, indications; UUIDs and name
+                         all four characteristics, indications; UUIDs and name.
+                         pinnedAddress is the paired X4 and the only device it
+                         will talk to once set
+    CompanionWake.kt     the companion association: pairing dialog, presence
+                         observation, the paired MAC address
+    X4PresenceService.kt bound by the OS when the paired X4 advertises;
+                         starts BridgeService and nothing else
     SendPolicy.kt        when a position is worth a BLE write. No Android
                          types, so it is unit-tested.
     FixGate.kt           which fix is trusted as the position at all,
@@ -529,6 +552,14 @@ jq -c 'select(.type=="packet")' explorink-gps-*.jsonl | head
 ## Verification status
 
 Laptop: clean build, zero Kotlin warnings, 69/69 unit tests.
+
+**Auto-start verified on hardware 2026-08-11**, Galaxy S24 (SM-S928B, Android 16)
+against the real X4: paired, app process killed, map reopened on the device, and
+the OS started a fresh process that connected at MTU 256 and sent one packet with
+nobody touching the phone. It also found a bug no test could — pairing needs the
+BLE link released first, or the device is not advertising and the dialog stays
+empty. Reboot survival, ignoring a second X4, and battery cost are still open:
+`../docs/ble-app-wake.md`.
 
 **The tile fetch has never run against the real device.** Verified on the
 laptop only: the frame layout byte for byte against the protocol doc, CRC32

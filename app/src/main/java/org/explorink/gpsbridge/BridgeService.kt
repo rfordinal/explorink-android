@@ -53,6 +53,14 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         private const val TAG = "BridgeService"
 
         const val ACTION_START = "org.explorink.gpsbridge.START"
+
+        /**
+         * Started by [X4PresenceService] because the paired X4 began advertising,
+         * i.e. the rider opened the map screen. Same work as [ACTION_START]; the
+         * separate action exists so the log says who asked and so the
+         * background-location check below can explain a silent ride.
+         */
+        const val ACTION_WAKE = "org.explorink.gpsbridge.WAKE"
         const val ACTION_STOP = "org.explorink.gpsbridge.STOP"
         const val ACTION_START_RECORDING = "org.explorink.gpsbridge.START_REC"
         const val ACTION_STOP_RECORDING = "org.explorink.gpsbridge.STOP_REC"
@@ -198,7 +206,13 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
             ACTION_START_RECORDING -> startRecording()
             ACTION_STOP_RECORDING -> stopRecording()
+            ACTION_WAKE -> onWoken()
         }
+
+        // The paired X4's address, re-read on every start: the rider can pair (or
+        // forget) between two starts of this service, and an unpinned link would
+        // connect to the first X4 that advertises.
+        ble.pinnedAddress = CompanionWake.pairedAddress(this)
 
         goForeground()
         acquireWakeLock()
@@ -211,6 +225,57 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // low-memory kill, with no permission grants re-checked and no user
         // watching. A ride that ends in a kill should end, visibly.
         return START_NOT_STICKY
+    }
+
+    /**
+     * The X4 opened its map screen and the OS started this service for it, with
+     * nobody looking at the phone.
+     *
+     * The one thing that can quietly ruin this: location. A service started while
+     * the app is invisible does not hold while-in-use location, so without
+     * ACCESS_BACKGROUND_LOCATION the link comes up and no fix ever arrives. That
+     * looks identical to bad GPS from the device's side, so it is logged as what it
+     * is instead.
+     */
+    private fun onWoken() {
+        val hasBackground = checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+        addEvent(if (hasBackground) "woken by the X4" else "woken by the X4 -- no background location")
+        logger?.logEvent("woken", if (hasBackground) "ok" else "no_background_location")
+        if (!hasBackground) {
+            Log.w(TAG, "woken without ACCESS_BACKGROUND_LOCATION: the link will come up with no fixes")
+        }
+    }
+
+    /**
+     * Drops the BLE link so the X4 goes back to advertising, and stops scanning so
+     * it is not grabbed again immediately.
+     *
+     * Needed because the two things fight: the X4 stops advertising the moment a
+     * central connects and only resumes on disconnect
+     * (`BlePositionServer.cpp`, `onDisconnect`), while Android's companion pairing
+     * dialog can only offer devices it can *see advertising*. So a running bridge
+     * makes the device unpairable -- measured on hardware 2026-08-11, the dialog
+     * sat empty at "make sure the device is nearby" with the link up the whole
+     * time.
+     *
+     * Paired only through [resumeLink], never automatically: the pause has to
+     * outlive the dialog, which is another process.
+     */
+    fun pauseLinkForPairing() {
+        addEvent("link released for pairing")
+        logger?.logEvent("pair_pause", null)
+        ble.stop()
+        notifyObserver()
+    }
+
+    /** Re-reads the paired address and starts looking again. */
+    fun resumeLink() {
+        ble.pinnedAddress = CompanionWake.pairedAddress(this)
+        addEvent("link resumed")
+        logger?.logEvent("pair_resume", ble.pinnedAddress)
+        ble.start()
+        notifyObserver()
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -724,9 +789,25 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             }
         } catch (t: Throwable) {
             // Android 14+ throws if the location permission was revoked between
-            // launch and here. Nothing to do but log it and keep the service as
-            // a plain background one, which the system will soon stop.
+            // launch and here, and the same call is refused for a wake-started
+            // service that may not claim location.
             Log.e(TAG, "startForeground refused", t)
+            // Retry without the location type. The BLE half -- position packets
+            // from whatever fix arrives, tile sync, freshness -- needs only
+            // connectedDevice, so half a bridge beats a service the system stops
+            // in seconds. If this throws too there is nothing left to try.
+            if (type != 0) {
+                try {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        buildNotification(),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+                    )
+                    addEvent("foreground service: BLE only, no location type")
+                } catch (t2: Throwable) {
+                    Log.e(TAG, "startForeground refused twice", t2)
+                }
+            }
         }
     }
 
