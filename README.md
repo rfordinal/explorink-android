@@ -35,6 +35,10 @@ Pairing is a **companion device association**, not BLE bonding — the link itse
 still needs no pairing. Once per phone: open the map on the X4, press **Pair the
 X4**, pick the device in Android's own dialog, then allow location all the time.
 
+**Forget the X4** undoes it, behind a confirm; re-pairing is forget then pair. It
+drops the association, unpins the link, forgets the remembered address and restarts
+scanning, so the app keeps working on the old first-match rules.
+
 It buys two things. The OS wakes this app when that X4 starts advertising, and
 the app connects to that one MAC only — every X4 running this firmware advertises
 the same name and the same service UUID, so unpaired the app connects to whichever

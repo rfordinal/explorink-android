@@ -2,6 +2,7 @@ package org.explorink.gpsbridge
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -69,6 +70,7 @@ class MainActivity : Activity(), BridgeService.Observer {
     private lateinit var tvEvents: TextView
     private lateinit var tvVersion: TextView
     private lateinit var btnWake: Button
+    private lateinit var btnForget: Button
     private lateinit var btnRetry: Button
     private lateinit var btnExport: Button
     private lateinit var btnRecord: Button
@@ -114,12 +116,14 @@ class MainActivity : Activity(), BridgeService.Observer {
         tvEvents = findViewById(R.id.tvEvents)
         tvVersion = findViewById(R.id.tvVersion)
         btnWake = findViewById(R.id.btnWake)
+        btnForget = findViewById(R.id.btnForget)
         btnRetry = findViewById(R.id.btnRetry)
         btnExport = findViewById(R.id.btnExport)
         btnRecord = findViewById(R.id.btnRecord)
         btnStop = findViewById(R.id.btnStop)
 
         btnWake.setOnClickListener { onWakePressed() }
+        btnForget.setOnClickListener { onForgetPressed() }
         btnRetry.setOnClickListener { onRetryPressed() }
         btnExport.setOnClickListener { shareLog() }
         btnRecord.setOnClickListener { onRecordPressed() }
@@ -282,6 +286,28 @@ class MainActivity : Activity(), BridgeService.Observer {
         }
     }
 
+    /**
+     * Unpairing, behind a confirm. Not because it destroys data -- it does not --
+     * but because it silently ends auto-start, and a rider who taps it by mistake
+     * finds out days later when a ride starts with no position on the panel.
+     */
+    private fun onForgetPressed() {
+        val addr = CompanionWake.pairedAddress(this) ?: return
+        AlertDialog.Builder(this)
+            .setTitle("Forget $addr?")
+            .setMessage(
+                "The map screen will stop starting this app on its own, and the app " +
+                    "will connect to whichever X4 answers first until you pair again."
+            )
+            .setPositiveButton("Forget") { _, _ ->
+                service?.forgetPairing()
+                Toast.makeText(this, "unpaired", Toast.LENGTH_SHORT).show()
+                render()
+            }
+            .setNegativeButton("Keep", null)
+            .show()
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != CompanionWake.REQ_ASSOCIATE) return
@@ -391,6 +417,10 @@ class MainActivity : Activity(), BridgeService.Observer {
                 btnWake.visibility = View.GONE
             }
         }
+        // Unpairing stays reachable in every paired state, including the one where
+        // background location is still missing -- otherwise pairing the wrong device
+        // is only undoable by granting a permission first.
+        btnForget.visibility = if (addr != null) View.VISIBLE else View.GONE
     }
 
     private fun render() {

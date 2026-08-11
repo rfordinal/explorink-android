@@ -106,6 +106,16 @@
             android:text="Pair the X4"
             android:visibility="gone" />
 
+        <!-- Shown only while paired. Separate from btnWake rather than sharing it:
+             the two do opposite things, and a button that changes meaning with
+             state is how a rider unpairs by accident. -->
+        <Button
+            android:id="@+id/btnForget"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Forget the X4"
+            android:visibility="gone" />
+
         <Button
             android:id="@+id/btnRecord"
             android:layout_width="match_parent"

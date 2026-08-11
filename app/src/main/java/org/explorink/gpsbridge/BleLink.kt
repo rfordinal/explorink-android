@@ -290,6 +290,20 @@ class BleLink(
         }
     }
 
+    /**
+     * Forgets the address remembered for a direct reconnect.
+     *
+     * Needed when the rider unpairs: [lastAddress] is a device this phone was
+     * talking to a moment ago, and [reconnectDirect] does no filtering, so without
+     * this an unpair would be followed by a direct connect straight back to the
+     * device just forgotten -- which is the opposite of unpairing to pick another
+     * one.
+     */
+    fun clearRememberedAddress() {
+        lastAddress = null
+        directReconnects = 0
+    }
+
     /** Manual retry from the UI: tear everything down and start clean. */
     fun retry() {
         teardown()

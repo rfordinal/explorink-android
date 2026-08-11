@@ -269,6 +269,26 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         notifyObserver()
     }
 
+    /**
+     * Unpairs: drops the companion association, so the OS stops watching for that
+     * X4 and this app stops being woken by it.
+     *
+     * Everything the association implied goes with it, in one place rather than
+     * three: the pin, the remembered address behind a direct reconnect, and the
+     * live link to the device being forgotten. Then a clean restart, unpinned, so
+     * the rider is left with a working bridge on the old first-match rules instead
+     * of nothing.
+     */
+    fun forgetPairing() {
+        CompanionWake.forget(this)
+        ble.pinnedAddress = null
+        ble.clearRememberedAddress()
+        addEvent("pairing forgotten")
+        logger?.logEvent("pair_forget", null)
+        ble.retry()
+        notifyObserver()
+    }
+
     /** Re-reads the paired address and starts looking again. */
     fun resumeLink() {
         ble.pinnedAddress = CompanionWake.pairedAddress(this)
