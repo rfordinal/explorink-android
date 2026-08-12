@@ -7,13 +7,13 @@ import org.junit.Test
 /**
  * `content_id`, pinned against the other two implementations.
  *
- * There are three: `mapbuilder/tiles.py` `content_id_from_layer_crcs()`,
+ * There are three: `mapbuilder/tilegen/tiles.py` `content_id_from_layer_crcs()`,
  * `MapTileReader::contentId()` in the firmware, and [TileHeader.contentId] here.
  * They must produce the same number from the same tile or the freshness check
  * reports every tile stale forever -- a failure that looks like the feature
  * working hard.
  *
- * The fixed vectors are the ones `mapbuilder/test_tile_index.py` asserts, and
+ * The fixed vectors are the ones `mapbuilder/tilegen/test_tile_index.py` asserts, and
  * the real-tile vector is `region1`'s z13 4482/2839, byte for byte off the
  * mirror.
  */

@@ -3,7 +3,7 @@ package org.explorink.gpsbridge
 /**
  * The CDN's tile freshness index, as read over HTTP byte ranges.
  *
- * A hand port of `mapbuilder/tile_index.py`. Cite that file, not this one, when
+ * A hand port of `mapbuilder/tilegen/tile_index.py`. Cite that file, not this one, when
  * the layout is in question -- it is the spec, `docs/tile-index-spec.md` is the
  * reasoning, and this is the second implementation that has to agree with it.
  * [TileIndexTest] pins the offsets against the numbers the spec states.
@@ -89,7 +89,7 @@ object TileIndex {
      * One tile position as the index describes it.
      *
      * [contentId] is the only field the freshness check compares -- see
-     * `mapbuilder/tiles.py`, `content_id_from_layer_crcs()`, for why every
+     * `mapbuilder/tilegen/tiles.py`, `content_id_from_layer_crcs()`, for why every
      * timestamp candidate failed. [buildEpoch] is for saying "this tile last
      * changed in March", never for deciding anything.
      */
