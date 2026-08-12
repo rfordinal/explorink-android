@@ -29,6 +29,15 @@ locked and the app swiped away.
 
 No route logic, no cloud.
 
+## Battery
+
+Low battery use is a priority. GPS, the wake lock and the send timer only run
+while the device is connected or a recording is going; the service stops
+itself after 5 minutes with no link, and the companion association wakes it
+again when the rider opens the map. Scanning drops to low power after the
+first 20 s. What costs what, and what is still unmeasured:
+[`../docs/app-power.md`](../docs/app-power.md).
+
 Planned, not built: receiving a shared route (Google Maps link, GPX, KML),
 turning it into a `.tir` and pushing it to the card —
 [`../docs/route-share-plan.md`](../docs/route-share-plan.md).

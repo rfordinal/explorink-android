@@ -104,6 +104,26 @@ class BleLink(
 
         /** Direct reconnects tried before falling back to a scan. */
         private const val MAX_DIRECT_RECONNECTS = 3
+
+        /**
+         * How long a scan runs at `SCAN_MODE_LOW_LATENCY` before dropping to
+         * `SCAN_MODE_LOW_POWER`.
+         *
+         * Low latency means a continuous radio, and it is worth it for the seconds
+         * right after the rider opens the map on the device -- that is the case the
+         * whole wake path exists for and it should feel instant. Beyond that the
+         * scan is a search for a device that is probably off, and a 100% duty cycle
+         * for it is the single most expensive thing this app can do. Low power is
+         * roughly a tenth of the radio time, so a device that starts advertising is
+         * found within seconds instead of instantly -- the right trade once the
+         * first window has passed.
+         *
+         * Unverified: no on-phone battery measurement of either mode yet. The duty
+         * cycles are Android's documented scan windows, not something measured
+         * here. Open -- a run with the app scanning for an hour in each mode,
+         * against Battery Historian, would settle the real cost.
+         */
+        private const val SCAN_FAST_MS = 20_000L
     }
 
     enum class State {
@@ -151,6 +171,9 @@ class BleLink(
         }
 
     private var scanning = false
+
+    /** The `ScanSettings` mode the running scan was started with, for [scanDownshift]. */
+    private var scanMode = ScanSettings.SCAN_MODE_LOW_LATENCY
     private var gatt: BluetoothGatt? = null
     private var posChar: BluetoothGattCharacteristic? = null
     private var cmdChar: BluetoothGattCharacteristic? = null
@@ -351,7 +374,10 @@ class BleLink(
     // --- scanning -------------------------------------------------------
 
     @SuppressLint("MissingPermission")
-    private fun startScan() {
+    private fun startScan() = startScan(ScanSettings.SCAN_MODE_LOW_LATENCY)
+
+    @SuppressLint("MissingPermission")
+    private fun startScan(mode: Int) {
         if (scanning) return
         val scanner = adapter?.bluetoothLeScanner
         if (scanner == null) {
@@ -376,24 +402,42 @@ class BleLink(
             )
         }
         val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .setScanMode(mode)
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .build()
         try {
             scanner.startScan(filters, settings, scanCallback)
             scanning = true
+            scanMode = mode
+            if (mode == ScanSettings.SCAN_MODE_LOW_LATENCY) {
+                main.removeCallbacks(scanDownshift)
+                main.postDelayed(scanDownshift, SCAN_FAST_MS)
+            }
             setState(State.SCANNING, if (pinned != null) "looking for $pinned" else "looking for $DEVICE_NAME")
-            listener.onBleEvent("scan_start", null, null)
+            listener.onBleEvent("scan_start", if (mode == ScanSettings.SCAN_MODE_LOW_LATENCY) "fast" else "low power", null)
         } catch (t: Throwable) {
             Log.e(TAG, "startScan", t)
             setState(State.FAILED, "scan could not start: ${t.javaClass.simpleName}")
         }
     }
 
+    /**
+     * Restarts the running scan in low power once the fast window is spent.
+     *
+     * A restart, not a setting change: Android has no way to re-tune a scan in
+     * place, so the only path is stop then start with new [ScanSettings].
+     */
+    private val scanDownshift = Runnable {
+        if (!scanning || scanMode != ScanSettings.SCAN_MODE_LOW_LATENCY) return@Runnable
+        stopScan()
+        startScan(ScanSettings.SCAN_MODE_LOW_POWER)
+    }
+
     @SuppressLint("MissingPermission")
     private fun stopScan() {
         if (!scanning) return
         scanning = false
+        main.removeCallbacks(scanDownshift)
         try {
             adapter?.bluetoothLeScanner?.stopScan(scanCallback)
         } catch (t: Throwable) {
