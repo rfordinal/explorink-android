@@ -5,7 +5,7 @@ import java.util.zip.CRC32
 /**
  * Just enough of the `.tib` header to know whether a tile is worth pushing.
  *
- * Layout (`mapbuilder/tiles.py`, `docs/map-data-spec.md` "Tile file format",
+ * Layout (`mapbuilder/tilegen/tiles.py`, `docs/map-data-spec.md` "Tile file format",
  * firmware `MapTileReader::parseHeader()`), little endian throughout:
  *
  *     0..3   magic  "TIB1"
@@ -62,7 +62,7 @@ object TileHeader {
     /**
      * Fixed header length: magic, version, z, x, y, origin_x, origin_y,
      * build_epoch, osm_epoch, header_crc32, layer_count
-     * (`mapbuilder/tile_reader.py`, `_HEADER_FMT`).
+     * (`mapbuilder/tilegen/tile_reader.py`, `_HEADER_FMT`).
      */
     private const val HEADER_LEN = 36
 
@@ -82,11 +82,11 @@ object TileHeader {
      * is also crc32 of nothing, so absent and empty are the same by
      * construction.
      *
-     * The third implementation of one number -- `mapbuilder/tiles.py`
+     * The third implementation of one number -- `mapbuilder/tilegen/tiles.py`
      * `content_id_from_layer_crcs()` and `MapTileReader::contentId()` are the
      * other two, and all three must agree bit for bit or the freshness check
      * reports every tile as stale forever. [TileHeaderTest] pins it to the same
-     * fixed vectors `mapbuilder/test_tile_index.py` uses.
+     * fixed vectors `mapbuilder/tilegen/test_tile_index.py` uses.
      *
      * The app computes it for one reason: to check that a tile the CDN just
      * handed over really is the version the index promised. The edge caches for

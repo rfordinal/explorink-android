@@ -10,13 +10,13 @@ import org.junit.Test
 /**
  * The index layout, pinned.
  *
- * This is the second implementation of `mapbuilder/tile_index.py`, ported by
+ * This is the second implementation of `mapbuilder/tilegen/tile_index.py`, ported by
  * hand, and a hand port with no fixed vectors is a coin flip: read a slot at the
  * wrong offset and every tile comes back stale, which looks exactly like the
  * feature working. Same arrangement as the `.tir` route format --
  * `mapbuilder/test_route_file.py`: one format, two languages, two tests.
  *
- * The vectors below were produced by `mapbuilder/tile_index.py` against the real
+ * The vectors below were produced by `mapbuilder/tilegen/tile_index.py` against the real
  * mirror (block 7/70/44, the `region1` build), not written by hand.
  */
 class TileIndexTest {
@@ -53,7 +53,7 @@ class TileIndexTest {
         assertEquals(8 + 256 * 16, TileIndex.slotOffset(12, 2240, 1408))
         assertEquals(8 + 1280 * 16, TileIndex.slotOffset(13, 4480, 2816))
 
-        // Real tiles, offsets computed by mapbuilder/tile_index.py.
+        // Real tiles, offsets computed by mapbuilder/tilegen/tile_index.py.
         assertEquals(44072, TileIndex.slotOffset(13, 4482, 2839))
         assertEquals(9752, TileIndex.slotOffset(12, 2241, 1419))
         assertEquals(1288, TileIndex.slotOffset(11, 1120, 709))

@@ -56,7 +56,7 @@ object TransferFrames {
     /**
      * `base/<z>/<col>/<row>.tib` -- relative to `/trailink` on the card, the
      * layout `MapTileSource::buildPath()` reads and the CDN's `out_dir` mirrors
-     * (`mapbuilder/tiles.py`).
+     * (`mapbuilder/tilegen/tiles.py`).
      */
     fun tileRelPath(z: Int, col: Long, row: Long): String = "base/$z/$col/$row.tib"
 

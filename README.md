@@ -264,7 +264,7 @@ case the feature exists for.
 The app reads the CDN's freshness index by **byte range** -- a dense array of
 16-byte slots, one file per z7 block, the slot's offset arithmetic on
 `(z, col, row)` (`TileIndex.kt`, ported by hand from
-`mapbuilder/tile_index.py`, pinned against it by `TileIndexTest`).
+`mapbuilder/tilegen/tile_index.py`, pinned against it by `TileIndexTest`).
 
 **One range request per zoom plane, not one per tile.** Slots are row-major, so
 a whole viewport sits between one lowest and one highest offset: a few kB in one
@@ -463,7 +463,7 @@ android/
                          `tiles` and `have` replies
     TileIndex.kt         the CDN freshness index: slot offsets, slot parsing,
                          and grouping a viewport into one byte range per zoom
-                         plane. A hand port of mapbuilder/tile_index.py.
+                         plane. A hand port of mapbuilder/tilegen/tile_index.py.
     TileHeader.kt        magic + format version of a .tib, and content_id from
                          its layer directory
     TileSource.kt        the CDN seam: tiles, with ?crc= and verification
