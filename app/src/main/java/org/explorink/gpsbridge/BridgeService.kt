@@ -74,6 +74,24 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         /** Ask Android for fixes faster than we send, so a send is never stale. */
         private const val LOCATION_INTERVAL_MS = 1000L
 
+        /**
+         * How long the bridge keeps looking for the device with nothing connected
+         * before it stops itself.
+         *
+         * Not a battery nicety: without it the service runs until the rider
+         * remembers to press Stop, and the only thing the phone shows for it is a
+         * status line that reads like it is still sending. It is not -- [trySend]
+         * returns on `!ble.isConnected`, and location updates are not even
+         * requested while the link is down.
+         *
+         * Long enough to survive a fuel stop or a dropped link; short enough that
+         * a ride that ended an hour ago is not still holding a wake lock.
+         * Restarting costs nothing the rider does: the companion association wakes
+         * the app again the moment the device opens its map screen
+         * ([X4PresenceService]).
+         */
+        private const val IDLE_STOP_MS = 5 * 60_000L
+
         private const val MAX_EVENTS = 12
 
         /** Enough for one whole fetch plus the check that triggered it. */
@@ -234,6 +252,15 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private var fetchCompletedBytes = 0
     private var observer: Observer? = null
 
+    /** Location updates are actually registered. Guards a re-register on every reconcile. */
+    private var locationRunning = false
+
+    /** The 1 Hz send timer is posted. Also the timer's own stop flag, see [sender]. */
+    private var ticking = false
+
+    /** An idle [stopSelf] was asked for and may still be pending on a bound client. */
+    private var stopRequested = false
+
     // --- lifecycle ------------------------------------------------------
 
     override fun onCreate() {
@@ -271,11 +298,11 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         ble.pinnedAddress = CompanionWake.pairedAddress(this)
 
         goForeground()
-        acquireWakeLock()
-        startLocation()
         ble.start()
-        main.removeCallbacks(sender)
-        main.postDelayed(sender, TICK_MS)
+        // No GPS, no wake lock, no timer until there is something on the other end
+        // of the link -- see [updatePowerState].
+        updatePowerState()
+        armIdleStop()
         notifyObserver()
         // START_STICKY would resurrect the service with a null intent after a
         // low-memory kill, with no permission grants re-checked and no user
@@ -358,7 +385,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
     override fun onDestroy() {
         isRunning = false
-        main.removeCallbacks(sender)
+        stopTicker()
+        cancelIdleStop()
         try {
             unregisterReceiver(btReceiver)
         } catch (t: Throwable) {
@@ -428,6 +456,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             ),
         )
         addEvent("recording started")
+        // A ride recorder needs fixes whether or not the device is on the other
+        // end -- it is the one thing the rider asked for by hand.
+        updatePowerState()
         notifyObserver()
     }
 
@@ -438,6 +469,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         l.close()
         logger = null
         addEvent("recording stopped")
+        updatePowerState()
         notifyObserver()
     }
 
@@ -449,10 +481,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     fun retry() {
         addEvent("manual retry")
         logger?.logEvent("manual_retry", null)
-        startLocation()
         ble.retry()
-        main.removeCallbacks(sender)
-        main.postDelayed(sender, TICK_MS)
+        armIdleStop()
         notifyObserver()
     }
 
@@ -460,13 +490,120 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         val wasConnected = bleState == BleLink.State.CONNECTED
         bleState = state
         bleDetail = detail
+        val isConnected = state == BleLink.State.CONNECTED
         // A fetch in flight is dead the moment the link is: the transfer's
         // offsets and the device's own .part file went with it.
-        if (wasConnected && state != BleLink.State.CONNECTED) {
+        if (wasConnected && !isConnected) {
             tileFetcher.onDisconnected()
             freshness.onDisconnected()
         }
+        if (isConnected != wasConnected) {
+            updatePowerState()
+            if (isConnected) {
+                cancelIdleStop()
+                undoStopRequest()
+            } else {
+                armIdleStop()
+            }
+        }
         notifyObserver()
+    }
+
+    // --- what costs battery ------------------------------------------------
+
+    /**
+     * The one place that decides whether this service is spending power, and the
+     * only thing it asks is whether there is work: a live link, or a recording the
+     * rider started by hand.
+     *
+     * Everything expensive hangs off that answer together, because separately they
+     * drifted -- GPS at 1 Hz, a partial wake lock and a 1 Hz timer all ran from
+     * the first `onStartCommand` until the rider pressed Stop, including the hours
+     * after a ride when the device was off and the link was a scan that would
+     * never hit. Nothing read a fix in that state ([trySend] returns on
+     * `!ble.isConnected`), so all of it was pure drain.
+     *
+     * What is left running with no work: the BLE scan (throttled to
+     * `SCAN_MODE_LOW_POWER` after the first seconds, see [BleLink]) and the
+     * [idleStop] timer that ends the service five minutes in.
+     */
+    private fun updatePowerState() {
+        val working = bleState == BleLink.State.CONNECTED || isRecording
+        if (working) {
+            acquireWakeLock()
+            startLocation()
+            startTicker()
+        } else {
+            // Order matters on the way down: stop the things that would ask for the
+            // CPU before letting the CPU sleep.
+            stopTicker()
+            stopLocation()
+            releaseWakeLock()
+        }
+    }
+
+    private fun startTicker() {
+        if (ticking) return
+        ticking = true
+        main.postDelayed(sender, TICK_MS)
+    }
+
+    private fun stopTicker() {
+        ticking = false
+        main.removeCallbacks(sender)
+    }
+
+    // --- idle stop --------------------------------------------------------
+
+    /**
+     * Stops the whole service after [IDLE_STOP_MS] with no link, unless a
+     * recording is running -- a ride log is the one thing worth keeping alive
+     * without the device, and it is the rider who started it.
+     */
+    private val idleStop = Runnable {
+        if (bleState == BleLink.State.CONNECTED) return@Runnable
+        if (isRecording) {
+            // Re-armed rather than cancelled: the moment the rider stops
+            // recording, the idle clock should still be running.
+            armIdleStop()
+            return@Runnable
+        }
+        addEvent("idle: no device for ${IDLE_STOP_MS / 60_000} min, stopping")
+        logger?.logEvent("idle_stop", null)
+        stopRequested = true
+        stopSelf()
+    }
+
+    private fun armIdleStop() {
+        main.removeCallbacks(idleStop)
+        main.postDelayed(idleStop, IDLE_STOP_MS)
+    }
+
+    private fun cancelIdleStop() {
+        main.removeCallbacks(idleStop)
+    }
+
+    /**
+     * Takes back an idle [stopSelf] that has not landed yet, because the device
+     * came back.
+     *
+     * `stopSelf()` on a service with a bound client does not destroy it -- it
+     * marks it to be destroyed as soon as the last client unbinds. `MainActivity`
+     * binds while it is on screen, so the sequence "rider has the app open, X4
+     * away five minutes, X4 comes back, rider closes the app" would otherwise kill
+     * a working bridge in the middle of a ride. A fresh start command clears the
+     * mark; there is no other way to withdraw it.
+     */
+    private fun undoStopRequest() {
+        if (!stopRequested) return
+        stopRequested = false
+        try {
+            startForegroundService(
+                Intent(this, BridgeService::class.java).setAction(ACTION_START)
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "could not withdraw the idle stop", t)
+        }
     }
 
     override fun onBleEvent(kind: String, message: String?, extras: Map<String, Any?>?) {
@@ -714,13 +851,17 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     // --- location -------------------------------------------------------
 
     private fun startLocation() {
+        if (locationRunning) return
         val lm = locationManager ?: return
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
             != PackageManager.PERMISSION_GRANTED
         ) {
             return
         }
-        stopLocation()
+        // Claim the type before the first fix, not at service start: the claim is
+        // for work about to happen.
+        addLocationServiceType()
+        locationRunning = true
         // GPS first; NETWORK as well so an indoor session (or a mock-location
         // app that feeds the network provider) still produces fixes. Every fix
         // from either provider is logged raw, per the recording rules -- but
@@ -738,6 +879,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     }
 
     private fun stopLocation() {
+        locationRunning = false
         try {
             locationManager?.removeUpdates(this)
         } catch (t: Throwable) {
@@ -842,6 +984,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
     private val sender = object : Runnable {
         override fun run() {
+            if (!ticking) return
             trySend()
             main.postDelayed(this, TICK_MS)
         }
@@ -969,10 +1112,19 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         nm.createNotificationChannel(ch)
     }
 
+    /**
+     * Goes foreground claiming only `connectedDevice`.
+     *
+     * The service starts with nothing connected and no location requested, so
+     * claiming `location` here would be claiming a permission scope for work that
+     * is not happening -- and it is exactly the claim Android 14 refuses for a
+     * service woken from the background, which is how most sessions start
+     * ([X4PresenceService]). The type is added at connect time by
+     * [addLocationServiceType].
+     */
     private fun goForeground() {
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
         } else {
             0
         }
@@ -983,61 +1135,80 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
                 startForeground(NOTIFICATION_ID, buildNotification())
             }
         } catch (t: Throwable) {
-            // Android 14+ throws if the location permission was revoked between
-            // launch and here, and the same call is refused for a wake-started
-            // service that may not claim location.
             Log.e(TAG, "startForeground refused", t)
-            // Retry without the location type. The BLE half -- position packets
-            // from whatever fix arrives, tile sync, freshness -- needs only
-            // connectedDevice, so half a bridge beats a service the system stops
-            // in seconds. If this throws too there is nothing left to try.
-            if (type != 0) {
-                try {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        buildNotification(),
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-                    )
-                    addEvent("foreground service: BLE only, no location type")
-                } catch (t2: Throwable) {
-                    Log.e(TAG, "startForeground refused twice", t2)
-                }
-            }
         }
     }
 
+    /**
+     * Adds the `location` foreground type now that a device is connected and GPS
+     * is about to be requested.
+     *
+     * A refusal is not fatal and is not retried: the BLE half -- tile sync,
+     * freshness, whatever fixes do arrive -- needs only `connectedDevice`, so half
+     * a bridge beats a service the system stops in seconds. It means fixes will
+     * not arrive with the app invisible, which is the same outcome as a missing
+     * ACCESS_BACKGROUND_LOCATION and is logged as its own line so a silent ride
+     * has an explanation.
+     */
+    private fun addLocationServiceType() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+        try {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+            )
+        } catch (t: Throwable) {
+            Log.e(TAG, "location foreground type refused", t)
+            addEvent("foreground service: BLE only, no location type")
+        }
+    }
+
+    /**
+     * Re-posts the status line, but only when what it says has changed.
+     *
+     * Every caller of [notifyObserver] used to land in `nm.notify`, and one of
+     * them is every accepted fix, so the notification was re-posted about once a
+     * second. From Android 14 a foreground-service notification can be swiped
+     * away by the user; a re-post brings it straight back, so dismissing it
+     * bought a second of quiet. Nothing else re-creates it, so with the link down
+     * -- counters frozen, no fixes coming in -- the text stops changing and the
+     * dismissal now sticks.
+     */
     private fun updateNotification() {
         if (!isRunning) return
+        val content = notificationContent()
+        if (content == lastNotificationContent) return
+        lastNotificationContent = content
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         try {
-            nm.notify(NOTIFICATION_ID, buildNotification())
+            nm.notify(NOTIFICATION_ID, buildNotification(content))
         } catch (t: Throwable) {
             Log.w(TAG, "notify", t)
         }
     }
 
-    private fun buildNotification(): Notification {
-        val open = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val recToggle = PendingIntent.getService(
-            this,
-            1,
-            Intent(this, BridgeService::class.java).setAction(
-                if (isRecording) ACTION_STOP_RECORDING else ACTION_START_RECORDING
-            ),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val stop = PendingIntent.getService(
-            this,
-            2,
-            Intent(this, BridgeService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+    /** Title, body and progress: everything the status line actually shows. */
+    private class NotificationContent(
+        val title: String,
+        val text: String,
+        /** 0..100, or -1 for no bar. */
+        val progressPercent: Int,
+        val recording: Boolean,
+    ) {
+        override fun equals(other: Any?): Boolean = other is NotificationContent &&
+            other.title == title && other.text == text &&
+            other.progressPercent == progressPercent && other.recording == recording
 
+        override fun hashCode(): Int =
+            (((title.hashCode() * 31) + text.hashCode()) * 31 + progressPercent) * 31 +
+                recording.hashCode()
+    }
+
+    private var lastNotificationContent: NotificationContent? = null
+
+    private fun notificationContent(): NotificationContent {
         val title = when (bleState) {
             BleLink.State.CONNECTED -> "Connected to ${ble.connectedName ?: BleLink.DEVICE_NAME}"
             BleLink.State.SCANNING -> "Scanning for ${BleLink.DEVICE_NAME}"
@@ -1059,21 +1230,55 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // a bag, so while one runs the notification says that instead of the send
         // counters -- it is the only surface the rider can see without unlocking.
         val p = tileProgress
-        val text = if (p != null) {
-            "map squares  " + TileFormat.summary(
+        val text = when {
+            p != null -> "map squares  " + TileFormat.summary(
                 p.completedSquares, p.skippedSquares, p.totalSquares,
                 p.movedBytes, p.completedBytes, p.elapsedMs,
             )
-        } else {
-            "sent $sentOk / failed $sentFailed  ·  $policy  ·  $rec"
+            // Says what is true with no device on the line: GPS is not running.
+            // The send counters here read as ongoing work and there is none --
+            // trySend returns on the first line, and no fixes are being asked for.
+            bleState != BleLink.State.CONNECTED -> "GPS off until connected  ·  $rec"
+            else -> "sent $sentOk / failed $sentFailed  ·  $policy  ·  $rec"
         }
+        val percent = if (p != null && p.totalBytes > 0) {
+            p.sentBytes * 100 / p.totalBytes
+        } else {
+            -1
+        }
+        return NotificationContent(title, text, percent, isRecording)
+    }
+
+    private fun buildNotification(
+        content: NotificationContent = notificationContent(),
+    ): Notification {
+        val open = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val recToggle = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, BridgeService::class.java).setAction(
+                if (isRecording) ACTION_STOP_RECORDING else ACTION_START_RECORDING
+            ),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val stop = PendingIntent.getService(
+            this,
+            2,
+            Intent(this, BridgeService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
 
         return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(text)
+            .setContentTitle(content.title)
+            .setContentText(content.text)
             .apply {
-                if (p != null && p.totalBytes > 0) {
-                    setProgress(100, p.sentBytes * 100 / p.totalBytes, false)
+                if (content.progressPercent >= 0) {
+                    setProgress(100, content.progressPercent, false)
                 }
             }
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
@@ -1083,7 +1288,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             .addAction(
                 Notification.Action.Builder(
                     null,
-                    if (isRecording) "Stop rec" else "Record",
+                    if (content.recording) "Stop rec" else "Record",
                     recToggle,
                 ).build()
             )
