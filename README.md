@@ -29,6 +29,10 @@ locked and the app swiped away.
 
 No route logic, no cloud.
 
+Planned, not built: receiving a shared route (Google Maps link, GPX, KML),
+turning it into a `.tir` and pushing it to the card —
+[`../docs/route-share-plan.md`](../docs/route-share-plan.md).
+
 ## Pairing and auto-start
 
 Pairing is a **companion device association**, not BLE bonding — the link itself
