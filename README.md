@@ -29,6 +29,14 @@ locked and the app swiped away.
 
 No route logic, no cloud.
 
+## Public snapshot
+
+The source is mirrored standalone at
+[rfordinal/explorink-android](https://github.com/rfordinal/explorink-android)
+— source only, no APK, no history. That repo has its own README, written
+standalone; do not overwrite it with this one. Procedure, the leak scan and
+what is still manual: [`../docs/android-snapshot-publish.md`](../docs/android-snapshot-publish.md).
+
 ## Battery
 
 Low battery use is a priority. GPS, the wake lock and the send timer only run
