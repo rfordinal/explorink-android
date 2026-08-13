@@ -611,6 +611,52 @@ class TileFetcherTest {
     }
 
     @Test
+    fun `a restart mid-paging discards the old page's stale reply instead of feeding it to the new one`() {
+        // The other half of the same defect: even when the write-callback
+        // gate above works perfectly, a *successful* stale write still has
+        // a whole reply coming. Firmware answers a `missing <offset>` whole
+        // and uninterrupted once it has the command -- nothing else,
+        // including the very NEED_TILES that triggers this restart, can
+        // reach the wire ahead of it -- so its lines land after `page`
+        // already belongs to the new generation, and nothing in them says
+        // which generation they are for (`docs/ble-review-2026-08.md`,
+        // "Stability -- app", item 3, "paging offsets desync").
+        val h = Harness()
+
+        h.fetcher.onCommandLine("NEED_TILES 2 fmt 2")
+        h.fetcher.onCommandLine("INFO missing_total=2")
+        h.fetcher.onCommandLine("INFO missing_offset=0")
+        h.fetcher.onCommandLine("INFO missing_next=20")
+        h.fetcher.onCommandLine("OK")
+        assertEquals(listOf("missing", "missing 20"), h.transport.commands)
+
+        // The rider presses the menu item again while the offset=20 page is
+        // still outstanding.
+        h.fetcher.onCommandLine("NEED_TILES 2 fmt 2")
+        assertEquals(listOf("missing", "missing 20", "missing"), h.transport.commands)
+
+        // The old page's reply arrives anyway: the device already had the
+        // command and answers it in full, offset=20 and all, before this
+        // side ever gets an answer to what it just asked instead.
+        h.fetcher.onCommandLine("INFO missing_total=25")
+        h.fetcher.onCommandLine("INFO missing_offset=20")
+        h.fetcher.onCommandLine("INFO missing_13_9_9=1")
+        h.fetcher.onCommandLine("INFO missing_next=done")
+        h.fetcher.onCommandLine("OK")
+
+        // Only now does the new listing's own reply start.
+        h.list(MissingTile(12, 1, 1, 1))
+
+        // The stale page's tile never reached the queue -- proven by it
+        // never being asked about at all -- and the new listing's own
+        // single tile is the only one skipped.
+        assertTrue(h.transport.commands.none { it.contains("13 9 9") })
+        assertEquals(listOf("12/1/1 skipped"), h.recorder.doneTiles)
+        assertEquals("done", h.recorder.finished)
+        assertEquals(1, h.recorder.finalSkipped)
+    }
+
+    @Test
     fun `paging follows missing_next until done`() {
         val h = Harness()
         h.fetcher.onCommandLine("NEED_TILES 2 fmt 2")
