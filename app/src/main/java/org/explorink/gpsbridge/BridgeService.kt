@@ -859,9 +859,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             return
         }
         // Claim the type before the first fix, not at service start: the claim is
-        // for work about to happen.
-        addLocationServiceType()
+        // for work about to happen. locationRunning flips first so the mask
+        // postForeground() computes includes LOCATION -- see [postForeground].
         locationRunning = true
+        postForeground()
         // GPS first; NETWORK as well so an indoor session (or a mock-location
         // app that feeds the network provider) still produces fixes. Every fix
         // from either provider is logged raw, per the recording rules -- but
@@ -1113,57 +1114,67 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     }
 
     /**
-     * Goes foreground claiming only `connectedDevice`.
+     * Posts (or re-posts) the foreground notification with the type mask that
+     * matches current state now, not the state at some previous call.
+     *
+     * `startForeground` *replaces* the declared type set on every call; it does
+     * not merge into it. The old code split the two types across two methods --
+     * [goForeground] claiming `connectedDevice` only, a separate
+     * `addLocationServiceType` claiming both -- on the assumption each ran once.
+     * It does not: every `onStartCommand` (a Record tap, a repeated
+     * [ACTION_WAKE]) called `goForeground()` again and silently dropped
+     * `location`, and fixes then stopped the moment the screen went off on
+     * Android 14+. Recomputing the whole mask from [locationRunning] on every
+     * call, here, is what keeps that from happening -- there is exactly one
+     * `startForeground` call left in the class, and every foreground-state
+     * change goes through it.
      *
      * The service starts with nothing connected and no location requested, so
-     * claiming `location` here would be claiming a permission scope for work that
-     * is not happening -- and it is exactly the claim Android 14 refuses for a
-     * service woken from the background, which is how most sessions start
-     * ([X4PresenceService]). The type is added at connect time by
-     * [addLocationServiceType].
+     * the first call (from [goForeground]) claims only `connectedDevice`:
+     * claiming `location` for work that is not happening yet is exactly the
+     * claim Android 14 refuses for a service woken from the background, which is
+     * how most sessions start ([X4PresenceService]). [startLocation] flips
+     * [locationRunning] to true and calls back in here once GPS is actually
+     * about to be requested, which is what puts the `location` bit in the mask.
+     *
+     * A refusal of the wider mask is not fatal and is not retried as such: the
+     * BLE half -- tile sync, freshness, whatever fixes do arrive -- needs only
+     * `connectedDevice`, so half a bridge beats a service the system stops in
+     * seconds. One retry with `connectedDevice` only keeps the service alive
+     * when the wider claim is refused, and is logged as its own event line so a
+     * silent ride has an explanation instead of looking like bad GPS.
      */
-    private fun goForeground() {
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-        } else {
-            0
-        }
-        try {
-            if (type != 0) {
-                startForeground(NOTIFICATION_ID, buildNotification(), type)
-            } else {
+    private fun postForeground() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            try {
                 startForeground(NOTIFICATION_ID, buildNotification())
+            } catch (t: Throwable) {
+                Log.e(TAG, "startForeground refused", t)
             }
+            return
+        }
+        val type = foregroundTypeMask(locationRunning)
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification(), type)
         } catch (t: Throwable) {
             Log.e(TAG, "startForeground refused", t)
+            if (type != ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE) {
+                try {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        buildNotification(),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+                    )
+                } catch (t2: Throwable) {
+                    Log.e(TAG, "startForeground refused (BLE only)", t2)
+                }
+                addEvent("foreground service: BLE only, no location type")
+            }
         }
     }
 
-    /**
-     * Adds the `location` foreground type now that a device is connected and GPS
-     * is about to be requested.
-     *
-     * A refusal is not fatal and is not retried: the BLE half -- tile sync,
-     * freshness, whatever fixes do arrive -- needs only `connectedDevice`, so half
-     * a bridge beats a service the system stops in seconds. It means fixes will
-     * not arrive with the app invisible, which is the same outcome as a missing
-     * ACCESS_BACKGROUND_LOCATION and is logged as its own line so a silent ride
-     * has an explanation.
-     */
-    private fun addLocationServiceType() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
-        try {
-            startForeground(
-                NOTIFICATION_ID,
-                buildNotification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-            )
-        } catch (t: Throwable) {
-            Log.e(TAG, "location foreground type refused", t)
-            addEvent("foreground service: BLE only, no location type")
-        }
-    }
+    /** Every `onStartCommand` goes foreground again -- see [postForeground]. */
+    private fun goForeground() = postForeground()
 
     /**
      * Re-posts the status line, but only when what it says has changed.
@@ -1314,4 +1325,23 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
     fun bluetoothAdapter(): BluetoothAdapter? =
         (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+}
+
+/**
+ * The foreground service type mask for the bridge's current state: always
+ * `connectedDevice` (it talks BLE to the X4), plus `location` once location
+ * updates are actually registered ([BridgeService.locationRunning]).
+ *
+ * Top-level and framework-call-free -- it only reads two `ServiceInfo` int
+ * constants and ORs them -- so it is unit-testable without a `Service` or
+ * Robolectric. `BridgeService.postForeground()` is the only caller and the
+ * only place that still calls `startForeground` directly; see
+ * `BridgeForegroundTest` for the two cases this covers.
+ */
+fun foregroundTypeMask(locationRunning: Boolean): Int {
+    var mask = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+    if (locationRunning) {
+        mask = mask or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+    }
+    return mask
 }
