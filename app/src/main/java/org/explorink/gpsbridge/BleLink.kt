@@ -372,7 +372,6 @@ class BleLink(
     private fun teardown() {
         stopScan()
         cancelConnectTimeout()
-        failAllOps("torn down")
         val g = gatt
         gatt = null
         posChar = null
@@ -398,6 +397,12 @@ class BleLink(
                 Log.w(TAG, "gatt teardown", t)
             }
         }
+        // Last, like onAdapterOff: a done-callback runs arbitrary caller code
+        // (the fetcher's abort + skip), and that code must find the link
+        // already down -- state IDLE, gatt null -- instead of enqueueing onto
+        // a gatt that is closing. enqueueWrite() then refuses it at once with
+        // "not connected" before it ever reaches the op queue.
+        failAllOps("torn down")
     }
 
     /**
@@ -697,7 +702,6 @@ class BleLink(
                     }
 
                     BluetoothProfile.STATE_DISCONNECTED -> {
-                        failAllOps("disconnected")
                         posChar = null
                         cmdChar = null
                         transferChar = null
@@ -712,6 +716,17 @@ class BleLink(
                             Log.w(TAG, "close", t)
                         }
                         if (gatt === g) gatt = null
+                        // Raw field first, like onAdapterOff (:447): failAllOps
+                        // below runs the fetcher's abort/skip done-callbacks, and
+                        // enqueueWrite()'s own "not connected" check must see the
+                        // link already down, not a stale CONNECTED lagging behind
+                        // the op queue's own linkUp guard.
+                        state = if (wantRunning) State.DISCONNECTED else State.IDLE
+                        // Last, like onAdapterOff and teardown(): a done-callback
+                        // runs arbitrary caller code (the fetcher's abort + skip),
+                        // and that code must find the link already down instead
+                        // of enqueueing onto a gatt that is closing.
+                        failAllOps("disconnected")
                         listener.onBleEvent(
                             "disconnected",
                             "gatt status $status",
@@ -1200,9 +1215,11 @@ class BleLink(
      * a caller waiting on a write always hears an outcome instead of hanging on a
      * dead link.
      *
-     * Still the last thing [onAdapterOff] does, for the same reason as before:
-     * the done-callbacks run caller code that enqueues, and the queue now refuses
-     * those itself once it is closed.
+     * Still the last thing [onAdapterOff] does, and now [teardown] and the
+     * `STATE_DISCONNECTED` branch of the GATT callback do too, for the same
+     * reason: the done-callbacks run caller code that enqueues, and with state
+     * and refs already cleared it is refused right there in `enqueueWrite`,
+     * before it ever reaches the queue's own `linkUp` guard.
      */
     private fun failAllOps(reason: String) {
         opQueue.failAll(reason)
