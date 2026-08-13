@@ -131,6 +131,12 @@ The conversation (`docs/ble-map-transfer-protocol.md` and
 5. `FETCH_CANCEL` (the rider pressed Back) stops everything and aborts whatever
    is in flight.
 
+A local timeout aborts one stalled tile and moves on, so the dead tile's verdict
+is still coming when the next tile's begin goes out. Status lines carry no tile
+identity, so `TileFetcher` counts owed verdicts and drops them —
+`docs/ble-map-transfer-protocol.md`, "A status line says nothing about which
+transfer it is for".
+
 ### The `view` ask
 
 `NEED_TILES <n> fmt <v> view` means **answer from `tiles`, not from `missing`**.
