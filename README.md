@@ -247,6 +247,19 @@ Chunks use write-with-response, and that is load-bearing rather than politeness:
 the ATT response arrives only once the device has the bytes on its SD card, so
 driving the loop off it means the sender physically cannot outrun the card.
 
+**The CDN read for the next tile starts at this tile's `RDY`, not at its `OK`.**
+Before that it ran between the two, so the link sat idle at HIGH priority for a
+whole HTTPS GET at every tile boundary -- 0.3-1.5 s of dead air per tile with
+both radios on. `TileFetcher.maybePrefetch()` holds exactly one tile ahead: a
+deeper queue would buy about a second and cost megabytes on a phone mid-ride.
+The held bytes are consumed only if the tile actually popped is the one they
+were read for, and dropped on cancel, link loss, a listing restart, or a skip of
+that tile. Added 2026-08-13, unit-tested, **not measured on hardware** -- the
+expected saving is 0.3-1.5 s per boundary against ~5 s per 35 kB tile at the
+measured 7.9 kB/s. Rules and reasoning:
+[`../docs/ble-map-transfer-protocol.md`](../docs/ble-map-transfer-protocol.md),
+"Read the next tile while this one is still going out".
+
 The app requests a 517-byte MTU after subscribing, and it asks **through the
 queue** like any other operation -- `requestMtu` takes the stack's busy flag, and
 issued straight from the subscribe callback it used to get the next queued write
