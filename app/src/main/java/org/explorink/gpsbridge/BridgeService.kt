@@ -842,6 +842,15 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
                 BluetoothAdapter.STATE_OFF -> {
                     addEvent("Bluetooth off")
                     logger?.logEvent("bluetooth_off", null)
+                    // Not just a log line: the stack often never reports the
+                    // disconnect when the adapter dies, so without this the link
+                    // stays CONNECTED/SCANNING in name, holds a dead gatt, and the
+                    // STATE_ON start() below returns on that stale state.
+                    ble.onAdapterOff()
+                    // onAdapterOff's state change already runs updatePowerState via
+                    // onBleState; called again because that path only fires on a
+                    // change of "connected", and GPS must be off either way.
+                    updatePowerState()
                 }
             }
             notifyObserver()

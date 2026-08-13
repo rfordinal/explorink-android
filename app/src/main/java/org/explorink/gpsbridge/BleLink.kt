@@ -255,6 +255,19 @@ class BleLink(
     private var directReconnects = 0
     private var connectTimeout: Runnable? = null
 
+    /**
+     * The delayed [start] armed by [scheduleReconnect] or [retry], kept so it can
+     * be cancelled.
+     *
+     * It has to be cancellable, not fire-and-forget: [onAdapterOff] tears the link
+     * down while a reconnect delay may already be running, and a `start()` that
+     * lands after the teardown would re-arm scans and connects against an adapter
+     * that is gone. One field for both callers -- the later one replaces the
+     * earlier, which is what was wanted anyway (two pending starts only ever meant
+     * the second one no-opped).
+     */
+    private var pendingStart: Runnable? = null
+
     var state: State = State.IDLE
         private set
 
@@ -331,7 +344,7 @@ class BleLink(
     fun retry() {
         teardown()
         directReconnects = 0
-        main.postDelayed({ if (wantRunning) start() }, 200)
+        scheduleStart(200)
     }
 
     fun stop() {
@@ -369,6 +382,70 @@ class BleLink(
                 Log.w(TAG, "gatt teardown", t)
             }
         }
+    }
+
+    /**
+     * The adapter just went off (airplane mode, the rider's toggle, a stack
+     * restart). Tears the link down without touching the Bluetooth API.
+     *
+     * Needed because Android does not reliably deliver
+     * `onConnectionStateChange(DISCONNECTED)` when the adapter dies: [state] would
+     * stay CONNECTED or SCANNING and [gatt] would stay set and never be closed.
+     * The next [start] -- the one the adapter's STATE_ON broadcast makes -- then
+     * returns immediately on that stale state (`isConnected`, or
+     * `state == CONNECTING`), and the bridge stays dead for the rest of the ride
+     * until the rider finds the Retry button. Verified by reading the code, not
+     * measured on a phone.
+     *
+     * Deliberately not [teardown]: that one calls `stopScan` and
+     * `gatt.disconnect()`, both calls into a stack that is gone. The scan
+     * registration is already invalidated by the OS, so it is dropped by clearing
+     * the flag; `gatt.close()` is the one call still worth making, because it is
+     * what releases the client interface, and it is guarded.
+     *
+     * Main thread only, like everything else public here.
+     */
+    fun onAdapterOff() {
+        // Every delayed runnable that would touch the adapter, by its token.
+        cancelConnectTimeout()
+        cancelPendingStart()
+        main.removeCallbacks(scanDownshift)
+        // The scan is gone with the adapter; stopScan() would be a BT call into a
+        // dead stack.
+        scanning = false
+        val g = gatt
+        gatt = null
+        posChar = null
+        cmdChar = null
+        transferChar = null
+        statusChar = null
+        tileChannelReady = false
+        mtu = 23
+        commandBuffer.setLength(0)
+        statusBuffer.setLength(0)
+        connectedName = null
+        connectedAddress = null
+        // Before failing the ops, so a done-callback that tries to enqueue is
+        // refused on a clean state instead of writing onto a dead gatt. The
+        // listener hears about it below, once there is nothing left in flight.
+        state = State.BLUETOOTH_OFF
+        // lastAddress is kept on purpose: it is what makes the reconnect after
+        // STATE_ON a direct connect instead of a scan.
+        directReconnects = 0
+        if (g != null) {
+            try {
+                g.close()
+            } catch (t: Throwable) {
+                Log.w(TAG, "close on adapter off", t)
+            }
+        }
+        // Last: their done-callbacks run arbitrary caller code (the fetcher aborts
+        // and skips), and that code must find the link already down.
+        failAllOps("Bluetooth off")
+        // Own kind, not "bluetooth_off": that one is the receiver's log of the
+        // broadcast, this is the teardown that followed it.
+        listener.onBleEvent("adapter_off", "link torn down", null)
+        setState(State.BLUETOOTH_OFF, "turn Bluetooth on")
     }
 
     // --- scanning -------------------------------------------------------
@@ -877,9 +954,23 @@ class BleLink(
 
     private fun scheduleReconnect() {
         if (!wantRunning) return
-        main.postDelayed({
+        scheduleStart(RECONNECT_DELAY_MS)
+    }
+
+    /** Arms a delayed [start], replacing any delayed start already pending. */
+    private fun scheduleStart(delayMs: Long) {
+        cancelPendingStart()
+        val r = Runnable {
+            pendingStart = null
             if (wantRunning && !isConnected) start()
-        }, RECONNECT_DELAY_MS)
+        }
+        pendingStart = r
+        main.postDelayed(r, delayMs)
+    }
+
+    private fun cancelPendingStart() {
+        pendingStart?.let { main.removeCallbacks(it) }
+        pendingStart = null
     }
 
     // --- writing --------------------------------------------------------
