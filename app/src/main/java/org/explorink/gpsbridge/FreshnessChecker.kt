@@ -150,6 +150,35 @@ class FreshnessChecker(
      */
     private var checkGen = 0
 
+    /**
+     * Stale `have` replies still owed by a request this side walked away
+     * from at a restart -- the same idea as [TileFetcher.owedListingReplies],
+     * one level down.
+     *
+     * [checkGen]'s guard on [start]'s write callback stops a stale write's
+     * *failure* from reaching into whatever check is live now, but not a
+     * stale write's *success*: once the device has the `have` command,
+     * firmware answers it whole and uninterrupted (same firmware read as
+     * [TileFetcher.owedListingReplies] -- nothing, not even the very
+     * `CHECK_TILES` that triggers this restart, can reach the wire ahead of
+     * a reply already in progress), and its lines still arrive, after the
+     * restart, while [reader] already belongs to the new generation.
+     * [MissingList.HaveReader.feed] has no field that tells old and new
+     * apart.
+     *
+     * [start] owns up to owing a reply the moment it restarts on top of an
+     * incomplete [reader], and its write callback retracts that debt if the
+     * write it was counting on turns out to have failed. [feed] discards
+     * every line while a debt is outstanding, up to and including the stale
+     * reply's own terminating `OK`.
+     *
+     * Not cleared by [reset] for the same reason as TileFetcher's: dropping
+     * it would let a stale reply corrupt whatever check replaces it. Cleared
+     * only where the channel it would have arrived on is provably gone --
+     * [onDisconnected], [stop].
+     */
+    private var owedListingReplies = 0
+
     /** Monotonic milliseconds, injected so the backoff is testable. */
     var nowMs: () -> Long = { System.nanoTime() / 1_000_000L }
 
@@ -174,11 +203,15 @@ class FreshnessChecker(
 
     fun onDisconnected() {
         if (phase == Phase.IDLE) return
+        // The channel any owed reply would have arrived on is gone with the
+        // link -- see [owedListingReplies].
+        owedListingReplies = 0
         finish("link lost")
     }
 
     fun stop() {
         if (phase == Phase.IDLE) return
+        owedListingReplies = 0
         finish("stopped")
     }
 
@@ -187,6 +220,13 @@ class FreshnessChecker(
     private fun start(count: Int) {
         if (phase != Phase.IDLE) {
             Log.i(TAG, "restarting on a second CHECK_TILES")
+            // The `have` request in flight, if any, was asked over the same
+            // command channel this side is about to reuse. Its write may
+            // already have reached the device -- own up to owing that whole
+            // reply now, before `reset()` drops the only record of it
+            // ([reader]). The write callback below retracts this if the
+            // write turns out to have failed (see [owedListingReplies]).
+            if (reader?.complete == false) owedListingReplies++
             reset()
         }
         // One check is starting, whether this is the first CHECK_TILES or a
@@ -228,7 +268,15 @@ class FreshnessChecker(
         val gen = checkGen
         transport.sendCommand("have") { ok, error ->
             if (gen != checkGen) {
-                Log.i(TAG, "dropping a late 'have' write result for gen $gen; check has moved on")
+                if (!ok) {
+                    // The debt registered above was a guess -- the write
+                    // might still have reached the device. Now it is known
+                    // it did not, so retract it (see [owedListingReplies]).
+                    owedListingReplies--
+                    Log.i(TAG, "a late 'have' write failed for gen $gen; retracting its owed reply")
+                } else {
+                    Log.i(TAG, "dropping a late 'have' write result for gen $gen; check has moved on")
+                }
                 return@sendCommand
             }
             if (!ok) finish("could not ask for the list: ${error ?: "write failed"}")
@@ -236,6 +284,14 @@ class FreshnessChecker(
     }
 
     private fun feed(line: String) {
+        if (owedListingReplies > 0) {
+            // A whole stale reply from a request this side abandoned is
+            // still draining (see [owedListingReplies]). Every line up to
+            // and including its own terminating OK belongs to that dead
+            // check, not to the live `reader`.
+            if (line.trim() == "OK") owedListingReplies--
+            return
+        }
         val r = reader ?: return
         if (!r.feed(line)) return
         if (r.unavailable) {
