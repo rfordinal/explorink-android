@@ -1209,13 +1209,26 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
      * seconds. One retry with `connectedDevice` only keeps the service alive
      * when the wider claim is refused, and is logged as its own event line so a
      * silent ride has an explanation instead of looking like bad GPS.
+     *
+     * A refusal with nowhere left to retry is a different case, and gets
+     * [stopSelf] instead: the pre-34 branch (one call, no type mask, no
+     * fallback) and the `connectedDevice`-only retry's own catch below, both of
+     * which are the *last* attempt for this call. Without it the system kills
+     * the process ~10 s later on its own, and that death looks like an
+     * unrelated crash instead of a foreground-service refusal. The outer catch
+     * on the typed call must not get the same treatment while [type] still
+     * asks for `location`: that is exactly the branch the retry exists for,
+     * and calling [stopSelf] there would kill the bridge on a refusal the
+     * retry could still recover from -- undoing the fix `goForeground()`'s
+     * doc above describes.
      */
     private fun postForeground() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             try {
                 startForeground(NOTIFICATION_ID, buildNotification())
             } catch (t: Throwable) {
-                Log.e(TAG, "startForeground refused", t)
+                Log.e(TAG, "startForeground refused, stopping", t)
+                stopSelf()
             }
             return
         }
@@ -1232,9 +1245,15 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
                     )
                 } catch (t2: Throwable) {
-                    Log.e(TAG, "startForeground refused (BLE only)", t2)
+                    Log.e(TAG, "startForeground refused (BLE only), stopping", t2)
+                    stopSelf()
                 }
                 addEvent("foreground service: BLE only, no location type")
+            } else {
+                // Already asking for connectedDevice alone -- no narrower type
+                // left to fall back to, so this refusal is as final as the
+                // retry's own.
+                stopSelf()
             }
         }
     }
