@@ -66,6 +66,14 @@ the same name and the same service UUID, so unpaired the app connects to whichev
 answers first. Full mechanism, limits and the unverified list:
 `../docs/ble-app-wake.md`.
 
+## Bluetooth off and on again
+
+Airplane mode mid-ride does not kill the bridge any more. The app tears the
+link down itself when the adapter goes off — Android does not reliably report
+the disconnect — and reconnects on its own when it comes back, nothing tapped.
+Mechanism, the teardown order and what is still unverified:
+[`../docs/ble-adapter-off.md`](../docs/ble-adapter-off.md).
+
 ## One conversation at a time on the command channel
 
 The device asks for things unprompted, and this app answers with a command. A reply
