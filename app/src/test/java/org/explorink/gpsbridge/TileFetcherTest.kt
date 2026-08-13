@@ -84,9 +84,10 @@ class TileFetcherTest {
         // a setFastLink(Z)V setter that clashes with it on the JVM.
         var fastLinkHeld = false
         var fastLinkGrabs = 0
+        var fastLinkReleases = 0
         override fun setFastLink(fast: Boolean) {
             fastLinkHeld = fast
-            if (fast) fastLinkGrabs++
+            if (fast) fastLinkGrabs++ else fastLinkReleases++
         }
 
         fun chunkFrames(): List<ByteArray> = frames.filter { it[0] == TransferFrames.OP_CHUNK }
@@ -369,7 +370,44 @@ class TileFetcherTest {
         h.fetcher.onStatusLine("RDY 50")
         h.fetcher.onStatusLine("OK 50 00000000")
         assertFalse(h.transport.fastLinkHeld)
-        assertEquals(1, h.transport.fastLinkGrabs)
+        assertEquals(1, h.transport.fastLinkReleases)
+    }
+
+    @Test
+    fun `the fast link is re-asserted at every tile boundary, not just once per fetch`() {
+        // Android can silently ignore or revert a connection-priority request,
+        // so a single ask at fetch start is not proof the link stayed fast.
+        // Re-issuing it as each tile's begin frame goes out is idempotent and
+        // costs nothing (`docs/ble-review-2026-08.md`, "Performance").
+        val h = Harness()
+        h.source.tiles["12/1/1"] = tileBytes(50)
+        h.source.tiles["12/1/2"] = tileBytes(50)
+        h.source.tiles["12/1/3"] = tileBytes(50)
+        val tiles = arrayOf(
+            MissingTile(12, 1, 1, 1),
+            MissingTile(12, 1, 2, 1),
+            MissingTile(12, 1, 3, 1),
+        )
+
+        h.fetcher.onCommandLine("NEED_TILES 3 fmt 2")
+        h.list(*tiles)
+        repeat(tiles.size) {
+            h.fetcher.onStatusLine("RDY 50")
+            h.fetcher.onStatusLine("OK 50 00000000")
+        }
+
+        assertEquals("done", h.recorder.finished)
+        assertEquals(3, h.recorder.finalSent)
+        // N tiles -> at least N assertions of HIGH: one per begin frame, plus
+        // whatever the listing/pushing phase transitions already asked for.
+        assertTrue(
+            "expected >= ${tiles.size} grabs, got ${h.transport.fastLinkGrabs}",
+            h.transport.fastLinkGrabs >= tiles.size,
+        )
+        // Regardless of how many times it was grabbed, finish() releases it
+        // exactly once.
+        assertFalse(h.transport.fastLinkHeld)
+        assertEquals(1, h.transport.fastLinkReleases)
     }
 
     @Test
