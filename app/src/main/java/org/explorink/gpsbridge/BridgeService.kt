@@ -75,6 +75,17 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         private const val LOCATION_INTERVAL_MS = 1000L
 
         /**
+         * NETWORK_PROVIDER's cadence -- deliberately far coarser than GPS's.
+         * FixGate only ever listens to a network fix once GPS has been quiet
+         * past [FixGate.GPS_LIVE_WINDOW_MS] (5 s), so a 1 Hz registration
+         * bought nothing but a WiFi scan every second whose result was
+         * discarded the whole ride. 30 s / 50 m still covers the indoor and
+         * mock-location fallback this provider exists for.
+         */
+        private const val NETWORK_INTERVAL_MS = 30_000L
+        private const val NETWORK_MIN_DISTANCE_M = 50f
+
+        /**
          * How long the bridge keeps looking for the device with nothing connected
          * before it stops itself.
          *
@@ -899,19 +910,33 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // postForeground() computes includes LOCATION -- see [postForeground].
         locationRunning = true
         postForeground()
-        // GPS first; NETWORK as well so an indoor session (or a mock-location
-        // app that feeds the network provider) still produces fixes. Every fix
-        // from either provider is logged raw, per the recording rules -- but
-        // which one becomes the trusted position goes through FixGate first,
-        // so a wide-radius network fix racing a live GPS can't look like a
-        // teleport on the map.
-        for (p in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
-            try {
-                if (!lm.isProviderEnabled(p)) continue
-                lm.requestLocationUpdates(p, LOCATION_INTERVAL_MS, 0f, this, Looper.getMainLooper())
-            } catch (t: Throwable) {
-                Log.w(TAG, "requestLocationUpdates $p", t)
+        // GPS at the recording rate -- every fix from it is logged raw and is
+        // the provider FixGate trusts whenever it's live (FixGate.kt:59).
+        try {
+            if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                lm.requestLocationUpdates(
+                    LocationManager.GPS_PROVIDER, LOCATION_INTERVAL_MS, 0f, this, Looper.getMainLooper()
+                )
             }
+        } catch (t: Throwable) {
+            Log.w(TAG, "requestLocationUpdates ${LocationManager.GPS_PROVIDER}", t)
+        }
+        // NETWORK as well, so an indoor session (or a mock-location app that
+        // feeds the network provider) still produces fixes -- but only as a
+        // fallback for when GPS goes quiet past FixGate.GPS_LIVE_WINDOW_MS
+        // (5 s), not a second live track. At 1 Hz this provider drove a WiFi
+        // scan every second whose output FixGate threw away for the entire
+        // ride whenever GPS was live (docs/ble-review-2026-08.md, "Power").
+        // 30 s / 50 m is plenty for the fallback it exists for; it still logs
+        // raw and FixGate still decides trust, unchanged.
+        try {
+            if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                lm.requestLocationUpdates(
+                    LocationManager.NETWORK_PROVIDER, NETWORK_INTERVAL_MS, NETWORK_MIN_DISTANCE_M, this, Looper.getMainLooper()
+                )
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "requestLocationUpdates ${LocationManager.NETWORK_PROVIDER}", t)
         }
     }
 
