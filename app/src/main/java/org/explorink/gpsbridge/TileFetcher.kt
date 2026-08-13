@@ -500,11 +500,24 @@ class TileFetcher(
         transport.setFastLink(true)
         val frame = TransferFrames.beginFrame(relPath, data.size, TransferFrames.crc32(data))
         transport.sendFrame(frame) { ok, error ->
+            // Read `next`, never the current `tile`: a write failure can land
+            // long after the write was issued. `BleLink`'s op queue holds an op
+            // behind one that timed out, and its own transfer-write timeout is
+            // 10 s against this fetcher's 15 s reply timeout, so by the time a
+            // begin failure arrives this side may have given up on `next` and
+            // moved to another tile. Crediting it to whatever is live now skips
+            // a tile that is fine, kills its transfer state and pushes the fetch
+            // on -- a second punishment for a tile that did nothing, while
+            // `next` was already dealt with by its own timeout. Same shape as
+            // the chunk callback's `tile !== current` guard below.
             if (!ok) {
+                if (tile !== next) {
+                    Log.i(TAG, "dropping a late begin failure for $relPath: $error")
+                    return@sendFrame
+                }
                 Log.w(TAG, "begin write failed for $relPath: $error")
-                val failed = tile
                 clearTransfer()
-                if (failed != null) skip(failed, SKIP_REFUSED) else nextTile()
+                skip(next, SKIP_REFUSED)
             }
         }
     }

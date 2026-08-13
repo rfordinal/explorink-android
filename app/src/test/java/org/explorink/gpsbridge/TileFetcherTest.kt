@@ -78,11 +78,25 @@ class TileFetcherTest {
         private var chunksSeen = 0
         private val heldAcks = mutableListOf<(Boolean, String?) -> Unit>()
 
+        /**
+         * How many of the next begin writes get no answer until
+         * [answerHeldBegins] runs. `BleLink`'s op queue can hold a write for its
+         * whole 10 s timeout and answer it after this side has given up on the
+         * tile, so a begin failure arriving late has to be testable.
+         */
+        var holdBeginAcks = 0
+        private val heldBeginAcks = mutableListOf<(Boolean, String?) -> Unit>()
+
         override fun sendFrame(frame: ByteArray, done: (Boolean, String?) -> Unit) {
             frames.add(frame)
             if (failNextFrame) {
                 failNextFrame = false
                 done(false, "fake failure")
+                return
+            }
+            if (frame[0] == TransferFrames.OP_BEGIN && holdBeginAcks > 0) {
+                holdBeginAcks--
+                heldBeginAcks.add(done)
                 return
             }
             if (frame[0] == TransferFrames.OP_CHUNK) {
@@ -93,6 +107,13 @@ class TileFetcherTest {
                 }
             }
             done(true, null)
+        }
+
+        /** Answers every held begin write, as the stack finally would. */
+        fun answerHeldBegins(ok: Boolean, error: String? = null) {
+            val pending = heldBeginAcks.toList()
+            heldBeginAcks.clear()
+            pending.forEach { it(ok, error) }
         }
 
         fun ackHeldChunks() {
@@ -641,6 +662,48 @@ class TileFetcherTest {
         h.fetcher.onStatusLine("RDY 50")
         h.fetcher.onStatusLine("OK 50 00000000")
         assertEquals(listOf("12/1/1 skipped", "11/2/2 landed"), h.recorder.doneTiles)
+        assertEquals(1, h.recorder.finalSent)
+        assertEquals(1, h.recorder.finalSkipped)
+    }
+
+    @Test
+    fun `a late begin failure does not skip the tile after it`() {
+        val h = Harness()
+        h.source.tiles["12/1/1"] = tileBytes(50)
+        h.source.tiles["11/2/2"] = tileBytes(50)
+        // The first begin's write response is withheld -- the state the link is
+        // in while the op queue holds a write that has not been answered.
+        h.transport.holdBeginAcks = 1
+
+        h.fetcher.onCommandLine("NEED_TILES 2 fmt 2")
+        h.list(MissingTile(12, 1, 1, 1), MissingTile(11, 2, 2, 1))
+        assertEquals(1, h.transport.beginFrames().size)
+
+        // No `RDY` for the first tile either: the local timeout aborts it, skips
+        // it, and the second tile's begin goes out. The first tile has now been
+        // dealt with, once.
+        h.scheduler.fire()
+        assertEquals(listOf("12/1/1 skipped"), h.recorder.doneTiles)
+        assertEquals(2, h.transport.beginFrames().size)
+
+        // Only now does the stack answer the first begin -- with a failure, which
+        // is exactly what BleLink's write timeout produces. Crediting it to
+        // whatever is live would skip a tile the phone has in hand, kill its
+        // transfer state and push the fetch on.
+        h.transport.answerHeldBegins(false, "timeout")
+
+        assertEquals(listOf("12/1/1 skipped"), h.recorder.doneTiles)
+        assertEquals(1, h.transport.commands.count { it.startsWith("skip") })
+        assertTrue(h.transport.commands.none { it.startsWith("skip 11 2 2") })
+        assertEquals(2, h.transport.beginFrames().size)
+        assertNull(h.recorder.finished)
+
+        // And the second tile's own state is untouched: it still completes on its
+        // own lines.
+        h.fetcher.onStatusLine("RDY 50")
+        h.fetcher.onStatusLine("OK 50 00000000")
+        assertEquals(listOf("12/1/1 skipped", "11/2/2 landed"), h.recorder.doneTiles)
+        assertEquals("done", h.recorder.finished)
         assertEquals(1, h.recorder.finalSent)
         assertEquals(1, h.recorder.finalSkipped)
     }
