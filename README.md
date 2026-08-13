@@ -224,10 +224,18 @@ transfer on a run that is already over.
 ### One GATT operation at a time
 
 Android runs exactly one GATT operation per connection and reports it on a
-callback; a second issued before the first completes is lost silently. With
-position writes, console lines, transfer chunks and CCCD writes all in play,
-`BleLink` puts every operation through one queue and pumps the next from the
-completion callback.
+callback; a second issued before the first completes is refused. With position
+writes, console lines, transfer chunks and CCCD writes all in play, every
+operation goes through one queue -- `GattOpQueue`, with `BleLink` keeping the
+enqueue call sites, the BLE calls and the callbacks -- and the completion
+callback pumps the next.
+
+A timeout there is not a completion: Android holds its busy flag until the
+timed-out operation's real callback arrives, so the queue keeps the slot as a
+tombstone and pumps nothing until it does. Per-op budgets (10 s for a transfer
+frame, 3 s for the rest), the tombstone rule, the 30 s dead-link verdict and
+what it cost before:
+[`../docs/ble-gatt-op-queue.md`](../docs/ble-gatt-op-queue.md).
 
 A transfer does not starve the position channel: the fetcher sends its next
 chunk only from the previous chunk's callback, so a position write waits at

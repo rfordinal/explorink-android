@@ -21,6 +21,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import android.os.SystemClock
 import android.util.Log
 import java.util.UUID
 
@@ -47,10 +48,16 @@ import java.util.UUID
  *
  * Android runs exactly one GATT operation per connection and reports it on a
  * callback; issuing a second before the first completes loses it silently. With
- * position writes, console writes, transfer chunks and CCCD writes all in play,
- * that is no longer something a single "is a write pending" flag can express, so
- * every operation goes through one queue ([enqueue]) and the completion callback
- * pumps the next.
+ * position writes, console writes, transfer chunks, CCCD writes and the MTU
+ * exchange all in play, that is no longer something a single "is a write
+ * pending" flag can express, so every operation goes through one queue
+ * ([opQueue], a [GattOpQueue]) and the completion callback pumps the next.
+ *
+ * This class keeps the enqueue call sites, the actual BLE calls and the GATT
+ * callbacks; the queue keeps the ordering, the timeouts and the completion
+ * matching. Nothing else here completes an op -- every callback forwards into
+ * the queue. `docs/ble-gatt-op-queue.md` has the tombstone rule and why a
+ * timeout must not pump.
  *
  * A transfer does not starve the position channel: the fetcher sends its next
  * chunk only from the previous chunk's callback, so a position write waits at
@@ -76,9 +83,6 @@ class BleLink(
         val TRANSFER_STATUS_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0005")
 
         private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-
-        /** A write that gets no callback in this long counts as failed. */
-        private const val WRITE_TIMEOUT_MS = 3000L
 
         /**
          * MTU asked for once the service is found. A tile is kilobytes and the
@@ -278,21 +282,33 @@ class BleLink(
         private set
 
     /**
-     * One queued GATT operation. Either a characteristic write or a descriptor
-     * write; Android reports both on their own callback and permits exactly one
-     * outstanding at a time per connection.
+     * Delayed work for [opQueue], on the same main looper as everything else
+     * here.
      */
-    private class Op(
-        val label: String,
-        val bytes: ByteArray,
-        val characteristic: BluetoothGattCharacteristic?,
-        val descriptor: BluetoothGattDescriptor?,
-        val done: (Boolean, String?) -> Unit,
-    )
+    private val opScheduler = object : GattOpQueue.Scheduler {
+        override fun postDelayed(delayMs: Long, action: () -> Unit): GattOpQueue.Scheduler.Cancellable {
+            val r = Runnable { action() }
+            main.postDelayed(r, delayMs)
+            return object : GattOpQueue.Scheduler.Cancellable {
+                override fun cancel() {
+                    main.removeCallbacks(r)
+                }
+            }
+        }
+    }
 
-    private val ops = ArrayDeque<Op>()
-    private var inFlight: Op? = null
-    private var opTimeout: Runnable? = null
+    /**
+     * The one GATT operation queue. Owns the ordering, the per-op timeouts and
+     * the completion matching; this class only issues the BLE calls it asks for
+     * ([executeOp]) and forwards the callbacks into it.
+     */
+    private val opQueue = GattOpQueue(
+        scheduler = opScheduler,
+        clock = { SystemClock.uptimeMillis() },
+        execute = { op -> executeOp(op) },
+        onEvent = { kind, message -> listener.onBleEvent(kind, message, null) },
+        onLinkDead = { reason -> handleLinkDead(reason) },
+    )
 
     val isConnected: Boolean
         get() = state == State.CONNECTED && posChar != null
@@ -742,6 +758,10 @@ class BleLink(
                 cancelConnectTimeout()
                 directReconnects = 0
                 lastAddress = connectedAddress ?: lastAddress
+                // The queue is closed from every teardown onwards and takes no
+                // operations until here: a write issued on a gatt that is about
+                // to be closed gets no callback and costs a timeout.
+                opQueue.open()
                 // The state line already carries the name, so the detail is
                 // just the address.
                 setState(State.CONNECTED, connectedAddress)
@@ -777,9 +797,12 @@ class BleLink(
             status: Int,
         ) {
             main.post {
-                if (inFlight?.descriptor !== descriptor) return@post
                 val ok = status == BluetoothGatt.GATT_SUCCESS
-                completeOp(ok, if (ok) null else "descriptor status $status")
+                opQueue.onDescriptorComplete(
+                    descriptor,
+                    ok,
+                    if (ok) null else "descriptor status $status",
+                )
             }
         }
 
@@ -804,12 +827,16 @@ class BleLink(
             status: Int,
         ) {
             main.post {
-                // Matched against the op in flight, not against one UUID: the
-                // same callback now carries position writes, console lines and
-                // transfer chunks.
-                if (inFlight?.characteristic !== characteristic) return@post
+                // Matching is the queue's job: the same callback carries
+                // position writes, console lines and transfer chunks, and the
+                // characteristic alone does not identify the op (every transfer
+                // frame shares one).
                 val ok = status == BluetoothGatt.GATT_SUCCESS
-                completeOp(ok, if (ok) null else "gatt status $status")
+                opQueue.onWriteComplete(
+                    characteristic,
+                    ok,
+                    if (ok) null else "gatt status $status",
+                )
             }
         }
 
@@ -909,12 +936,11 @@ class BleLink(
             done(false, "setCharacteristicNotification refused")
             return
         }
-        enqueue(
-            Op(
+        opQueue.enqueue(
+            GattOpQueue.Op.descriptor(
                 label = "subscribe ${ch.uuid}",
+                d = cccd,
                 bytes = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE,
-                characteristic = null,
-                descriptor = cccd,
                 done = done,
             )
         )
@@ -991,7 +1017,7 @@ class BleLink(
             done(false, "not connected")
             return false
         }
-        if (ops.any { it.characteristic === ch } || inFlight?.characteristic === ch) {
+        if (opQueue.hasPendingFor(ch)) {
             done(false, "previous write still in flight")
             return false
         }
@@ -1018,6 +1044,11 @@ class BleLink(
         return enqueueWrite("frame", ch, frame, done)
     }
 
+    /**
+     * Queues one characteristic write. Never queues on a link that is not
+     * connected: [done] is called at once with the failure instead, so a caller
+     * cannot end up waiting on a write that will never be issued.
+     */
     private fun enqueueWrite(
         label: String,
         ch: BluetoothGattCharacteristic,
@@ -1032,54 +1063,59 @@ class BleLink(
             done(false, "BLUETOOTH_CONNECT not granted")
             return false
         }
-        enqueue(Op(label, bytes, ch, null, done))
+        opQueue.enqueue(
+            GattOpQueue.Op.write(
+                label = label,
+                ch = ch,
+                bytes = bytes,
+                // A transfer frame's ATT response is SD-bound by design, so it
+                // gets its own, longer budget.
+                timeoutMs = GattOpQueue.writeTimeoutFor(ch, transferChar),
+                done = done,
+            )
+        )
         return true
     }
 
-    // --- the GATT operation queue ---------------------------------------
+    // --- issuing what the queue asks for --------------------------------
 
-    private fun enqueue(op: Op) {
-        ops.addLast(op)
-        pumpOps()
-    }
-
-    private fun pumpOps() {
-        if (inFlight != null) return
-        val next = ops.removeFirstOrNull() ?: return
-        inFlight = next
-        val timeout = Runnable { completeOp(false, "${next.label} timed out") }
-        opTimeout = timeout
-        main.postDelayed(timeout, WRITE_TIMEOUT_MS)
-        if (!startOp(next)) {
-            // startOp already completed it with the failure.
-            return
-        }
-    }
-
+    /**
+     * [GattOpQueue]'s `execute`: the one place a GATT operation is actually
+     * issued. Returns false when the stack would not take it -- the queue then
+     * completes the op with a failure, and nothing here does.
+     */
     @SuppressLint("MissingPermission")
-    private fun startOp(op: Op): Boolean {
-        val g = gatt
-        if (g == null) {
-            completeOp(false, "not connected")
-            return false
-        }
+    private fun executeOp(op: GattOpQueue.Op): Boolean {
+        val g = gatt ?: return false
         return try {
-            val started = when {
-                op.descriptor != null -> writeDescriptor(g, op)
-                op.characteristic != null -> writeCharacteristic(g, op)
-                else -> false
+            when (op.kind) {
+                GattOpQueue.Kind.DESCRIPTOR -> writeDescriptor(g, op)
+                GattOpQueue.Kind.WRITE -> writeCharacteristic(g, op)
             }
-            if (!started) completeOp(false, "${op.label} refused by the stack")
-            started
         } catch (t: Throwable) {
-            Log.e(TAG, "startOp ${op.label}", t)
-            completeOp(false, "${op.label} threw ${t.javaClass.simpleName}")
+            Log.e(TAG, "executeOp ${op.label}", t)
             false
         }
     }
 
+    /**
+     * The stack stopped answering: an operation got no callback at all inside
+     * the ATT transaction timeout ([GattOpQueue.STACK_DEAD_TIMEOUT_MS]).
+     *
+     * Treated exactly like a disconnect, because that is what it is -- the link
+     * is gone whether or not Android says so. Pumping more operations into it
+     * would only produce refusals.
+     */
+    private fun handleLinkDead(reason: String) {
+        listener.onBleEvent("link_dead", reason, null)
+        teardown()
+        if (!wantRunning) return
+        setState(State.DISCONNECTED, "link stopped answering, reconnecting")
+        scheduleReconnect()
+    }
+
     @SuppressLint("MissingPermission")
-    private fun writeCharacteristic(g: BluetoothGatt, op: Op): Boolean {
+    private fun writeCharacteristic(g: BluetoothGatt, op: GattOpQueue.Op): Boolean {
         val ch = op.characteristic ?: return false
         // WRITE_TYPE_DEFAULT (a write request, acknowledged) because every
         // firmware characteristic here declares plain WRITE, not WRITE_NR -- and
@@ -1088,7 +1124,10 @@ class BleLink(
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val rc = g.writeCharacteristic(ch, op.bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
             if (rc != BluetoothStatusCodes.SUCCESS) {
-                completeOp(false, "${op.label} rc $rc")
+                // Logged here because the queue's failure reason is generic and
+                // the return code is the only thing that says *why* the stack
+                // refused (busy, not connected, no permission).
+                Log.w(TAG, "${op.label} refused, rc $rc")
                 false
             } else {
                 true
@@ -1104,12 +1143,12 @@ class BleLink(
     }
 
     @SuppressLint("MissingPermission")
-    private fun writeDescriptor(g: BluetoothGatt, op: Op): Boolean {
+    private fun writeDescriptor(g: BluetoothGatt, op: GattOpQueue.Op): Boolean {
         val d = op.descriptor ?: return false
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val rc = g.writeDescriptor(d, op.bytes)
             if (rc != BluetoothStatusCodes.SUCCESS) {
-                completeOp(false, "${op.label} rc $rc")
+                Log.w(TAG, "${op.label} refused, rc $rc")
                 false
             } else {
                 true
@@ -1123,26 +1162,17 @@ class BleLink(
         }
     }
 
-    private fun completeOp(ok: Boolean, error: String?) {
-        val op = inFlight ?: return
-        inFlight = null
-        opTimeout?.let { main.removeCallbacks(it) }
-        opTimeout = null
-        op.done(ok, error)
-        // After the callback, not before: a callback that queues the next chunk
-        // (the transfer path does exactly that) must find the slot free.
-        pumpOps()
-    }
-
     /**
-     * Fails everything outstanding. Called from teardown, so a caller waiting on
-     * a write always hears an outcome instead of hanging on a dead link.
+     * Fails everything outstanding and closes the queue. Called from teardown, so
+     * a caller waiting on a write always hears an outcome instead of hanging on a
+     * dead link.
+     *
+     * Still the last thing [onAdapterOff] does, for the same reason as before:
+     * the done-callbacks run caller code that enqueues, and the queue now refuses
+     * those itself once it is closed.
      */
     private fun failAllOps(reason: String) {
-        val queued = ops.toList()
-        ops.clear()
-        completeOp(false, reason)
-        queued.forEach { it.done(false, reason) }
+        opQueue.failAll(reason)
     }
 
     // --- permissions ----------------------------------------------------
