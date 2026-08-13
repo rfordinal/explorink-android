@@ -11,7 +11,9 @@ import android.util.Log
  *  2. This asks for the list with `missing`, paging until `missing_next=done`.
  *  3. For each tile, in the order the device gave them (already fetch priority
  *     -- see [MissingTile]), it reads the bytes from the [TileSource] and pushes
- *     them over the transfer channel: begin, wait for `RDY`, chunks, `OK`.
+ *     them over the transfer channel: begin, wait for `RDY`, chunks, `OK`. The
+ *     next tile's read starts at this tile's `RDY`, so the CDN fetch overlaps
+ *     the BLE transfer instead of following it ([prefetched]).
  *  4. A tile the source does not have becomes `skip <z> <col> <row> <reason>`,
  *     so the device's progress screen counts it as failed instead of waiting
  *     for a file that is never coming.
@@ -216,9 +218,9 @@ class TileFetcher(
     /**
      * Which fetch this is -- bumped once at every point a fetch starts or ends
      * ([pushTiles], [startListing], [finish]). Async work kicked off mid-fetch
-     * (today: the CDN read in [nextTile]) captures this value before handing
-     * off, and its callback checks it against the live one before touching any
-     * state. A CDN read is 10-20 s of HTTP timeouts, so a fetch can end and a
+     * (today: the CDN read in [nextTile] and the read-ahead in [maybePrefetch])
+     * captures this value before handing off, and its callback checks it
+     * against the live one before touching any state. A CDN read is 10-20 s of HTTP timeouts, so a fetch can end and a
      * *new* one start on the same channel before the old read lands; the
      * phase-only guard in [onTileBytes] cannot tell those two fetches apart --
      * both show `phase == PUSHING` -- so the late read's begin frame would
@@ -286,6 +288,35 @@ class TileFetcher(
      */
     private var owedListingReplies = 0
 
+    /**
+     * The next tile's bytes, read from the source while the current tile was
+     * still going out over BLE.
+     *
+     * Why: the two links are independent and this code used to use them one at
+     * a time. Between tile N's `OK` and tile N+1's begin frame the BLE link sat
+     * idle at HIGH priority for a whole HTTPS GET -- 0.3-1.5 s of dead air per
+     * tile, both radios powered, because [nextTile]'s `source.read` only
+     * started once the previous tile was finished
+     * (`docs/ble-review-2026-08.md`, "Performance", "CDN fetch is serialized
+     * into the BLE pipeline"). The read is started at tile N's accepted `RDY`
+     * instead, so it overlaps tile N's chunks and the next begin frame can go
+     * out the moment the `OK` lands.
+     *
+     * **Exactly one tile, never a pipeline.** Tiles run tens to hundreds of kB
+     * and this is a phone mid-ride: at most one prefetched array and one live
+     * transfer's array are alive at a time. A deeper queue would buy a second
+     * or so and cost megabytes.
+     *
+     * [prefetching] is the tile a read is out for, [prefetched] the tile whose
+     * read came back. Only ever one of the two is set -- [maybePrefetch]
+     * refuses to start a second read while either is occupied -- which is what
+     * bounds the memory. Identity (`===`) and not equality decides whether a
+     * held tile is the one being asked for: [MissingTile] is a data class, and
+     * the object in these fields is the very one the queue handed out.
+     */
+    private var prefetched: Pair<MissingTile, ByteArray>? = null
+    private var prefetching: MissingTile? = null
+
     private var timeout: Scheduler.Cancellable? = null
 
     // --- input from the link ------------------------------------------------
@@ -352,6 +383,12 @@ class TileFetcher(
                 owedVerdicts = 0
                 awaitingReady = false
                 armTimeout()
+                // The device has the file open and this tile is committed, so
+                // the tile after it is now the one worth spending the phone's
+                // data on. Started before the first chunk goes out, not after
+                // the last: the point is to overlap the GET with the whole
+                // transfer, and nothing below this line needs the network.
+                maybePrefetch()
                 sendNextChunk()
             }
 
@@ -559,6 +596,22 @@ class TileFetcher(
             return
         }
 
+        val ready = prefetched
+        if (ready != null && ready.first === next) {
+            // Read while the previous tile was still going out. The begin frame
+            // can go out now instead of after a whole HTTPS GET.
+            prefetched = null
+            Log.i(TAG, "using the prefetched ${describe(next)} (${ready.second.size} bytes)")
+            onTileBytes(next, relPath, ready.second, fetchGen)
+            return
+        }
+        // Anything held is for some other tile, or is a read still out for this
+        // one that cannot be waited on here -- either way it can only sit on the
+        // slot and keep the next prefetch from starting. Dropping it also makes
+        // an outstanding read's callback throw its bytes away instead of parking
+        // them behind a tile nobody will ask for again.
+        dropPrefetch()
+
         // Captured before the async read, not read fresh in the callback: this
         // is the fetch the read belongs to, and `fetchGen` may have moved on by
         // the time the callback runs.
@@ -571,6 +624,66 @@ class TileFetcher(
         ) { data ->
             onTileBytes(next, relPath, data, gen)
         }
+    }
+
+    /**
+     * Starts reading the tile behind the one now going out, if nothing is held.
+     *
+     * Goes through the same `source.read` entry point with the same
+     * `expected.get(...)` argument as [nextTile], deliberately: that argument is
+     * what turns a stale-tile fetch into `?crc=<content_id>` on the CDN URL
+     * ([TileSource.read]), and a prefetch that dropped it would hand back the
+     * very copy being replaced.
+     *
+     * A miss is not remembered -- the slot holds bytes or nothing. A tile the
+     * CDN 404s is read a second time by [nextTile] and skipped there, which
+     * costs one wasted GET on a tile that was never going to be pushed. Worth
+     * it against carrying a "known absent" state through every invalidation
+     * path below.
+     */
+    private fun maybePrefetch() {
+        if (prefetched != null || prefetching != null) return
+        val next = queue.firstOrNull() ?: return
+        if (!TransferFrames.isSafeRelPath(TransferFrames.tileRelPath(next.z, next.col, next.row))) {
+            // nextTile() refuses this one without a round trip; do not spend a
+            // GET on it either.
+            return
+        }
+        // Same guard, same reason as nextTile()'s: a CDN read is 10-20 s of HTTP
+        // timeouts, wide enough for this fetch to end and a new one to start
+        // before it lands, and `phase` cannot tell those two apart.
+        val gen = fetchGen
+        prefetching = next
+        source.read(
+            next.z, next.col, next.row, wantedFormat,
+            expected.get(next.z, next.col, next.row),
+        ) { data ->
+            if (gen != fetchGen) {
+                Log.i(TAG, "dropping a prefetch of ${describe(next)}; its fetch has moved on")
+                return@read
+            }
+            if (prefetching !== next) {
+                // The fetch walked away from this tile while the read was out --
+                // it was skipped, or it became the live transfer and was read
+                // again. Either way these bytes have no owner.
+                Log.i(TAG, "dropping a prefetch of ${describe(next)}; nothing is waiting for it")
+                return@read
+            }
+            prefetching = null
+            if (data != null) prefetched = next to data
+        }
+    }
+
+    /**
+     * Forgets whatever was read ahead.
+     *
+     * An HTTP GET already in flight cannot be cancelled, so clearing
+     * [prefetching] is how it is disowned: its callback sees the field no longer
+     * naming its tile and drops the bytes on the floor instead of parking them.
+     */
+    private fun dropPrefetch() {
+        prefetched = null
+        prefetching = null
     }
 
     /**
@@ -698,6 +811,11 @@ class TileFetcher(
     }
 
     private fun skip(missing: MissingTile, reason: String) {
+        // A skipped tile is never asked for again in this fetch, so anything
+        // read ahead for it is dead weight sitting on the one prefetch slot.
+        // Reachable from nextTile()'s unsafe-path refusal, which skips the very
+        // tile a prefetch was held for.
+        if (prefetched?.first === missing || prefetching === missing) dropPrefetch()
         skipped++
         listener.onTileDone(missing.z, missing.col, missing.row, 0, false, reason)
         listener.onFetchProgress(sent, skipped, total)
@@ -791,6 +909,11 @@ class TileFetcher(
         bytes = null
         offset = 0
         awaitingReady = false
+        // Tens to hundreds of kB held for a tile of a fetch that is over. The
+        // generation guard in maybePrefetch()'s callback would refuse to park
+        // anything new here, but bytes already parked have to go, or they
+        // outlive the fetch that paid for them.
+        dropPrefetch()
         // A fetch that ended right after an abort would otherwise leave a debt
         // behind for the next one to pay with its first tile's real verdict.
         owedVerdicts = 0

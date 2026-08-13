@@ -34,9 +34,22 @@ class TileFetcherTest {
         /** Expected content id the fetcher passed down, so a test can prove it did. */
         var lastCrcAsked: Long? = -1L
 
-        // Completes inline. The real sources come back on the main thread from a
-        // worker; the fetcher only requires "exactly once, on my thread", which
-        // this satisfies without a looper in the test.
+        /**
+         * Every read asked for, in order, as `"z/col/row"`.
+         *
+         * The read-ahead is only visible here: prefetching is not a wire event,
+         * so "the next tile's GET started before this tile's OK" is a statement
+         * about the order of calls into the source and nothing else.
+         */
+        val reads = mutableListOf<String>()
+
+        /** Keys whose reads are parked instead of answered inline. */
+        val hold = mutableSetOf<String>()
+        private val held = mutableListOf<Pair<String, (ByteArray?) -> Unit>>()
+
+        // Completes inline unless held. The real sources come back on the main
+        // thread from a worker; the fetcher only requires "exactly once, on my
+        // thread", which this satisfies without a looper in the test.
         override fun read(
             z: Int,
             col: Long,
@@ -47,7 +60,19 @@ class TileFetcherTest {
         ) {
             lastFormatAsked = formatVersion
             lastCrcAsked = expectedContentId
-            done(tiles["$z/$col/$row"])
+            val key = "$z/$col/$row"
+            reads.add(key)
+            if (key in hold) {
+                held.add(key to done)
+                return
+            }
+            done(tiles[key])
+        }
+
+        /** Answers the [index]th parked read, in the order they were asked for. */
+        fun release(index: Int) {
+            val (key, done) = held[index]
+            done(tiles[key])
         }
 
         override fun describe(): String = "fake"
@@ -904,6 +929,165 @@ class TileFetcherTest {
         assertEquals(3, h.transport.chunkFrames().size)
         assertEquals(TileFetcher.Phase.IDLE, h.fetcher.phase)
         assertEquals(1, h.recorder.finalSent)
+    }
+
+    // --- read-ahead into the BLE pipeline -----------------------------------
+
+    @Test
+    fun `the next tile's read starts at this tile's RDY, not at its OK`() {
+        // The defect this fixes: the source read for tile N+1 only started once
+        // tile N was finished, so the link idled at HIGH priority for a whole
+        // HTTPS GET between every pair of tiles -- 0.3-1.5 s of dead air with
+        // both radios on (`docs/ble-review-2026-08.md`, "Performance").
+        val h = Harness(payload = 100)
+        h.source.tiles["12/1/1"] = tileBytes(250)
+        h.source.tiles["12/1/2"] = tileBytes(250)
+
+        h.fetcher.onCommandLine("NEED_TILES 2 fmt 2")
+        h.list(MissingTile(12, 1, 1, 1), MissingTile(12, 1, 2, 1))
+
+        // Only the tile actually going out has been read so far.
+        assertEquals(listOf("12/1/1"), h.source.reads)
+        assertEquals(1, h.transport.beginFrames().size)
+
+        // The device accepted the begin frame. That is the moment tile 2 becomes
+        // worth spending data on, and it is a whole transfer before tile 1's OK.
+        h.fetcher.onStatusLine("RDY 250")
+        assertEquals(listOf("12/1/1", "12/1/2"), h.source.reads)
+        assertNull("tile 1 has not been answered yet", h.recorder.finished)
+        assertEquals(3, h.transport.chunkFrames().size)
+
+        // Only now does tile 1 finish, and tile 2's begin follows with no read
+        // in between.
+        h.fetcher.onStatusLine("OK 250 00000000")
+        assertEquals(2, h.transport.beginFrames().size)
+        assertEquals(listOf("12/1/1", "12/1/2"), h.source.reads)
+    }
+
+    @Test
+    fun `the prefetched bytes are used instead of being read a second time`() {
+        // Two tiles must cost two reads. A read-ahead that got thrown away and
+        // re-fetched would still look correct on the wire and would double the
+        // rider's data bill.
+        val h = Harness(payload = 100)
+        h.source.tiles["12/1/1"] = tileBytes(250)
+        h.source.tiles["12/1/2"] = tileBytes(250)
+
+        h.fetcher.onCommandLine("NEED_TILES 2 fmt 2")
+        h.list(MissingTile(12, 1, 1, 1), MissingTile(12, 1, 2, 1))
+        repeat(2) {
+            h.fetcher.onStatusLine("RDY 250")
+            h.fetcher.onStatusLine("OK 250 00000000")
+        }
+
+        assertEquals("done", h.recorder.finished)
+        assertEquals(2, h.recorder.finalSent)
+        assertEquals(0, h.recorder.finalSkipped)
+        assertEquals(listOf("12/1/1", "12/1/2"), h.source.reads)
+        // And the last tile's RDY did not start a read for a tile that is not
+        // there: the queue was empty by then.
+        assertEquals(2, h.source.reads.size)
+    }
+
+    @Test
+    fun `a cancel between the read-ahead and its use drops the bytes`() {
+        // FETCH_CANCEL is the rider pressing Back. Tens to hundreds of kB read
+        // for the tile after the one in flight must not survive it -- neither as
+        // a begin frame that goes out anyway, nor as bytes still held when some
+        // later fetch asks for that same tile.
+        val h = Harness(payload = 100)
+        h.source.tiles["12/1/1"] = tileBytes(250)
+        h.source.tiles["12/1/2"] = tileBytes(250)
+
+        h.fetcher.onCommandLine("NEED_TILES 2 fmt 2")
+        h.list(MissingTile(12, 1, 1, 1), MissingTile(12, 1, 2, 1))
+        h.fetcher.onStatusLine("RDY 250")
+        // Tile 2 is read and held, tile 1 is still going out.
+        assertEquals(listOf("12/1/1", "12/1/2"), h.source.reads)
+        assertEquals(1, h.transport.beginFrames().size)
+
+        h.fetcher.onCommandLine("FETCH_CANCEL")
+        assertEquals("cancelled on the device", h.recorder.finished)
+        assertEquals(TileFetcher.Phase.IDLE, h.fetcher.phase)
+        // No begin frame for the tile whose bytes were in hand.
+        assertEquals(1, h.transport.beginFrames().size)
+
+        // The slot is empty, not merely unused: a fresh fetch for that very tile
+        // reads it again rather than being served from a fetch that is over.
+        h.fetcher.pushTiles(listOf(MissingTile(12, 1, 2, 1)), 2)
+        assertEquals(listOf("12/1/1", "12/1/2", "12/1/2"), h.source.reads)
+        assertEquals(2, h.transport.beginFrames().size)
+    }
+
+    @Test
+    fun `a read-ahead the fetch walked away from is dropped, and its tile read fresh`() {
+        // The read-ahead is one tile deep and cannot be cancelled once it is an
+        // HTTP GET in flight. When the fetch reaches that tile before the GET
+        // lands, the tile is read again and the outstanding one is disowned --
+        // it must not open a second transfer when it finally answers.
+        val h = Harness(payload = 100)
+        h.source.tiles["12/1/1"] = tileBytes(250)
+        h.source.tiles["12/1/2"] = tileBytes(250)
+        h.source.tiles["12/1/3"] = tileBytes(250)
+        h.source.hold.add("12/1/2")
+
+        h.fetcher.onCommandLine("NEED_TILES 3 fmt 2")
+        h.list(MissingTile(12, 1, 1, 1), MissingTile(12, 1, 2, 1), MissingTile(12, 1, 3, 1))
+        h.fetcher.onStatusLine("RDY 250")
+        assertEquals(listOf("12/1/1", "12/1/2"), h.source.reads)
+
+        // The device refuses tile 1. The fetch moves on to tile 2 while tile 2's
+        // read-ahead is still out, so tile 2 is read fresh.
+        h.fetcher.onStatusLine("ERR crc mismatch")
+        assertTrue(h.transport.commands.any { it.startsWith("skip 12 1 1") })
+        assertEquals(listOf("12/1/1", "12/1/2", "12/1/2"), h.source.reads)
+        assertEquals(1, h.transport.beginFrames().size)
+
+        // The abandoned read-ahead lands first. Nothing is waiting for it.
+        h.source.release(0)
+        assertEquals(1, h.transport.beginFrames().size)
+
+        // The live read is what drives the tile, and the fetch runs out normally.
+        h.source.release(1)
+        assertEquals(2, h.transport.beginFrames().size)
+        h.fetcher.onStatusLine("RDY 250")
+        h.fetcher.onStatusLine("OK 250 00000000")
+        h.fetcher.onStatusLine("RDY 250")
+        h.fetcher.onStatusLine("OK 250 00000000")
+        assertEquals("done", h.recorder.finished)
+        assertEquals(2, h.recorder.finalSent)
+        assertEquals(1, h.recorder.finalSkipped)
+    }
+
+    @Test
+    fun `skipping the prefetched tile leaves nothing behind for the tile after it`() {
+        // A read-ahead can turn out unusable: the format check runs on the bytes,
+        // not on the listing, so the tile is consumed out of the slot and then
+        // skipped. The slot has to be empty afterwards, and the tile behind it
+        // read normally.
+        val h = Harness(payload = 100)
+        h.source.tiles["12/1/1"] = tileBytes(250)
+        h.source.tiles["12/1/2"] = tileBytes(200, version = 3)
+        h.source.tiles["12/1/3"] = tileBytes(250)
+
+        h.fetcher.onCommandLine("NEED_TILES 3 fmt 2")
+        h.list(MissingTile(12, 1, 1, 1), MissingTile(12, 1, 2, 1), MissingTile(12, 1, 3, 1))
+        h.fetcher.onStatusLine("RDY 250")
+        assertEquals(listOf("12/1/1", "12/1/2"), h.source.reads)
+
+        h.fetcher.onStatusLine("OK 250 00000000")
+        // The prefetched tile was used -- read exactly once -- found to be v3,
+        // and skipped without a byte going out. Tile 3 is read fresh, because
+        // nothing ever issued a read-ahead for it.
+        assertTrue(h.transport.commands.contains("skip 12 1 2 ${TileFetcher.SKIP_WRONG_FORMAT}3"))
+        assertEquals(listOf("12/1/1", "12/1/2", "12/1/3"), h.source.reads)
+        assertEquals(2, h.transport.beginFrames().size)
+
+        h.fetcher.onStatusLine("RDY 250")
+        h.fetcher.onStatusLine("OK 250 00000000")
+        assertEquals("done", h.recorder.finished)
+        assertEquals(2, h.recorder.finalSent)
+        assertEquals(1, h.recorder.finalSkipped)
     }
 
     private fun offsetOf(chunk: ByteArray): Int =
