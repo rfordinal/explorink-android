@@ -323,7 +323,19 @@ class BleLink(
 
     // --- lifecycle ------------------------------------------------------
 
-    fun start() {
+    /**
+     * [mode] is the `ScanSettings` mode used *if* this call ends up scanning
+     * (a known address takes [reconnectDirect] instead, which does not scan
+     * at all unless it falls through). Defaults to `SCAN_MODE_LOW_LATENCY`:
+     * every plain `start()` call site -- the rider pressing Start, the app
+     * being woken by the X4's companion advertisement, Bluetooth coming back
+     * on -- wants the fast window, because each of those is the "device is
+     * probably right there, right now" case the fast scan exists for.
+     * Automatic rescans (a dropped link, a failed scan) pass
+     * `SCAN_MODE_LOW_POWER` explicitly through [scheduleStart]; see its call
+     * sites for why.
+     */
+    fun start(mode: Int = ScanSettings.SCAN_MODE_LOW_LATENCY) {
         wantRunning = true
         if (!hasPermissions()) {
             setState(State.NO_PERMISSION, "grant Bluetooth + location, then Retry")
@@ -344,9 +356,9 @@ class BleLink(
         // is throttled to nothing while the screen is off, so after the device
         // drops the link mid-ride a rescan would never find it again.
         if (lastAddress != null && directReconnects < MAX_DIRECT_RECONNECTS) {
-            reconnectDirect()
+            reconnectDirect(mode)
         } else {
-            startScan()
+            startScan(mode)
         }
     }
 
@@ -368,7 +380,9 @@ class BleLink(
     fun retry() {
         teardown()
         directReconnects = 0
-        scheduleStart(200)
+        // User-initiated: the rider is looking at the screen right now, so the
+        // fast window is worth it the same way a fresh start() is.
+        scheduleStart(200, ScanSettings.SCAN_MODE_LOW_LATENCY)
     }
 
     fun stop() {
@@ -486,9 +500,8 @@ class BleLink(
 
     // --- scanning -------------------------------------------------------
 
-    @SuppressLint("MissingPermission")
-    private fun startScan() = startScan(ScanSettings.SCAN_MODE_LOW_LATENCY)
-
+    // No mode-less wrapper: every call site below states LOW_LATENCY or
+    // LOW_POWER explicitly (T6.5) instead of picking up a default silently.
     @SuppressLint("MissingPermission")
     private fun startScan(mode: Int) {
         if (scanning) return
@@ -595,18 +608,16 @@ class BleLink(
      * tripped it). [scanFailureStreak] feeds its backoff and resets in
      * [startScan] on any scan that actually starts.
      *
-     * This is an automatic rescan, not a user-initiated one -- the same kind
-     * of call T6.5's `startScan(mode: Int)` (`:478`) targets for
-     * `SCAN_MODE_LOW_POWER`. The seam for that is [scheduleStart]'s runnable,
-     * which today calls the mode-less [start]; T6.5 can thread a mode through
-     * [scheduleStart] (or a sibling) to that call site without touching this
-     * function.
+     * This is an automatic rescan, not a user-initiated one, so it schedules
+     * `SCAN_MODE_LOW_POWER` (T6.5) -- a link that just tripped a scan failure
+     * and is about to retry unattended has no reason to burn a 20 s full-duty
+     * window doing it again.
      */
     private fun scheduleScanRetry(errorCode: Int) {
         if (!wantRunning) return
         val delay = ScanRetryPolicy.delayMs(errorCode, scanFailureStreak)
         scanFailureStreak++
-        scheduleStart(delay)
+        scheduleStart(delay, ScanSettings.SCAN_MODE_LOW_POWER)
     }
 
     @SuppressLint("MissingPermission")
@@ -650,20 +661,25 @@ class BleLink(
      * Reconnects to [lastAddress] without scanning. `autoConnect = true` hands
      * the waiting to the Bluetooth stack, which keeps trying at a low duty cycle
      * and does it with the screen off -- the case a scan cannot cover.
+     *
+     * [mode] only matters for the two fallbacks below that give up on the
+     * direct connect and scan instead -- it is [start]'s mode, carried through
+     * so a fallback out of an automatic [start] scans at LOW_POWER too, not
+     * silently at LOW_LATENCY.
      */
     @SuppressLint("MissingPermission")
-    private fun reconnectDirect() {
+    private fun reconnectDirect(mode: Int) {
         // Pairing wins over history: an address remembered from before the rider
         // paired can be the other X4, and a direct connect does no filtering.
         pinnedAddress?.let { if (lastAddress != it) lastAddress = it }
-        val addr = lastAddress ?: return startScan()
+        val addr = lastAddress ?: return startScan(mode)
         val a = adapter ?: return
         val device = try {
             a.getRemoteDevice(addr)
         } catch (t: Throwable) {
             Log.w(TAG, "getRemoteDevice", t)
             lastAddress = null
-            return startScan()
+            return startScan(mode)
         }
         directReconnects++
         connectedAddress = addr
@@ -712,9 +728,11 @@ class BleLink(
             teardown()
             if (!wantRunning) return@Runnable
             // Direct reconnect had its chances; fall back to a filtered scan.
+            // Automatic (a connect-timeout rescan, T6.5) -- LOW_POWER, not the
+            // fast window a fresh start() would get.
             if (directReconnects >= MAX_DIRECT_RECONNECTS) {
                 setState(State.DISCONNECTED, "reconnect gave up, scanning")
-                startScan()
+                startScan(ScanSettings.SCAN_MODE_LOW_POWER)
             } else {
                 scheduleReconnect()
             }
@@ -1070,17 +1088,29 @@ class BleLink(
         }
     }
 
+    /** Called after a disconnect or a dead link -- automatic, so LOW_POWER. */
     private fun scheduleReconnect() {
         if (!wantRunning) return
-        scheduleStart(RECONNECT_DELAY_MS)
+        scheduleStart(RECONNECT_DELAY_MS, ScanSettings.SCAN_MODE_LOW_POWER)
     }
 
-    /** Arms a delayed [start], replacing any delayed start already pending. */
-    private fun scheduleStart(delayMs: Long) {
+    /**
+     * Arms a delayed [start], replacing any delayed start already pending.
+     *
+     * [scheduleReconnect], [retry] and [scheduleScanRetry] all arm through
+     * this one [pendingStart] slot, but they do not want the same scan mode:
+     * [retry] is the rider pressing Retry (LOW_LATENCY), the other two are
+     * unattended (LOW_POWER). [mode] is captured into the runnable's closure
+     * at schedule time rather than stored on a shared field, so the slot stays
+     * single-purpose (one delayed start, cancellable, replaced by the next
+     * caller) without also having to be a mode field that the wrong caller
+     * could leave set for the next one.
+     */
+    private fun scheduleStart(delayMs: Long, mode: Int) {
         cancelPendingStart()
         val r = Runnable {
             pendingStart = null
-            if (wantRunning && !isConnected) start()
+            if (wantRunning && !isConnected) start(mode)
         }
         pendingStart = r
         main.postDelayed(r, delayMs)
