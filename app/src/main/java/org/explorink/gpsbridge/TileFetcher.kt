@@ -404,6 +404,13 @@ class TileFetcher(
         awaitingReady = true
         armTimeout()
 
+        // Re-assert per tile, not just once at fetch start: nothing here
+        // proves the stack actually honoured the earlier ask (Android may
+        // silently ignore or revert it), and re-issuing is idempotent and
+        // ~free (`docs/ble-review-2026-08.md`, "Performance"). This is the
+        // point nextTile() actually commits to sending a tile -- the boundary
+        // between one tile's transfer and the next.
+        transport.setFastLink(true)
         val frame = TransferFrames.beginFrame(relPath, data.size, TransferFrames.crc32(data))
         transport.sendFrame(frame) { ok, error ->
             if (!ok) {

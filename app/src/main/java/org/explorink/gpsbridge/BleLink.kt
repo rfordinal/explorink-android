@@ -735,6 +735,24 @@ class BleLink(
                 completeOp(ok, if (ok) null else "gatt status $status")
             }
         }
+
+        // No `override`: this is a hidden framework callback (not part of the
+        // public BluetoothGattCallback surface on every SDK this app compiles
+        // against), dispatched by the stack purely by method signature. It
+        // fires whenever the connection interval/latency/timeout actually
+        // change -- the one place that turns "we asked for HIGH" into "we are
+        // at N units", settling whether [requestHighPriority] was honoured.
+        // `interval` is in 1.25 ms units (BLE core spec); `latency` is a
+        // connection-event count; `timeout` is in 10 ms units.
+        fun onConnectionUpdated(gatt: BluetoothGatt, interval: Int, latency: Int, timeout: Int, status: Int) {
+            main.post {
+                listener.onBleEvent(
+                    "conn_params",
+                    "interval=$interval latency=$latency timeout=$timeout status=$status",
+                    null,
+                )
+            }
+        }
     }
 
     // --- indicate channels ----------------------------------------------
