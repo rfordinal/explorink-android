@@ -218,6 +218,15 @@ class FreshnessChecker(
     // --- listing ------------------------------------------------------------
 
     private fun start(count: Int) {
+        // Fast link is on for the whole of [phase] LISTING/READING (asserted
+        // below, released once in [finish]). A restart's own `reset()` just
+        // below clears phase back to IDLE without going through finish() --
+        // see its comment -- so if this call answers immediately instead of
+        // reaching a new LISTING (the count<=0/backoff cases just below),
+        // finish() never fires for the run being abandoned here and its fast
+        // link would otherwise stay asserted forever. Captured before reset()
+        // touches phase.
+        val hadFastLink = phase != Phase.IDLE
         if (phase != Phase.IDLE) {
             Log.i(TAG, "restarting on a second CHECK_TILES")
             // The `have` request in flight, if any, was asked over the same
@@ -241,6 +250,7 @@ class FreshnessChecker(
             // Nothing to check is a real answer and a cheap one. Saying it
             // rather than staying quiet is what lets the device close its own
             // pending flag instead of waiting out a timeout.
+            if (hadFastLink) transport.setFastLink(false)
             answerChecked(0)
             listener?.onCheckFinished(0, 0, "nothing to check")
             return
@@ -251,6 +261,7 @@ class FreshnessChecker(
             // is not a fresh failure, and letting it push the window out would
             // let a chatty device back the phone off indefinitely.
             Log.i(TAG, "backing off ${wait}ms more before another check")
+            if (hadFastLink) transport.setFastLink(false)
             answerUnknown()
             listener?.onCheckFinished(0, -1, "backing off")
             return
@@ -259,6 +270,12 @@ class FreshnessChecker(
         Log.i(TAG, "device wants $count tile(s) checked, format ${formatVersion ?: "unstated"}")
         listener?.onCheckStarted(count)
         phase = Phase.LISTING
+        // For the duration of this check and no longer -- released in
+        // finish(), or just above if this call never reaches here at all.
+        // Re-asserting true on a restart that continues straight into a new
+        // LISTING is a harmless no-op on the link, same as TileFetcher's own
+        // restart ([TileFetcher.startListing]).
+        transport.setFastLink(true)
         reader = MissingList.HaveReader()
         armTimeout(REPLY_TIMEOUT_MS)
         // Captured before the write: a second CHECK_TILES can restart this
@@ -474,8 +491,16 @@ class FreshnessChecker(
         // Every exit from a check comes through here -- done, truncated,
         // no-viewport, link lost, stopped -- so this is the one place a
         // check unconditionally ends even when nothing new replaces it,
-        // mirroring TileFetcher.finish()'s fetchGen bump.
+        // mirroring TileFetcher.finish()'s fetchGen bump. Every call site
+        // is only reachable while phase is LISTING or READING (guarded
+        // directly, or structurally -- see each caller), which is exactly
+        // when [start] last asserted the fast link, so this is also the
+        // single release point for that -- mirrors TileFetcher.finish()'s
+        // own setFastLink(false). The other two release points are the
+        // count<=0/backoff answers in [start] that abandon a run without
+        // ever reaching here.
         checkGen++
+        transport.setFastLink(false)
         val wasExamined = examined
         val wasStale = if (incomplete) -1 else staleTiles.size
         reset()
