@@ -206,6 +206,24 @@ class MainActivity : Activity(), BridgeService.Observer {
         bindBridge(create = true)
     }
 
+    /**
+     * Restores the link after [service]`.pauseLinkForPairing()`, whichever way
+     * the pairing dialog ended -- cancelled, failed, or the activity having
+     * unbound from the service while the dialog (another process) had focus.
+     *
+     * `service` going null across that dialog is routine, not an edge case: any
+     * config change or the activity being backgrounded during it drops the
+     * binding (`onStop`, `:171-186`), and pausing the link is exactly a call
+     * that leaves nothing running to rebind to. `service?.resumeLink()` alone
+     * then does nothing silently -- the rider is left with no bridge and no
+     * indication why. [startBridge] here is [onRetryPressed]'s own answer to
+     * "no service": send [BridgeService.ACTION_START] and bind.
+     */
+    private fun resumeLinkOrStart() {
+        val s = service
+        if (s != null) s.resumeLink() else startBridge()
+    }
+
     private fun bindBridge(create: Boolean) {
         if (bound) return
         val flags = if (create) Context.BIND_AUTO_CREATE else 0
@@ -272,7 +290,7 @@ class MainActivity : Activity(), BridgeService.Observer {
                         "pairing failed: ${error ?: "no X4 found -- open the map screen on it"}",
                         Toast.LENGTH_LONG,
                     ).show()
-                    service?.resumeLink()
+                    resumeLinkOrStart()
                 }
             }
             return
@@ -324,7 +342,7 @@ class MainActivity : Activity(), BridgeService.Observer {
         if (requestCode != CompanionWake.REQ_ASSOCIATE) return
         // Unconditionally, before anything else: the link was released for the
         // dialog and a cancelled pairing must not leave the rider with no bridge.
-        service?.resumeLink()
+        resumeLinkOrStart()
         if (resultCode != RESULT_OK) {
             render()
             return
