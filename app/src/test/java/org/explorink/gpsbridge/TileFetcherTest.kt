@@ -2,6 +2,7 @@ package org.explorink.gpsbridge
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -68,14 +69,36 @@ class TileFetcherTest {
             }
         }
 
+        /**
+         * Chunk writes from this index on are not acked until [ackHeldChunks]
+         * runs. The device's `OK` indication and the last chunk's write
+         * response race on the real link, so that ordering has to be testable.
+         */
+        var holdChunkAcksFrom = -1
+        private var chunksSeen = 0
+        private val heldAcks = mutableListOf<(Boolean, String?) -> Unit>()
+
         override fun sendFrame(frame: ByteArray, done: (Boolean, String?) -> Unit) {
             frames.add(frame)
             if (failNextFrame) {
                 failNextFrame = false
                 done(false, "fake failure")
-            } else {
-                done(true, null)
+                return
             }
+            if (frame[0] == TransferFrames.OP_CHUNK) {
+                val index = chunksSeen++
+                if (holdChunkAcksFrom >= 0 && index >= holdChunkAcksFrom) {
+                    heldAcks.add(done)
+                    return
+                }
+            }
+            done(true, null)
+        }
+
+        fun ackHeldChunks() {
+            val pending = heldAcks.toList()
+            heldAcks.clear()
+            pending.forEach { it(true, null) }
         }
 
         override fun maxChunkPayload(): Int = payload
@@ -122,6 +145,13 @@ class TileFetcherTest {
         var finished: String? = null
         var finalSent = -1
         var finalSkipped = -1
+
+        /** Per-square verdicts, in order, so a test can prove which tile got one. */
+        val doneTiles = mutableListOf<String>()
+
+        override fun onTileDone(z: Int, col: Long, row: Long, bytes: Int, ok: Boolean, detail: String) {
+            doneTiles.add("$z/$col/$row ${if (ok) "landed" else "skipped"}")
+        }
 
         override fun onFetchStarted(total: Int) {
             started = total
@@ -549,6 +579,99 @@ class TileFetcherTest {
 
         assertTrue(h.transport.commands.any { it.startsWith("skip 12 1 1") })
         assertEquals("done", h.recorder.finished)
+    }
+
+    /** A two-tile fetch where the first one stalls and is aborted locally. */
+    private fun stalledFirstTile(): Harness {
+        val h = Harness()
+        h.source.tiles["12/1/1"] = tileBytes(50)
+        h.source.tiles["11/2/2"] = tileBytes(50)
+
+        h.fetcher.onCommandLine("NEED_TILES 2 fmt 2")
+        h.list(MissingTile(12, 1, 1, 1), MissingTile(11, 2, 2, 1))
+
+        // The first tile's `RDY` never comes. The local timeout aborts it, skips
+        // it, and the next tile's begin is already out -- so from here on the
+        // device owes a verdict for a transfer nothing is waiting for.
+        h.scheduler.fire()
+        assertEquals(1, h.transport.abortFrames().size)
+        assertEquals(2, h.transport.beginFrames().size)
+        assertEquals(listOf("12/1/1 skipped"), h.recorder.doneTiles)
+        return h
+    }
+
+    @Test
+    fun `a late OK from an aborted tile is not credited to the tile after it`() {
+        val h = stalledFirstTile()
+
+        // The device's verdict for the dead tile arrives after the new tile's
+        // begin has gone out. Status lines carry no identity, so without the
+        // generation gate this counts the new tile as landed and clears its
+        // live state on the way out.
+        h.fetcher.onStatusLine("OK 50 00000000")
+
+        assertEquals(listOf("12/1/1 skipped"), h.recorder.doneTiles)
+        assertEquals(0, h.transport.chunkFrames().size)
+        assertNull(h.recorder.finished)
+
+        // And the new tile still completes on its own lines: the gate skips a
+        // generation, it does not deafen the channel.
+        h.fetcher.onStatusLine("RDY 50")
+        h.fetcher.onStatusLine("OK 50 00000000")
+        assertEquals(listOf("12/1/1 skipped", "11/2/2 landed"), h.recorder.doneTiles)
+        assertEquals("done", h.recorder.finished)
+        assertEquals(1, h.recorder.finalSent)
+        assertEquals(1, h.recorder.finalSkipped)
+    }
+
+    @Test
+    fun `a late ERR aborted does not skip the tile after it`() {
+        val h = stalledFirstTile()
+
+        // `ERR aborted` is the device's answer to the abort frame
+        // (MapTransferReceiver.cpp:119-124). It is about the dead tile, and
+        // crediting it to the new one loses a tile the phone has in hand.
+        h.fetcher.onStatusLine("ERR aborted")
+
+        assertEquals(listOf("12/1/1 skipped"), h.recorder.doneTiles)
+        assertEquals(1, h.transport.commands.count { it.startsWith("skip") })
+        assertTrue(h.transport.commands.none { it.startsWith("skip 11 2 2") })
+        assertNull(h.recorder.finished)
+
+        h.fetcher.onStatusLine("RDY 50")
+        h.fetcher.onStatusLine("OK 50 00000000")
+        assertEquals(listOf("12/1/1 skipped", "11/2/2 landed"), h.recorder.doneTiles)
+        assertEquals(1, h.recorder.finalSent)
+        assertEquals(1, h.recorder.finalSkipped)
+    }
+
+    @Test
+    fun `an OK that beats the last chunk's write response still completes the tile`() {
+        val h = Harness(payload = 100)
+        val data = tileBytes(250)
+        h.source.tiles["12/1/1"] = data
+        // The indication and the write response race, and the `OK` can win
+        // (`docs/ble-map-transfer-protocol.md`). Hold the last chunk's response
+        // to reproduce that order.
+        h.transport.holdChunkAcksFrom = 2
+
+        h.fetcher.onCommandLine("NEED_TILES 1 fmt 2")
+        h.list(MissingTile(12, 1, 1, 1))
+        h.fetcher.onStatusLine("RDY 250")
+        assertEquals(3, h.transport.chunkFrames().size)
+
+        h.fetcher.onStatusLine("OK 250 ${"%08x".format(TransferFrames.crc32(data))}")
+        assertEquals(listOf("12/1/1 landed"), h.recorder.doneTiles)
+        assertEquals("done", h.recorder.finished)
+        assertEquals(1, h.recorder.finalSent)
+
+        // The held response lands after the tile is finished and the fetch is
+        // over. The `tile !== current` guard in the chunk callback is what makes
+        // that harmless: no fourth chunk, no reopened fetch.
+        h.transport.ackHeldChunks()
+        assertEquals(3, h.transport.chunkFrames().size)
+        assertEquals(TileFetcher.Phase.IDLE, h.fetcher.phase)
+        assertEquals(1, h.recorder.finalSent)
     }
 
     private fun offsetOf(chunk: ByteArray): Int =

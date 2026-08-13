@@ -169,6 +169,50 @@ class TileFetcher(
     private var offset = 0
     private var awaitingReady = false
 
+    /**
+     * Which transfer the status channel is talking about.
+     *
+     * A status line is `RDY`/`OK`/`ERR` and nothing else -- no path, no tile,
+     * no sequence number (`docs/ble-map-transfer-protocol.md`, "Status lines").
+     * So identity has to come from what this side sent last. [statusGen] counts
+     * transfer generations: a begin frame starts one, an abort ends one.
+     * [liveStatusGen] is the generation whose lines may touch state, so
+     * `statusGen != liveStatusGen` means the last thing this side did to the
+     * channel was kill a transfer -- nothing arriving in that window belongs to
+     * anything live.
+     *
+     * An int and not a flag on purpose: two aborts can be outstanding at once
+     * (abort A, begin B, B stalls, abort B) and a flag cannot count that.
+     *
+     * The alternative -- hold the next begin until the aborted transfer's
+     * `ERR aborted` has been seen -- was rejected deliberately: it serializes
+     * the whole fetch on a dead tile's 15 s timeout, and every remaining tile
+     * pays for it. Skipping generations costs nothing.
+     */
+    private var statusGen = 0
+    private var liveStatusGen = 0
+
+    /**
+     * Verdicts (`OK`/`ERR`) still owed by transfers this side walked away from.
+     *
+     * The generation window above closes the moment the next begin goes out,
+     * and a dead transfer's verdict can arrive after that -- so the window
+     * alone would still credit it to the new tile, which is the whole defect
+     * (`docs/ble-review-2026-08.md`, "Stability -- app", item 1). Each abort of
+     * a live transfer earns exactly one dead verdict, so counting them and
+     * consuming them is exact: the device sends `ERR aborted` when a transfer
+     * is active (`MapTransferReceiver.cpp:119-124`, `:330-352`), and when it is
+     * not -- because it already sent an `OK` that is still in flight -- the
+     * abort is silent and that `OK` is the dead verdict instead.
+     *
+     * An accepted `RDY` clears the debt: the device emits status lines strictly
+     * in order and blocks the host task until each goes out
+     * (`BlePositionServer.cpp:593-617`), so a dead verdict always arrives
+     * before the next begin's `RDY` -- and that same send gives up after 8
+     * attempts, so a debt that never arrives must not eat a real verdict.
+     */
+    private var owedVerdicts = 0
+
     private var timeout: Scheduler.Cancellable? = null
 
     // --- input from the link ------------------------------------------------
@@ -191,9 +235,48 @@ class TileFetcher(
     /** One line off the transfer status characteristic (`...0005`). */
     fun onStatusLine(line: String) {
         if (phase != Phase.PUSHING) return
-        when (val status = TransferFrames.parseStatus(line)) {
+        val status = TransferFrames.parseStatus(line)
+        val verdict = status is TransferFrames.Status.Ok || status is TransferFrames.Status.Err
+
+        // Three gates, all of them the same question: does this line belong to
+        // the transfer currently in flight? Nothing in the line itself says.
+
+        // 1. Between a local abort and the next begin frame there is no live
+        //    transfer at all -- everything on this channel is the dead one's
+        //    tail. `RDY` for the next begin is the first line accepted again.
+        if (statusGen != liveStatusGen) {
+            Log.i(TAG, "ignoring '$line': gen $liveStatusGen was aborted, gen is now $statusGen")
+            if (verdict && owedVerdicts > 0) owedVerdicts--
+            return
+        }
+
+        // 2. The dead transfer's verdict can also land after the next begin has
+        //    gone out, and then gate 1 cannot see it. Consume it against the
+        //    debt instead of crediting it: this is the case that produced a
+        //    false `onTileDone` (plus a `clearTransfer()` that killed the new
+        //    tile's live state) or a false SKIP_REFUSED.
+        if (verdict && owedVerdicts > 0) {
+            owedVerdicts--
+            Log.i(TAG, "ignoring '$line': an aborted transfer still owed a verdict")
+            return
+        }
+
+        // 3. A verdict with nothing in flight has nothing to be about. Without
+        //    this it would count a tile and call nextTile() a second time, and
+        //    with an asynchronous source (the CDN) that window is a whole HTTP
+        //    GET wide -- two transfers interleaved on one channel.
+        if (verdict && tile == null) {
+            Log.w(TAG, "ignoring '$line': no transfer in flight")
+            return
+        }
+
+        when (status) {
             is TransferFrames.Status.Ready -> {
                 if (!awaitingReady) return
+                // Ordered channel: anything an aborted transfer still owed
+                // arrived before this line, or was dropped by the device and is
+                // never coming.
+                owedVerdicts = 0
                 awaitingReady = false
                 armTimeout()
                 sendNextChunk()
@@ -402,6 +485,10 @@ class TileFetcher(
         bytes = data
         offset = 0
         awaitingReady = true
+        // A begin frame starts a new generation of status lines and makes it the
+        // live one. Bumped before the frame goes out, not in its callback: the
+        // `RDY` can arrive before the write response does.
+        liveStatusGen = ++statusGen
         armTimeout()
 
         // Re-assert per tile, not just once at fetch start: nothing here
@@ -474,6 +561,11 @@ class TileFetcher(
 
     private fun abortInFlight() {
         if (tile == null) return
+        // The live generation is over here, not when the abort frame is
+        // acknowledged: from this line on nothing on the status channel belongs
+        // to a live transfer, and the device still owes this one a verdict.
+        statusGen++
+        owedVerdicts++
         transport.sendFrame(TransferFrames.abortFrame()) { ok, error ->
             if (!ok) Log.w(TAG, "abort write failed: $error")
         }
@@ -543,6 +635,10 @@ class TileFetcher(
         bytes = null
         offset = 0
         awaitingReady = false
+        // A fetch that ended right after an abort would otherwise leave a debt
+        // behind for the next one to pay with its first tile's real verdict.
+        owedVerdicts = 0
+        liveStatusGen = statusGen
     }
 
     private fun describe(t: MissingTile?): String =
