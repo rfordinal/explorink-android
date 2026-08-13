@@ -310,6 +310,93 @@ class GattOpQueueTest {
         assertEquals(false, cmd.ok)
     }
 
+    // --- 7: the MTU exchange is an op like any other ---------------------
+
+    @Test
+    fun theMtuOpHoldsBackTheFirstCommandWrite() {
+        val f = Fixture()
+        val commandCccd = descriptor()
+        val statusCccd = descriptor()
+        val command = char()
+        val mtu = Outcome()
+        val ask = Outcome()
+
+        // The real order after a connect: subscribe both indicate channels, ask
+        // for a bigger MTU -- and the device fires NEED_TILES the moment the
+        // command channel is subscribed, so the fetcher's `missing` ask is
+        // enqueued while the MTU exchange is still outstanding.
+        f.queue.enqueue(GattOpQueue.Op.descriptor("subscribe cmd", commandCccd, byteArrayOf(2, 0)) { _, _ -> })
+        f.queue.enqueue(GattOpQueue.Op.descriptor("subscribe status", statusCccd, byteArrayOf(2, 0)) { _, _ -> })
+        f.queue.onDescriptorComplete(commandCccd, true, null)
+        f.queue.enqueue(GattOpQueue.Op.mtu("mtu 517", mtu.done))
+        f.queue.onDescriptorComplete(statusCccd, true, null)
+        f.queue.enqueue(GattOpQueue.Op.write("cmd", command, byteArrayOf(1), done = ask.done))
+
+        assertEquals(listOf("subscribe cmd", "subscribe status", "mtu 517"), f.stack.labels())
+        assertEquals(0, ask.calls)
+
+        // An unsolicited onMtuChanged aside, the write goes out only once the
+        // MTU op is answered.
+        f.queue.onMtuComplete(true, null)
+        assertEquals(true, mtu.ok)
+        assertEquals(
+            listOf("subscribe cmd", "subscribe status", "mtu 517", "cmd"),
+            f.stack.labels(),
+        )
+    }
+
+    // --- 8: an MTU that never comes back --------------------------------
+
+    @Test
+    fun anMtuTimeoutDoesNotStickTheQueue() {
+        val f = Fixture()
+        val command = char()
+        val mtu = Outcome()
+        val ask = Outcome()
+
+        f.queue.enqueue(GattOpQueue.Op.mtu("mtu 517", mtu.done))
+        f.queue.enqueue(GattOpQueue.Op.write("cmd", command, byteArrayOf(1), done = ask.done))
+
+        f.scheduler.advance(GattOpQueue.MTU_TIMEOUT_MS)
+        assertEquals(1, mtu.calls)
+        assertEquals(false, mtu.ok)
+        // The tombstone rule applies to the MTU op too: Android's busy flag is
+        // still held, so the write waits for the stack's own answer.
+        assertEquals(listOf("mtu 517"), f.stack.labels())
+
+        f.queue.onMtuComplete(true, null)
+        assertEquals(listOf("mtu 517", "cmd"), f.stack.labels())
+        // And the late answer is not a second outcome for the MTU op.
+        assertEquals(1, mtu.calls)
+        // A failed MTU is slow, not fatal: the write is still live and the link
+        // was not declared dead.
+        assertEquals(0, ask.calls)
+        f.queue.onWriteComplete(command, true, null)
+        assertEquals(true, ask.ok)
+        assertEquals(0, f.linkDead.size)
+    }
+
+    @Test
+    fun anUnsolicitedMtuChangeDoesNotCompleteAWrite() {
+        val f = Fixture()
+        val command = char()
+        val ask = Outcome()
+
+        f.queue.enqueue(GattOpQueue.Op.write("cmd", command, byteArrayOf(1), done = ask.done))
+        // The peer can start an MTU exchange itself. Taking that as the answer to
+        // a pending write would free the slot while the stack is still busy.
+        f.queue.onMtuComplete(true, null)
+        assertEquals(0, ask.calls)
+
+        // Same while the write is a tombstone: the slot stays held.
+        f.scheduler.advance(GattOpQueue.WRITE_TIMEOUT_MS)
+        f.queue.onMtuComplete(true, null)
+        assertTrue(f.queue.hasTombstone)
+
+        f.queue.onWriteComplete(command, false, "gatt status 133")
+        assertFalse(f.queue.hasTombstone)
+    }
+
     // --- the rest: contracts the queue owes its caller ------------------
 
     @Test

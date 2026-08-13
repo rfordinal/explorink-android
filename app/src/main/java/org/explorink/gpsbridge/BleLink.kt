@@ -808,16 +808,21 @@ class BleLink(
 
         override fun onMtuChanged(g: BluetoothGatt, newMtu: Int, status: Int) {
             main.post {
-                if (status != BluetoothGatt.GATT_SUCCESS) {
+                val ok = status == BluetoothGatt.GATT_SUCCESS
+                if (ok) {
+                    // Recorded before the op is completed: completing it pumps
+                    // the next operation, and a transfer frame sizes itself off
+                    // [mtu].
+                    mtu = newMtu
+                    listener.onBleEvent(
+                        "mtu",
+                        "$newMtu bytes, ${maxChunkPayload()} per chunk",
+                        mapOf("mtu" to newMtu),
+                    )
+                } else {
                     Log.w(TAG, "MTU request failed, status $status; staying at $mtu")
-                    return@post
                 }
-                mtu = newMtu
-                listener.onBleEvent(
-                    "mtu",
-                    "$newMtu bytes, ${maxChunkPayload()} per chunk",
-                    mapOf("mtu" to newMtu),
-                )
+                opQueue.onMtuComplete(ok, if (ok) null else "mtu status $status")
             }
         }
 
@@ -896,9 +901,9 @@ class BleLink(
                     listener.onBleEvent("tiles_ready", "command + status subscribed", null)
                     // After subscribing, not before: the MTU only affects chunk
                     // size, and a fetch cannot start until the subscriptions are
-                    // in place anyway. Chaining them keeps one GATT operation in
-                    // flight at a time, which is all the stack allows.
-                    requestBiggerMtu(g)
+                    // in place anyway. Queued, not called: it takes the stack's
+                    // busy flag like any other operation.
+                    enqueueBiggerMtu()
                 } else {
                     listener.onBleEvent("tiles_unavailable", "$failures subscribe(s) failed", null)
                 }
@@ -946,14 +951,39 @@ class BleLink(
         )
     }
 
-    @SuppressLint("MissingPermission")
-    private fun requestBiggerMtu(g: BluetoothGatt) {
+    /**
+     * Queues the MTU exchange, rather than calling `requestMtu` straight from the
+     * second CCCD write's completion.
+     *
+     * `requestMtu` takes the stack's busy flag exactly like a write does. Called
+     * from a completion callback it was issued *before* the queue pumped the next
+     * op, so that op went into a busy stack and came back refused -- and the one
+     * op most likely to be there is the fetcher's `missing` ask, because the
+     * device fires `NEED_TILES` the moment the command channel is subscribed
+     * (`docs/ble-map-transfer-protocol.md`). The fetch died with "could not ask
+     * for the list", or the MTU exchange itself was the refused one and the link
+     * stayed at MTU 23 -- 15 payload bytes per write -- for the whole connection.
+     *
+     * Queued, a command write enqueued by a mid-subscription `NEED_TILES` simply
+     * waits its turn.
+     */
+    private fun enqueueBiggerMtu() {
         if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) return
-        try {
-            if (!g.requestMtu(DESIRED_MTU)) Log.w(TAG, "requestMtu refused; staying at $mtu")
-        } catch (t: Throwable) {
-            Log.w(TAG, "requestMtu", t)
-        }
+        opQueue.enqueue(
+            GattOpQueue.Op.mtu("mtu $DESIRED_MTU") { ok, error ->
+                // Not fatal: MTU 23 is slow, not broken. But it is the whole
+                // explanation for a 0.2 kB/s transfer, so it goes in the ride log
+                // rather than only into logcat.
+                if (!ok) {
+                    Log.w(TAG, "MTU request failed ($error); staying at $mtu")
+                    listener.onBleEvent(
+                        "mtu_failed",
+                        "${error ?: "refused"}, staying at $mtu",
+                        mapOf("mtu" to mtu),
+                    )
+                }
+            }
+        )
     }
 
     /**
@@ -1091,6 +1121,9 @@ class BleLink(
             when (op.kind) {
                 GattOpQueue.Kind.DESCRIPTOR -> writeDescriptor(g, op)
                 GattOpQueue.Kind.WRITE -> writeCharacteristic(g, op)
+                // Also takes the stack's busy flag, which is why it is queued
+                // rather than called straight from a completion callback.
+                GattOpQueue.Kind.MTU -> g.requestMtu(DESIRED_MTU)
             }
         } catch (t: Throwable) {
             Log.e(TAG, "executeOp ${op.label}", t)

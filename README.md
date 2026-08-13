@@ -247,8 +247,11 @@ Chunks use write-with-response, and that is load-bearing rather than politeness:
 the ATT response arrives only once the device has the bytes on its SD card, so
 driving the loop off it means the sender physically cannot outrun the card.
 
-The app requests a 517-byte MTU after subscribing. On the default 23-byte MTU a
-chunk carries 15 payload bytes, measured at 0.2 KB/s against the X4 -- a 4 KB
+The app requests a 517-byte MTU after subscribing, and it asks **through the
+queue** like any other operation -- `requestMtu` takes the stack's busy flag, and
+issued straight from the subscribe callback it used to get the next queued write
+refused, which is usually the fetcher's `missing` ask. On the default 23-byte MTU
+a chunk carries 15 payload bytes, measured at 0.2 KB/s against the X4 -- a 4 KB
 tile took 25 seconds. **Measured against the real device 2026-08-06**: the link
 settles on 256, so a chunk carries 248 bytes.
 

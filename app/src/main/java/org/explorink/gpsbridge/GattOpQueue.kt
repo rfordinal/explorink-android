@@ -91,6 +91,9 @@ class GattOpQueue(
          */
         const val STACK_DEAD_TIMEOUT_MS = 27_000L
 
+        /** An MTU exchange is one ATT round trip and nothing else; 3 s is plenty. */
+        const val MTU_TIMEOUT_MS = 3000L
+
         /**
          * The per-op timeout for a characteristic write: transfer frames get the
          * SD-bound budget, everything else the normal one.
@@ -118,6 +121,9 @@ class GattOpQueue(
 
         /** `onDescriptorWrite` -- a CCCD write, i.e. a subscription. */
         DESCRIPTOR,
+
+        /** `onMtuChanged`. An MTU exchange takes the same busy flag as a write. */
+        MTU,
     }
 
     /**
@@ -157,6 +163,15 @@ class GattOpQueue(
                 bytes: ByteArray,
                 done: (Boolean, String?) -> Unit,
             ): Op = Op(label, Kind.DESCRIPTOR, bytes, null, d, WRITE_TIMEOUT_MS, done)
+
+            /**
+             * An MTU exchange. No payload and no target; `onMtuChanged` is its
+             * completion. A failure is not fatal -- MTU 23 is slow, not broken --
+             * but it is worth an event line, because a transfer at 15 payload
+             * bytes per write is otherwise a mystery.
+             */
+            fun mtu(label: String, done: (Boolean, String?) -> Unit): Op =
+                Op(label, Kind.MTU, ByteArray(0), null, null, MTU_TIMEOUT_MS, done)
         }
     }
 
@@ -213,6 +228,15 @@ class GattOpQueue(
         deliver(Kind.DESCRIPTOR, null, d, ok, error)
     }
 
+    /**
+     * `onMtuChanged`. Can also arrive unsolicited -- the peer may start an MTU
+     * exchange itself -- which is why it completes an op only when the op in
+     * flight is the MTU one.
+     */
+    fun onMtuComplete(ok: Boolean, error: String?) {
+        deliver(Kind.MTU, null, null, ok, error)
+    }
+
     private fun deliver(
         kind: Kind,
         ch: BluetoothGattCharacteristic?,
@@ -227,6 +251,12 @@ class GattOpQueue(
             // second op in flight. Identity is deliberately not checked -- all
             // transfer frames share one characteristic, so it proves nothing
             // here.
+            //
+            // The family is checked, though: an `onMtuChanged` can arrive
+            // unsolicited, and taking one as the answer to a pending write would
+            // free the slot while the stack is still busy -- the very bug this
+            // queue exists to fix.
+            if (!sameFamily(op.kind, kind)) return
             onEvent(
                 "gatt_late",
                 "${op.label} answered ${clock() - op.startedAt} ms late, result dropped",
@@ -238,10 +268,24 @@ class GattOpQueue(
         val matches = when (kind) {
             Kind.WRITE -> op.kind == Kind.WRITE && op.characteristic === ch
             Kind.DESCRIPTOR -> op.kind == Kind.DESCRIPTOR && op.descriptor === d
+            Kind.MTU -> op.kind == Kind.MTU
         }
         if (!matches) return
         complete(ok, error)
     }
+
+    /**
+     * Whether a callback of [callback] kind can be the answer to an op of [op]
+     * kind. Tombstones only -- a live op is matched on identity.
+     *
+     * Writes and descriptor writes are one family: both are ATT writes, and the
+     * point after a timeout is to free the stack on the next write-ish callback,
+     * not to insist on which of the two it was. `onMtuChanged` is its own family
+     * because it can arrive unsolicited. Read off the Android API contract, not
+     * measured.
+     */
+    private fun sameFamily(op: Kind, callback: Kind): Boolean =
+        if (op == Kind.MTU) callback == Kind.MTU else callback != Kind.MTU
 
     // --- the queue itself ------------------------------------------------
 
