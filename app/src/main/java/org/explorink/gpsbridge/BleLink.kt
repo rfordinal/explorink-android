@@ -128,6 +128,17 @@ class BleLink(
          * against Battery Historian, would settle the real cost.
          */
         private const val SCAN_FAST_MS = 20_000L
+
+        /**
+         * Cap on [commandBuffer]/[statusBuffer], the per-channel line
+         * assemblers in [handleIndication]. A real protocol line is well under
+         * 300 B (`docs/ble-map-transfer-protocol.md`); 4096 is generous headroom
+         * with no risk of cutting off a legitimate multi-block listing line,
+         * while still bounding a peer that never sends the terminating `\n` --
+         * without a cap that buffer grows once per indication for the rest of
+         * the connection.
+         */
+        const val LINE_BUFFER_CAP = 4096
     }
 
     enum class State {
@@ -1070,6 +1081,10 @@ class BleLink(
      * Splits an indication's bytes into whole lines and hands them to the
      * listener. Each channel keeps its own assembler: a line split across two
      * indications must not be spliced onto the other channel's half-line.
+     *
+     * The actual append-and-split-and-cap logic is [appendIndicationBytes], a
+     * top-level function taking the buffer as a parameter -- pulled out so it
+     * is unit-testable without a live [BleLink] (`BleLineAssemblerTest.kt`).
      */
     private fun handleIndication(uuid: UUID, data: ByteArray) {
         val buffer = when (uuid) {
@@ -1077,13 +1092,16 @@ class BleLink(
             TRANSFER_STATUS_CHAR_UUID -> statusBuffer
             else -> return
         }
-        buffer.append(String(data, Charsets.US_ASCII))
-        while (true) {
-            val nl = buffer.indexOf("\n")
-            if (nl < 0) break
-            val line = buffer.substring(0, nl).trim()
-            buffer.delete(0, nl + 1)
-            if (line.isEmpty()) continue
+        val channel = if (uuid == COMMAND_CHAR_UUID) "command" else "status"
+        val lines = appendIndicationBytes(buffer, data) {
+            Log.w(TAG, "$channel channel line buffer over ${LINE_BUFFER_CAP}B with no newline; dropping it")
+            listener.onBleEvent(
+                "line_buffer_overflow",
+                "$channel channel: no newline seen within $LINE_BUFFER_CAP bytes, buffer dropped",
+                mapOf("channel" to channel),
+            )
+        }
+        for (line in lines) {
             if (uuid == COMMAND_CHAR_UUID) listener.onCommandLine(line) else listener.onTransferStatus(line)
         }
     }
@@ -1315,4 +1333,41 @@ class BleLink(
         state = s
         listener.onBleState(s, detail)
     }
+}
+
+/**
+ * Appends [data] onto a per-channel line assembler [buffer] and drains every
+ * whole line currently sitting in it, trimmed, blank lines dropped -- the
+ * same behaviour [BleLink.handleIndication] had inline before this was
+ * pulled out (`BleLink.kt`, around `handleIndication`).
+ *
+ * Pulled out to a top-level function, taking the buffer as a parameter, so it
+ * is unit-testable with no live [BleLink] -- same pattern as
+ * `foregroundTypeMask` in `BridgeService.kt`.
+ *
+ * [BleLink.LINE_BUFFER_CAP] bounds [buffer]: a peer that keeps writing with no
+ * `\n` would otherwise grow it for as long as the connection lives. When an
+ * append leaves [buffer] over the cap with still no complete line in it,
+ * there is nothing salvageable -- the whole buffer is dropped and
+ * [overflowed] fires once for that append, instead of a line.
+ */
+fun appendIndicationBytes(
+    buffer: StringBuilder,
+    data: ByteArray,
+    overflowed: () -> Unit,
+): List<String> {
+    buffer.append(String(data, Charsets.US_ASCII))
+    val lines = ArrayList<String>()
+    while (true) {
+        val nl = buffer.indexOf("\n")
+        if (nl < 0) break
+        val line = buffer.substring(0, nl).trim()
+        buffer.delete(0, nl + 1)
+        if (line.isNotEmpty()) lines.add(line)
+    }
+    if (buffer.length > BleLink.LINE_BUFFER_CAP) {
+        buffer.setLength(0)
+        overflowed()
+    }
+    return lines
 }
