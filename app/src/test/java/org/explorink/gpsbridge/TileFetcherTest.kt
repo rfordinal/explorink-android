@@ -60,14 +60,33 @@ class TileFetcherTest {
         var failNextFrame = false
         var failNextCommand = false
 
+        /**
+         * Command writes are queued instead of acked immediately once armed.
+         * A second `NEED_TILES` can restart the fetch before an earlier
+         * `missing`/`skip` write's own response comes back, so that ordering
+         * has to be testable the same way [holdBeginAcks] makes a late begin
+         * failure testable.
+         */
+        var holdCommands = false
+        private val heldCommands = mutableListOf<(Boolean, String?) -> Unit>()
+
         override fun sendCommand(line: String, done: (Boolean, String?) -> Unit) {
             commands.add(line)
+            if (holdCommands) {
+                heldCommands.add(done)
+                return
+            }
             if (failNextCommand) {
                 failNextCommand = false
                 done(false, "fake failure")
             } else {
                 done(true, null)
             }
+        }
+
+        /** Answers the [index]th held command write, in the order it was sent. */
+        fun answerHeldCommand(index: Int, ok: Boolean, error: String? = null) {
+            heldCommands[index](ok, error)
         }
 
         /**
@@ -552,6 +571,43 @@ class TileFetcherTest {
         h.fetcher.onDisconnected()
         assertEquals("link lost", h.recorder.finished)
         assertEquals(TileFetcher.Phase.IDLE, h.fetcher.phase)
+    }
+
+    @Test
+    fun `restarting the listing before a missing write is acked does not let the stale write finish the new one`() {
+        // The defect this guards against: a second NEED_TILES restarts the
+        // whole fetch while requestPage()'s own `missing` write is still
+        // unacknowledged. Without a generation gate, that write's callback
+        // has no idea a restart happened and calls finish() unconditionally
+        // -- tearing down the run that replaced it, not the one it actually
+        // belongs to (`docs/ble-review-2026-08.md`, "Stability -- app", item 3).
+        val h = Harness()
+        h.transport.holdCommands = true
+
+        h.fetcher.onCommandLine("NEED_TILES 1 fmt 2")
+        assertEquals(listOf("missing"), h.transport.commands)
+        assertEquals(TileFetcher.Phase.LISTING, h.fetcher.phase)
+
+        // The rider presses the menu item again before that write answers.
+        h.fetcher.onCommandLine("NEED_TILES 1 fmt 2")
+        assertEquals(listOf("missing", "missing"), h.transport.commands)
+        assertEquals(TileFetcher.Phase.LISTING, h.fetcher.phase)
+
+        // The old write finally answers, and fails -- exactly what a dropped
+        // write on a real link looks like.
+        h.transport.answerHeldCommand(0, false, "fake failure")
+
+        // The new run must still be alive: this failure belongs to the run
+        // that was already replaced, not to the one now in flight.
+        assertNull(h.recorder.finished)
+        assertEquals(TileFetcher.Phase.LISTING, h.fetcher.phase)
+
+        // And the new run's own write, once it answers, still drives things
+        // normally.
+        h.transport.answerHeldCommand(1, true, null)
+        h.list(MissingTile(12, 1, 1, 1))
+        assertEquals("done", h.recorder.finished)
+        assertEquals(1, h.recorder.finalSkipped)
     }
 
     @Test

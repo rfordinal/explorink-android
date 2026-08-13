@@ -225,6 +225,15 @@ class TileFetcher(
      * interleave into the new fetch's transfer
      * (`docs/ble-review-2026-08.md`, "Stability -- app", item 2).
      *
+     * Every command-write callback ([requestPage], [skip]) captures it the
+     * same way, for the same reason one level up the stack: a second
+     * `NEED_TILES` restarts the whole conversation (bumping [fetchGen],
+     * replacing [page]) before an outstanding write's callback returns, and
+     * that callback has no idea it is answering a run this side already
+     * walked away from -- `finish()` takes no argument saying which run it
+     * means, so unguarded it tears down whatever fetch is live now
+     * (`docs/ble-review-2026-08.md`, "Stability -- app", item 3).
+     *
      * Distinct from [statusGen]/[liveStatusGen] above, and not to be merged
      * with them: those count *transfer* (begin/abort) generations for
      * status-line attribution, bumped once per tile. This one counts *fetch*
@@ -413,8 +422,20 @@ class TileFetcher(
             page = MissingList.PageReader()
             line = if (offset == 0) "missing" else "missing $offset"
         }
+        // Captured before the write, same reason as nextTile()'s `gen`: a
+        // second NEED_TILES can restart the fetch (bumping fetchGen, replacing
+        // `page`) before this write's callback returns. Unguarded, that late
+        // `ok=false` would call finish() on the run that replaced this one --
+        // it has no idea a restart happened, `finish()` takes no argument
+        // saying which run it means (`docs/ble-review-2026-08.md`,
+        // "Stability -- app", item 3).
+        val gen = fetchGen
         armTimeout()
         transport.sendCommand(line) { ok, error ->
+            if (gen != fetchGen) {
+                Log.i(TAG, "dropping a late page-request result for gen $gen; fetch has moved on")
+                return@sendCommand
+            }
             if (!ok) finish("could not ask for the list: ${error ?: "write failed"}")
         }
     }
@@ -608,7 +629,13 @@ class TileFetcher(
         skipped++
         listener.onTileDone(missing.z, missing.col, missing.row, 0, false, reason)
         listener.onFetchProgress(sent, skipped, total)
+        // Gen captured for the same reason as requestPage()'s: this write's
+        // callback does nothing but log today, but a late one belongs to a
+        // fetch this side has already walked away from, and the log line
+        // should say so rather than name whatever tile is live now.
+        val gen = fetchGen
         transport.sendCommand("skip ${missing.z} ${missing.col} ${missing.row} $reason") { ok, error ->
+            if (gen != fetchGen) return@sendCommand
             if (!ok) Log.w(TAG, "skip write failed: $error")
         }
         nextTile()
