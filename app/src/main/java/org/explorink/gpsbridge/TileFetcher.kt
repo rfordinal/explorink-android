@@ -213,6 +213,28 @@ class TileFetcher(
      */
     private var owedVerdicts = 0
 
+    /**
+     * Which fetch this is -- bumped once at every point a fetch starts or ends
+     * ([pushTiles], [startListing], [finish]). Async work kicked off mid-fetch
+     * (today: the CDN read in [nextTile]) captures this value before handing
+     * off, and its callback checks it against the live one before touching any
+     * state. A CDN read is 10-20 s of HTTP timeouts, so a fetch can end and a
+     * *new* one start on the same channel before the old read lands; the
+     * phase-only guard in [onTileBytes] cannot tell those two fetches apart --
+     * both show `phase == PUSHING` -- so the late read's begin frame would
+     * interleave into the new fetch's transfer
+     * (`docs/ble-review-2026-08.md`, "Stability -- app", item 2).
+     *
+     * Distinct from [statusGen]/[liveStatusGen] above, and not to be merged
+     * with them: those count *transfer* (begin/abort) generations for
+     * status-line attribution, bumped once per tile. This one counts *fetch*
+     * (one whole listing-then-push conversation) generations, bumped only at
+     * the three points a fetch starts or ends -- many transfers happen inside
+     * one unchanged [fetchGen]. They answer different questions and change at
+     * different rates.
+     */
+    private var fetchGen = 0
+
     private var timeout: Scheduler.Cancellable? = null
 
     // --- input from the link ------------------------------------------------
@@ -338,6 +360,7 @@ class TileFetcher(
         }
         if (tiles.isEmpty()) return
         Log.i(TAG, "pushing ${tiles.size} stale tile(s) unasked")
+        fetchGen++
         phase = Phase.PUSHING
         wantedFormat = formatVersion
         total = tiles.size
@@ -364,6 +387,10 @@ class TileFetcher(
                 "scope ${if (need.viewportOnly) "viewport" else "whole list"}, " +
                 "source is ${source.describe()}",
         )
+        // One fetch is starting, whether this is the first NEED_TILES or a
+        // restart on a second one -- either way any read left over from
+        // whatever ran before must not be able to touch what follows.
+        fetchGen++
         phase = Phase.LISTING
         total = need.count
         wantedFormat = need.formatVersion
@@ -439,24 +466,39 @@ class TileFetcher(
             return
         }
 
+        // Captured before the async read, not read fresh in the callback: this
+        // is the fetch the read belongs to, and `fetchGen` may have moved on by
+        // the time the callback runs.
+        val gen = fetchGen
         // Asynchronous: the source may be the CDN, and an HTTP GET cannot run
         // on the thread BLE lives on. The callback comes back on this thread.
         source.read(
             next.z, next.col, next.row, wantedFormat,
             expected.get(next.z, next.col, next.row),
         ) { data ->
-            onTileBytes(next, relPath, data)
+            onTileBytes(next, relPath, data, gen)
         }
     }
 
     /**
      * The source answered for [next]. Everything from the begin frame onward.
      *
-     * Guarded against a fetch that ended while the read was in flight: a
-     * cancelled or dropped run must not start a transfer on the way out, and by
-     * then `phase` has already moved on.
+     * Guarded against a fetch that ended, or ended and was replaced, while the
+     * read was in flight. A CDN read is 10-20 s of HTTP timeouts, wide enough
+     * for the fetch it belongs to (A) to finish and a *new* one (B) to already
+     * be running by the time it lands -- `phase` alone cannot catch that
+     * because B leaves it exactly where A left it, `PUSHING`. `gen` is what
+     * `nextTile` captured before starting the read, so it is A's fetch, not
+     * whatever is live now; comparing it to the live `fetchGen` is the same
+     * pattern as `sendNextChunk`'s `tile !== current` guard below, one level up
+     * -- there it is one late chunk callback vs. the live tile, here it is one
+     * late read vs. the live fetch.
      */
-    private fun onTileBytes(next: MissingTile, relPath: String, data: ByteArray?) {
+    private fun onTileBytes(next: MissingTile, relPath: String, data: ByteArray?, gen: Int) {
+        if (gen != fetchGen) {
+            Log.i(TAG, "dropping a late read for ${describe(next)}; its fetch has moved on")
+            return
+        }
         if (phase != Phase.PUSHING) {
             Log.i(TAG, "dropping a late read for ${describe(next)}; the fetch has ended")
             return
@@ -624,7 +666,9 @@ class TileFetcher(
     private fun finish(reason: String) {
         // Every exit from a fetch comes through here -- done, cancelled, link
         // lost, stopped -- which is what makes this the one place the fast link
-        // has to be handed back.
+        // has to be handed back, and the one place a fetch unconditionally ends
+        // even when nothing new replaces it.
+        fetchGen++
         transport.setFastLink(false)
         val wasSent = sent
         val wasSkipped = skipped

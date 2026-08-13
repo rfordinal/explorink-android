@@ -2,6 +2,7 @@ package org.explorink.gpsbridge
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -405,6 +406,72 @@ class TileFetcherTest {
         deliver?.invoke(tileBytes(50))
         assertEquals(0, h.transport.beginFrames().size)
         assertEquals(TileFetcher.Phase.IDLE, fetcher.phase)
+    }
+
+    @Test
+    fun `a late read from an ended fetch does not join the fetch that replaces it`() {
+        // The defect this guards against: fetch A's CDN read is still in
+        // flight (10-20s of HTTP timeouts) when A ends. A new fetch B starts
+        // right after, on the same fetcher, same channel. `phase` alone cannot
+        // tell A's late read apart from B's own reads -- both see `PUSHING` --
+        // so without a fetch generation gate, A's late read would open a
+        // second begin frame on top of B's live transfer
+        // (`docs/ble-review-2026-08.md`, "Stability -- app", item 2).
+        val h = Harness()
+        val source = object : TileSource {
+            val immediate = mutableMapOf<String, ByteArray>()
+            var deliverA: ((ByteArray?) -> Unit)? = null
+            override fun read(
+                z: Int,
+                col: Long,
+                row: Long,
+                formatVersion: Int?,
+                expectedContentId: Long?,
+                done: (ByteArray?) -> Unit,
+            ) {
+                val bytes = immediate["$z/$col/$row"]
+                if (bytes != null) done(bytes) else deliverA = done
+            }
+            override fun describe(): String = "test"
+        }
+        val fetcher = TileFetcher(source, h.transport, h.scheduler, h.recorder)
+
+        // Fetch A: one tile, whose read never comes back before A ends.
+        fetcher.onCommandLine("NEED_TILES 1 fmt 2")
+        fetcher.onCommandLine("INFO missing_total=1")
+        fetcher.onCommandLine("INFO missing_offset=0")
+        fetcher.onCommandLine("INFO missing_12_1_1=1")
+        fetcher.onCommandLine("INFO missing_next=done")
+        fetcher.onCommandLine("OK")
+        assertNotNull("A's read should be outstanding", source.deliverA)
+
+        // The rider cancels -- ends fetch A while its read is still in flight.
+        fetcher.onCommandLine("FETCH_CANCEL")
+        assertEquals(TileFetcher.Phase.IDLE, fetcher.phase)
+
+        // Fetch B starts right after: a stale-tile push, same fetcher, same
+        // source and transport -- what the freshness check does once a
+        // listing gets cancelled mid-ride.
+        source.immediate["9/9/9"] = tileBytes(60)
+        fetcher.pushTiles(listOf(MissingTile(9, 9, 9, 1)), 2)
+        assertEquals(TileFetcher.Phase.PUSHING, fetcher.phase)
+        assertEquals(1, h.transport.beginFrames().size)
+
+        // A's read finally lands, mid B's transfer.
+        source.deliverA?.invoke(tileBytes(50))
+
+        // No begin frame for A's tile -- the guard held.
+        assertEquals(1, h.transport.beginFrames().size)
+
+        // And B's own tile/bytes/offset state is exactly as it was: its
+        // transfer still completes normally on its own status lines.
+        fetcher.onStatusLine("RDY 60")
+        assertEquals(1, h.transport.chunkFrames().size)
+        fetcher.onStatusLine("OK 60 ${"%08x".format(TransferFrames.crc32(tileBytes(60)))}")
+        assertEquals(listOf("9/9/9 landed"), h.recorder.doneTiles)
+        assertEquals("done", h.recorder.finished)
+        assertEquals(1, h.recorder.finalSent)
+        assertEquals(0, h.recorder.finalSkipped)
     }
 
     @Test
