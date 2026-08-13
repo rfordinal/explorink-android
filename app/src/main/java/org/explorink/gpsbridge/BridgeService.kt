@@ -97,6 +97,19 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         /** Enough for one whole fetch plus the check that triggered it. */
         private const val MAX_TILE_LINES = 10
 
+        /**
+         * Floor between `onTileProgress` propagations to `notifyObserver()`.
+         *
+         * Every chunk callback lands on the main looper, the same looper that
+         * must issue the next chunk inside a ~30 ms budget at the transfer's
+         * 15 ms connection interval. `notifyObserver()` rebuilds the
+         * notification content and renders the observer -- see
+         * [shouldPostProgress] for the decision this bounds. Not private: the
+         * throttle decision itself lives in that top-level, unit-testable
+         * function, which needs the same constant.
+         */
+        const val PROGRESS_POST_THROTTLE_MS = 250L
+
         @Volatile
         var isRunning = false
             private set
@@ -247,6 +260,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     /** Live transfer state, all of it null/zero while nothing is in flight. */
     private var tileProgress: TileProgress? = null
     private var fetchTotal = 0
+
+    /** Last time an `onTileProgress` chunk actually reached [notifyObserver] -- see [shouldPostProgress]. */
+    private var lastProgressPostMs = 0L
     private var fetchDone = 0
     private var fetchSkipped = 0
     private var fetchCompletedBytes = 0
@@ -687,6 +703,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         fetchSkipped = 0
         fetchCompletedBytes = 0
         tileProgress = null
+        lastProgressPostMs = 0L
         addEvent("device asked for $total tiles")
         addTileLine("X4 asked for $total ${squares(total)} ($fetchScope)")
         logger?.logEvent("fetch_start", "$total tiles", mapOf("total" to total))
@@ -714,6 +731,16 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             completedBytes = fetchCompletedBytes,
             elapsedMs = System.currentTimeMillis() - fetchStartedAtMs,
         )
+        // The state above is always kept current -- only the UI propagation
+        // is rate-limited. This callback runs on the main looper at the
+        // transfer's chunk interval (~15 ms); notifyObserver() rebuilds the
+        // notification content and renders the observer, which does not fit
+        // that budget every chunk. Terminal states (done/fail/finish) call
+        // notifyObserver() directly from their own handlers below, not
+        // through here, so they are never subject to this throttle.
+        val now = System.currentTimeMillis()
+        if (!shouldPostProgress(now, lastProgressPostMs, terminal = false)) return
+        lastProgressPostMs = now
         notifyObserver()
     }
 
@@ -1353,4 +1380,25 @@ fun foregroundTypeMask(locationRunning: Boolean): Int {
         mask = mask or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
     }
     return mask
+}
+
+/**
+ * Whether an `onTileProgress` chunk callback should actually reach
+ * `notifyObserver()` -- the propagation this throttles, not the callback
+ * itself, which must keep firing every chunk so [BridgeService.tileProgress]
+ * stays current.
+ *
+ * `notifyObserver()` rebuilds the notification content and renders the
+ * observer; at the transfer's ~15 ms chunk interval that does not fit the
+ * main looper's ~30 ms budget to issue the next chunk. So progress posts are
+ * floored to [BridgeService.PROGRESS_POST_THROTTLE_MS], except a terminal
+ * state (tile done, tile failed, fetch finished) always posts -- those are
+ * not chunk callbacks and must render regardless of timing.
+ *
+ * Framework-call-free and side-effect-free, so it is unit-testable without a
+ * `Service`; see `BridgeProgressThrottleTest` for the three cases.
+ */
+fun shouldPostProgress(nowMs: Long, lastMs: Long, terminal: Boolean): Boolean {
+    if (terminal) return true
+    return nowMs - lastMs >= BridgeService.PROGRESS_POST_THROTTLE_MS
 }
