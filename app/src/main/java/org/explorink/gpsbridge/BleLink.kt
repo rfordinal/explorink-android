@@ -178,6 +178,13 @@ class BleLink(
 
     /** The `ScanSettings` mode the running scan was started with, for [scanDownshift]. */
     private var scanMode = ScanSettings.SCAN_MODE_LOW_LATENCY
+
+    /**
+     * Scan failures in a row with no successful start between them. Feeds
+     * [ScanRetryPolicy]'s backoff in [scheduleScanRetry]; reset to 0 the moment
+     * [startScan] actually starts a scan.
+     */
+    private var scanFailureStreak = 0
     private var gatt: BluetoothGatt? = null
     private var posChar: BluetoothGattCharacteristic? = null
     private var cmdChar: BluetoothGattCharacteristic? = null
@@ -260,15 +267,16 @@ class BleLink(
     private var connectTimeout: Runnable? = null
 
     /**
-     * The delayed [start] armed by [scheduleReconnect] or [retry], kept so it can
-     * be cancelled.
+     * The delayed [start] armed by [scheduleReconnect], [retry], or
+     * [scheduleScanRetry], kept so it can be cancelled.
      *
-     * It has to be cancellable, not fire-and-forget: [onAdapterOff] tears the link
-     * down while a reconnect delay may already be running, and a `start()` that
-     * lands after the teardown would re-arm scans and connects against an adapter
-     * that is gone. One field for both callers -- the later one replaces the
-     * earlier, which is what was wanted anyway (two pending starts only ever meant
-     * the second one no-opped).
+     * It has to be cancellable, not fire-and-forget: [onAdapterOff] and [stop]
+     * tear the link down while a reconnect or scan-retry delay may already be
+     * running, and a `start()` that lands after the teardown would re-arm scans
+     * and connects against an adapter that is gone, or after the rider asked
+     * the link to stop. One field for every caller -- the later one replaces
+     * the earlier, which is what was wanted anyway (two pending starts only
+     * ever meant the second one no-opped).
      */
     private var pendingStart: Runnable? = null
 
@@ -365,6 +373,10 @@ class BleLink(
 
     fun stop() {
         wantRunning = false
+        // A scan-failure retry (scheduleScanRetry) or a reconnect
+        // (scheduleReconnect) may be armed; stop() means "no more automatic
+        // starts", so the pending one must not survive it.
+        cancelPendingStart()
         teardown()
         setState(State.IDLE, null)
     }
@@ -453,6 +465,9 @@ class BleLink(
         // lastAddress is kept on purpose: it is what makes the reconnect after
         // STATE_ON a direct connect instead of a scan.
         directReconnects = 0
+        // A failure streak from before the adapter went off says nothing
+        // about the adapter that just came back.
+        scanFailureStreak = 0
         if (g != null) {
             try {
                 g.close()
@@ -507,6 +522,10 @@ class BleLink(
             scanner.startScan(filters, settings, scanCallback)
             scanning = true
             scanMode = mode
+            // A scan that actually started means whatever tripped the last
+            // failure (if any) is gone -- the next failure, if there is one,
+            // starts its own backoff from scratch.
+            scanFailureStreak = 0
             if (mode == ScanSettings.SCAN_MODE_LOW_LATENCY) {
                 main.removeCallbacks(scanDownshift)
                 main.postDelayed(scanDownshift, SCAN_FAST_MS)
@@ -558,8 +577,36 @@ class BleLink(
                 scanning = false
                 setState(State.FAILED, "scan failed, code $errorCode -- press Retry")
                 listener.onBleEvent("scan_failed", "code $errorCode", null)
+                scheduleScanRetry(errorCode)
             }
         }
+    }
+
+    /**
+     * A scan failure self-heals instead of waiting for a manual Retry.
+     * [state] is already FAILED above -- the rider sees the truth -- but this
+     * also arms a delayed [start] through the same [scheduleStart]/
+     * [pendingStart] slot [scheduleReconnect] uses, so [stop] and
+     * [onAdapterOff] cancel it exactly the way they cancel a pending
+     * reconnect.
+     *
+     * [ScanRetryPolicy] has the delay arithmetic and the reasoning (35 s for
+     * code 6, so the retry cannot itself land inside the 30 s window that
+     * tripped it). [scanFailureStreak] feeds its backoff and resets in
+     * [startScan] on any scan that actually starts.
+     *
+     * This is an automatic rescan, not a user-initiated one -- the same kind
+     * of call T6.5's `startScan(mode: Int)` (`:478`) targets for
+     * `SCAN_MODE_LOW_POWER`. The seam for that is [scheduleStart]'s runnable,
+     * which today calls the mode-less [start]; T6.5 can thread a mode through
+     * [scheduleStart] (or a sibling) to that call site without touching this
+     * function.
+     */
+    private fun scheduleScanRetry(errorCode: Int) {
+        if (!wantRunning) return
+        val delay = ScanRetryPolicy.delayMs(errorCode, scanFailureStreak)
+        scanFailureStreak++
+        scheduleStart(delay)
     }
 
     @SuppressLint("MissingPermission")
