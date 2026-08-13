@@ -523,6 +523,11 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         if (wasConnected && !isConnected) {
             tileFetcher.onDisconnected()
             freshness.onDisconnected()
+            // A deferred ask belonged to this connection's conversation. A
+            // reconnected device re-asks (NEED_TILES/CHECK_TILES fire again on
+            // resubscribe), so replaying a stale one later would answer a
+            // question nobody is asking anymore.
+            deferredAsk = null
         }
         if (isConnected != wasConnected) {
             updatePowerState()
