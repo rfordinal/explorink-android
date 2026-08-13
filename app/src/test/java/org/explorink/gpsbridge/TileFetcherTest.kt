@@ -60,14 +60,33 @@ class TileFetcherTest {
         var failNextFrame = false
         var failNextCommand = false
 
+        /**
+         * Command writes are queued instead of acked immediately once armed.
+         * A second `NEED_TILES` can restart the fetch before an earlier
+         * `missing`/`skip` write's own response comes back, so that ordering
+         * has to be testable the same way [holdBeginAcks] makes a late begin
+         * failure testable.
+         */
+        var holdCommands = false
+        private val heldCommands = mutableListOf<(Boolean, String?) -> Unit>()
+
         override fun sendCommand(line: String, done: (Boolean, String?) -> Unit) {
             commands.add(line)
+            if (holdCommands) {
+                heldCommands.add(done)
+                return
+            }
             if (failNextCommand) {
                 failNextCommand = false
                 done(false, "fake failure")
             } else {
                 done(true, null)
             }
+        }
+
+        /** Answers the [index]th held command write, in the order it was sent. */
+        fun answerHeldCommand(index: Int, ok: Boolean, error: String? = null) {
+            heldCommands[index](ok, error)
         }
 
         /**
@@ -552,6 +571,89 @@ class TileFetcherTest {
         h.fetcher.onDisconnected()
         assertEquals("link lost", h.recorder.finished)
         assertEquals(TileFetcher.Phase.IDLE, h.fetcher.phase)
+    }
+
+    @Test
+    fun `restarting the listing before a missing write is acked does not let the stale write finish the new one`() {
+        // The defect this guards against: a second NEED_TILES restarts the
+        // whole fetch while requestPage()'s own `missing` write is still
+        // unacknowledged. Without a generation gate, that write's callback
+        // has no idea a restart happened and calls finish() unconditionally
+        // -- tearing down the run that replaced it, not the one it actually
+        // belongs to (`docs/ble-review-2026-08.md`, "Stability -- app", item 3).
+        val h = Harness()
+        h.transport.holdCommands = true
+
+        h.fetcher.onCommandLine("NEED_TILES 1 fmt 2")
+        assertEquals(listOf("missing"), h.transport.commands)
+        assertEquals(TileFetcher.Phase.LISTING, h.fetcher.phase)
+
+        // The rider presses the menu item again before that write answers.
+        h.fetcher.onCommandLine("NEED_TILES 1 fmt 2")
+        assertEquals(listOf("missing", "missing"), h.transport.commands)
+        assertEquals(TileFetcher.Phase.LISTING, h.fetcher.phase)
+
+        // The old write finally answers, and fails -- exactly what a dropped
+        // write on a real link looks like.
+        h.transport.answerHeldCommand(0, false, "fake failure")
+
+        // The new run must still be alive: this failure belongs to the run
+        // that was already replaced, not to the one now in flight.
+        assertNull(h.recorder.finished)
+        assertEquals(TileFetcher.Phase.LISTING, h.fetcher.phase)
+
+        // And the new run's own write, once it answers, still drives things
+        // normally.
+        h.transport.answerHeldCommand(1, true, null)
+        h.list(MissingTile(12, 1, 1, 1))
+        assertEquals("done", h.recorder.finished)
+        assertEquals(1, h.recorder.finalSkipped)
+    }
+
+    @Test
+    fun `a restart mid-paging discards the old page's stale reply instead of feeding it to the new one`() {
+        // The other half of the same defect: even when the write-callback
+        // gate above works perfectly, a *successful* stale write still has
+        // a whole reply coming. Firmware answers a `missing <offset>` whole
+        // and uninterrupted once it has the command -- nothing else,
+        // including the very NEED_TILES that triggers this restart, can
+        // reach the wire ahead of it -- so its lines land after `page`
+        // already belongs to the new generation, and nothing in them says
+        // which generation they are for (`docs/ble-review-2026-08.md`,
+        // "Stability -- app", item 3, "paging offsets desync").
+        val h = Harness()
+
+        h.fetcher.onCommandLine("NEED_TILES 2 fmt 2")
+        h.fetcher.onCommandLine("INFO missing_total=2")
+        h.fetcher.onCommandLine("INFO missing_offset=0")
+        h.fetcher.onCommandLine("INFO missing_next=20")
+        h.fetcher.onCommandLine("OK")
+        assertEquals(listOf("missing", "missing 20"), h.transport.commands)
+
+        // The rider presses the menu item again while the offset=20 page is
+        // still outstanding.
+        h.fetcher.onCommandLine("NEED_TILES 2 fmt 2")
+        assertEquals(listOf("missing", "missing 20", "missing"), h.transport.commands)
+
+        // The old page's reply arrives anyway: the device already had the
+        // command and answers it in full, offset=20 and all, before this
+        // side ever gets an answer to what it just asked instead.
+        h.fetcher.onCommandLine("INFO missing_total=25")
+        h.fetcher.onCommandLine("INFO missing_offset=20")
+        h.fetcher.onCommandLine("INFO missing_13_9_9=1")
+        h.fetcher.onCommandLine("INFO missing_next=done")
+        h.fetcher.onCommandLine("OK")
+
+        // Only now does the new listing's own reply start.
+        h.list(MissingTile(12, 1, 1, 1))
+
+        // The stale page's tile never reached the queue -- proven by it
+        // never being asked about at all -- and the new listing's own
+        // single tile is the only one skipped.
+        assertTrue(h.transport.commands.none { it.contains("13 9 9") })
+        assertEquals(listOf("12/1/1 skipped"), h.recorder.doneTiles)
+        assertEquals("done", h.recorder.finished)
+        assertEquals(1, h.recorder.finalSkipped)
     }
 
     @Test

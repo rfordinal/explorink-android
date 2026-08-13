@@ -182,6 +182,90 @@ class FreshnessCheckerTest {
     }
 
     @Test
+    fun `a CHECK_TILES restart before the have write is acked does not let the stale write finish or lose the new listing's count`() {
+        // The defect this guards against: a second CHECK_TILES restarts the
+        // whole check while start()'s own `have` write is still
+        // unacknowledged. Without a generation gate, that write's callback
+        // has no idea a restart happened and calls finish() unconditionally
+        // -- wiping the new listing's reader and whatever it had already
+        // accumulated from its own `have` INFO lines
+        // (`docs/ble-review-2026-08.md`, "Stability -- app", item 3).
+        val h = Harness()
+        h.transport.holdCommands = true
+        h.index.put(13, 4482, 2839, slotB)
+
+        h.checker.onCommandLine("CHECK_TILES 5")
+        assertEquals(listOf("have"), h.transport.commands)
+        assertEquals(FreshnessChecker.Phase.LISTING, h.checker.phase)
+
+        // The device asks again before that write answers.
+        h.checker.onCommandLine("CHECK_TILES 1")
+        assertEquals(listOf("have", "have"), h.transport.commands)
+        assertEquals(FreshnessChecker.Phase.LISTING, h.checker.phase)
+
+        // The old write finally answers, and fails -- exactly what a
+        // dropped write on a real link looks like.
+        h.transport.answerHeldCommand(0, false, "fake failure")
+
+        // The new listing must still be alive.
+        assertEquals(FreshnessChecker.Phase.LISTING, h.checker.phase)
+
+        // Its own reply now flows through normally and gets reported --
+        // proof the stale callback did not reach in and finish or clear it.
+        h.checker.onCommandLine("INFO have_total=1")
+        h.checker.onCommandLine("INFO have_13_4482_2839=${"%08x".format(slotA)}")
+        h.checker.onCommandLine("OK")
+        assertEquals(listOf("have", "have", "stale 13 4482 2839", "checked 1"), h.transport.commands)
+        assertEquals(slotB, h.expected.get(13, 4482, 2839))
+        assertEquals(FreshnessChecker.Phase.IDLE, h.checker.phase)
+    }
+
+    @Test
+    fun `a restart discards the old have reply instead of feeding it to the new one`() {
+        // The other half of the same defect: even when the write-callback
+        // gate above works perfectly, a *successful* stale write still has
+        // a whole reply coming. Firmware answers `have` whole and
+        // uninterrupted once it has the command -- nothing else, including
+        // the very CHECK_TILES that triggers this restart, can reach the
+        // wire ahead of it -- so its lines land after `reader` already
+        // belongs to the new generation, and nothing in them says which
+        // generation they are for (`docs/ble-review-2026-08.md`,
+        // "Stability -- app", item 3).
+        val h = Harness()
+        h.transport.holdCommands = true
+        h.index.put(13, 4482, 2839, slotB)
+
+        h.checker.onCommandLine("CHECK_TILES 5")
+        assertEquals(listOf("have"), h.transport.commands)
+
+        // The device asks again while that write is still outstanding.
+        h.checker.onCommandLine("CHECK_TILES 1")
+        assertEquals(listOf("have", "have"), h.transport.commands)
+
+        // The old write succeeds after all: the device did get it, and a
+        // whole stale reply is now coming.
+        h.transport.answerHeldCommand(0, true, null)
+
+        // That stale reply arrives -- a tile that must never reach the new
+        // listing's report.
+        h.checker.onCommandLine("INFO have_total=1")
+        h.checker.onCommandLine("INFO have_11_1_1=${"%08x".format(slotA)}")
+        h.checker.onCommandLine("OK")
+
+        // Only now does the new listing's own, unrelated reply start.
+        h.checker.onCommandLine("INFO have_total=1")
+        h.checker.onCommandLine("INFO have_13_4482_2839=${"%08x".format(slotA)}")
+        h.checker.onCommandLine("OK")
+
+        // The stale tile never reached the index or the report -- one read,
+        // for the new listing's own tile only.
+        assertEquals(1, h.index.reads.size)
+        assertTrue(h.transport.commands.none { it.contains("11 1 1") })
+        assertEquals(listOf("have", "have", "stale 13 4482 2839", "checked 1"), h.transport.commands)
+        assertEquals(FreshnessChecker.Phase.IDLE, h.checker.phase)
+    }
+
+    @Test
     fun `CHECK_TILES states its own format version, no NEED_TILES required`() {
         // A device with nothing missing never sends NEED_TILES at all -- this
         // used to leave formatVersion null forever, falling back to a stale
@@ -280,9 +364,27 @@ class FreshnessCheckerTest {
     private class FakeTransport : TileFetcher.Transport {
         val commands = mutableListOf<String>()
 
+        /**
+         * Command writes are queued instead of acked immediately once armed.
+         * A second `CHECK_TILES` can restart the check before an earlier
+         * `have` write's own response comes back, so that ordering has to be
+         * testable.
+         */
+        var holdCommands = false
+        private val heldCommands = mutableListOf<(Boolean, String?) -> Unit>()
+
         override fun sendCommand(line: String, done: (Boolean, String?) -> Unit) {
             commands.add(line)
+            if (holdCommands) {
+                heldCommands.add(done)
+                return
+            }
             done(true, null)
+        }
+
+        /** Answers the [index]th held command write, in the order it was sent. */
+        fun answerHeldCommand(index: Int, ok: Boolean, error: String? = null) {
+            heldCommands[index](ok, error)
         }
 
         override fun sendFrame(frame: ByteArray, done: (Boolean, String?) -> Unit) =

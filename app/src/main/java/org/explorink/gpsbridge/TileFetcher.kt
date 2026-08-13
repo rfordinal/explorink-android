@@ -225,6 +225,15 @@ class TileFetcher(
      * interleave into the new fetch's transfer
      * (`docs/ble-review-2026-08.md`, "Stability -- app", item 2).
      *
+     * Every command-write callback ([requestPage], [skip]) captures it the
+     * same way, for the same reason one level up the stack: a second
+     * `NEED_TILES` restarts the whole conversation (bumping [fetchGen],
+     * replacing [page]) before an outstanding write's callback returns, and
+     * that callback has no idea it is answering a run this side already
+     * walked away from -- `finish()` takes no argument saying which run it
+     * means, so unguarded it tears down whatever fetch is live now
+     * (`docs/ble-review-2026-08.md`, "Stability -- app", item 3).
+     *
      * Distinct from [statusGen]/[liveStatusGen] above, and not to be merged
      * with them: those count *transfer* (begin/abort) generations for
      * status-line attribution, bumped once per tile. This one counts *fetch*
@@ -234,6 +243,48 @@ class TileFetcher(
      * different rates.
      */
     private var fetchGen = 0
+
+    /**
+     * Stale `missing`/`tiles` replies still owed by requests this side walked
+     * away from at a restart.
+     *
+     * The generation guard on [requestPage]'s write callback stops a stale
+     * write's *failure* from reaching into whatever fetch is live now, but it
+     * cannot stop a stale write's *success*: once the device has the request,
+     * firmware answers it whole and uninterrupted -- verified by reading
+     * `BlePositionServer::sendCommandBlock()` (blocking, one call per line)
+     * and `MapBleConsole`'s reply generation (one uninterrupted call per
+     * command, `kMaxBlocksPerPoll` only defers *further* commands, never a
+     * reply already triggered) -- so nothing else, including the very
+     * `NEED_TILES` that triggers a restart, can reach the wire ahead of a
+     * reply already in progress. Every line of that reply still arrives,
+     * however many there are, after the restart, while [page] already
+     * belongs to the new generation. [MissingList.Listing.feed] has no field
+     * that tells old and new apart: two listings that differ only in *when*
+     * they ran can carry the same offset, the same total, even the same
+     * tiles (`docs/ble-review-2026-08.md`, "Stability -- app", item 3,
+     * "paging offsets desync").
+     *
+     * So identity again has to come from what this side did, the same idea
+     * as [owedVerdicts] one level down: [startListing] owns up to owing a
+     * reply the moment it restarts on top of an incomplete [page], and
+     * [requestPage]'s callback retracts that debt if the write it was
+     * counting on turns out to have failed. [feedPage] discards every line
+     * while a debt is outstanding, up to and including the stale reply's own
+     * terminating `OK` -- exactly the boundary firmware guarantees, one
+     * reply fully drained before the next line of anything else is sent.
+     *
+     * Unlike [owedVerdicts], **not** cleared by [reset]: a transfer's debt is
+     * capped at one and safe to drop, because the alternative -- a fresh
+     * fetch's real verdict wrongly eaten -- is worse than the rare case of
+     * dropping it. A listing's debt can stack across more than one restart
+     * (each one sent before the last resolved), arriving in the order the
+     * device will answer them, and dropping it would let a stale reply
+     * corrupt whatever fetch replaces it. Cleared only where the channel it
+     * would have arrived on is provably gone -- [onDisconnected], [stop] --
+     * so it cannot go on to poison a fetch that starts long after.
+     */
+    private var owedListingReplies = 0
 
     private var timeout: Scheduler.Cancellable? = null
 
@@ -330,6 +381,10 @@ class TileFetcher(
     /** The link dropped. Whatever was in flight is dead. */
     fun onDisconnected() {
         if (phase == Phase.IDLE) return
+        // The channel any owed reply would have arrived on is gone with the
+        // link -- it can never be paid, and holding onto it would wrongly
+        // starve the first listing of whatever connects next.
+        owedListingReplies = 0
         finish("link lost")
     }
 
@@ -337,6 +392,7 @@ class TileFetcher(
     fun stop() {
         if (phase == Phase.IDLE) return
         abortInFlight()
+        owedListingReplies = 0
         finish("stopped")
     }
 
@@ -378,6 +434,13 @@ class TileFetcher(
             // menu item again. Start over rather than interleave two listings --
             // the device's own counters were reset by that press too.
             Log.i(TAG, "restarting fetch on a second NEED_TILES")
+            // The page in flight, if any, was asked for over the same command
+            // channel this side is about to reuse. Its write may already
+            // have reached the device -- own up to owing that whole reply
+            // now, before `reset()` drops the only record of it ([page]).
+            // requestPage()'s write callback retracts this if the write
+            // turns out to have failed (see [owedListingReplies]).
+            if (page?.complete == false) owedListingReplies++
             abortInFlight()
             reset()
         }
@@ -413,13 +476,43 @@ class TileFetcher(
             page = MissingList.PageReader()
             line = if (offset == 0) "missing" else "missing $offset"
         }
+        // Captured before the write, same reason as nextTile()'s `gen`: a
+        // second NEED_TILES can restart the fetch (bumping fetchGen, replacing
+        // `page`) before this write's callback returns. Unguarded, that late
+        // `ok=false` would call finish() on the run that replaced this one --
+        // it has no idea a restart happened, `finish()` takes no argument
+        // saying which run it means (`docs/ble-review-2026-08.md`,
+        // "Stability -- app", item 3).
+        val gen = fetchGen
         armTimeout()
         transport.sendCommand(line) { ok, error ->
+            if (gen != fetchGen) {
+                if (!ok) {
+                    // The debt startListing() registered for this request was
+                    // a guess -- the write might still have reached the
+                    // device. Now it is known it did not: nothing is coming,
+                    // so retract it before it starves the fetch that is live
+                    // now (see [owedListingReplies]).
+                    owedListingReplies--
+                    Log.i(TAG, "a late page-request write failed for gen $gen; retracting its owed reply")
+                } else {
+                    Log.i(TAG, "dropping a late page-request result for gen $gen; fetch has moved on")
+                }
+                return@sendCommand
+            }
             if (!ok) finish("could not ask for the list: ${error ?: "write failed"}")
         }
     }
 
     private fun feedPage(line: String) {
+        if (owedListingReplies > 0) {
+            // A whole stale reply from a request this side abandoned is
+            // still draining (see [owedListingReplies]). Every line up to
+            // and including its own terminating OK belongs to that dead
+            // conversation, not to the live `page`.
+            if (line.trim() == "OK") owedListingReplies--
+            return
+        }
         val reader = page ?: return
         if (!reader.feed(line)) return
         if (reader.unavailable) {
@@ -608,7 +701,13 @@ class TileFetcher(
         skipped++
         listener.onTileDone(missing.z, missing.col, missing.row, 0, false, reason)
         listener.onFetchProgress(sent, skipped, total)
+        // Gen captured for the same reason as requestPage()'s: this write's
+        // callback does nothing but log today, but a late one belongs to a
+        // fetch this side has already walked away from, and the log line
+        // should say so rather than name whatever tile is live now.
+        val gen = fetchGen
         transport.sendCommand("skip ${missing.z} ${missing.col} ${missing.row} $reason") { ok, error ->
+            if (gen != fetchGen) return@sendCommand
             if (!ok) Log.w(TAG, "skip write failed: $error")
         }
         nextTile()
