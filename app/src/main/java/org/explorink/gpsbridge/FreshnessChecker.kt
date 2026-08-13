@@ -131,6 +131,25 @@ class FreshnessChecker(
     private var blockedUntilMs = 0L
     private var backoffMs = BACKOFF_START_MS
 
+    /**
+     * Which check this is -- the same idea as [TileFetcher.fetchGen], bumped
+     * once at every point a check starts or ends ([start], [finish]).
+     *
+     * A second `CHECK_TILES` restarts this state machine exactly the way a
+     * second `NEED_TILES` restarts [TileFetcher]'s: [start] resets whatever
+     * was running and begins a new one before an outstanding write's
+     * callback, or the async index read in [readNextSpan], has had a chance
+     * to return. Neither callback knows a restart happened -- `finish()`
+     * takes no argument saying which check it means, and the index read's
+     * existing `phase != Phase.READING` guard cannot tell two different
+     * checks apart once the new one has *also* reached `READING`, which
+     * looks identical from inside the callback. Every place this class hands
+     * work off and gets called back later captures [checkGen] first and
+     * checks it against the live value before touching any state
+     * (`docs/ble-review-2026-08.md`, "Stability -- app", item 3).
+     */
+    private var checkGen = 0
+
     /** Monotonic milliseconds, injected so the backoff is testable. */
     var nowMs: () -> Long = { System.nanoTime() / 1_000_000L }
 
@@ -170,6 +189,14 @@ class FreshnessChecker(
             Log.i(TAG, "restarting on a second CHECK_TILES")
             reset()
         }
+        // One check is starting, whether this is the first CHECK_TILES or a
+        // restart on a second one -- either way anything left over from
+        // whatever ran before (a pending write, a pending index read) must
+        // not be able to touch what follows. Bumped unconditionally, even
+        // for the count<=0/backoff answers below that never reach LISTING:
+        // the restart branch just above can still have invalidated a run
+        // that was genuinely in flight.
+        checkGen++
         if (count <= 0) {
             // Nothing to check is a real answer and a cheap one. Saying it
             // rather than staying quiet is what lets the device close its own
@@ -194,7 +221,16 @@ class FreshnessChecker(
         phase = Phase.LISTING
         reader = MissingList.HaveReader()
         armTimeout(REPLY_TIMEOUT_MS)
+        // Captured before the write: a second CHECK_TILES can restart this
+        // check (bumping checkGen, resetting reader/phase) before this
+        // write's own callback returns, and that callback has no way to know
+        // -- see [checkGen].
+        val gen = checkGen
         transport.sendCommand("have") { ok, error ->
+            if (gen != checkGen) {
+                Log.i(TAG, "dropping a late 'have' write result for gen $gen; check has moved on")
+                return@sendCommand
+            }
             if (!ok) finish("could not ask for the list: ${error ?: "write failed"}")
         }
     }
@@ -249,11 +285,16 @@ class FreshnessChecker(
             return
         }
         armTimeout(INDEX_TIMEOUT_MS)
+        // Captured before the read, same reason as everywhere else in this
+        // class: a restart can bump checkGen and put the *new* check into
+        // `READING` too, which the phase check alone cannot tell apart from
+        // this one -- see [checkGen].
+        val gen = checkGen
         index.readRange(span.relPath(), span.first, span.last, formatVersion) { result ->
-            // A late read from a check that has already ended must not answer for
-            // the one that replaced it.
-            if (phase != Phase.READING) {
-                Log.i(TAG, "dropping a late index read; the check has ended")
+            // A late read from a check that has already ended, or ended and
+            // was replaced, must not answer for whichever check is live now.
+            if (gen != checkGen || phase != Phase.READING) {
+                Log.i(TAG, "dropping a late index read; the check has ended or moved on")
                 return@readRange
             }
             cancelTimeout()
@@ -295,14 +336,18 @@ class FreshnessChecker(
     // --- answering ----------------------------------------------------------
 
     private fun report() {
+        // Captured once for the whole answer: every write below is part of
+        // closing out this same generation, so one snapshot covers all of
+        // them -- see [checkGen].
+        val gen = checkGen
         for (tile in staleTiles) {
             transport.sendCommand("stale ${tile.z} ${tile.col} ${tile.row}") { ok, error ->
-                if (!ok) Log.w(TAG, "stale write failed: $error")
+                if (gen == checkGen && !ok) Log.w(TAG, "stale write failed: $error")
             }
         }
         if (staleTiles.isNotEmpty()) listener?.onStaleTilesFound(staleTiles.toList())
         if (incomplete) {
-            sendUnknown()
+            sendUnknown(gen)
             finish("index unreachable, ${staleTiles.size} stale found anyway")
             return
         }
@@ -310,20 +355,20 @@ class FreshnessChecker(
         backoffMs = BACKOFF_START_MS
         blockedUntilMs = 0
         val n = staleTiles.size
-        answerChecked(n)
+        answerChecked(n, gen)
         finish("$n stale of $examined")
     }
 
-    private fun answerChecked(n: Int) {
+    private fun answerChecked(n: Int, gen: Int = checkGen) {
         transport.sendCommand("checked $n") { ok, error ->
-            if (!ok) Log.w(TAG, "checked write failed: $error")
+            if (gen == checkGen && !ok) Log.w(TAG, "checked write failed: $error")
         }
     }
 
     /** "I do not know." Never a tile list, and never silence. */
-    private fun answerUnknown() {
+    private fun answerUnknown(gen: Int = checkGen) {
         transport.sendCommand("checked $ANSWER_UNKNOWN") { ok, error ->
-            if (!ok) Log.w(TAG, "checked write failed: $error")
+            if (gen == checkGen && !ok) Log.w(TAG, "checked write failed: $error")
         }
     }
 
@@ -335,8 +380,8 @@ class FreshnessChecker(
      * time waking the radio, spending the timeout and answering nothing. Only a
      * real failed attempt extends it -- see [start].
      */
-    private fun sendUnknown() {
-        answerUnknown()
+    private fun sendUnknown(gen: Int = checkGen) {
+        answerUnknown(gen)
         blockedUntilMs = nowMs() + backoffMs
         backoffMs = minOf(backoffMs * 2, BACKOFF_MAX_MS)
     }
@@ -370,6 +415,11 @@ class FreshnessChecker(
     }
 
     private fun finish(reason: String) {
+        // Every exit from a check comes through here -- done, truncated,
+        // no-viewport, link lost, stopped -- so this is the one place a
+        // check unconditionally ends even when nothing new replaces it,
+        // mirroring TileFetcher.finish()'s fetchGen bump.
+        checkGen++
         val wasExamined = examined
         val wasStale = if (incomplete) -1 else staleTiles.size
         reset()
