@@ -278,6 +278,109 @@ class FreshnessCheckerTest {
         assertEquals(3, h.index.reads.single().formatVersion)
     }
 
+    // --- fast link (T5.3) ----------------------------------------------------
+    //
+    // The listing runs at idle connection parameters otherwise: 9 indication
+    // round trips at measured 688-1503 ms each = 6-14 s against the 15 s
+    // reply timeout (`docs/ble-review-2026-08.md`, "Performance"). Every one
+    // of these checks the link is fast for the ask and handed back exactly
+    // once per exit -- a release that fires twice is as much a bug as one
+    // that never fires, since the underlying link priority is not refcounted
+    // (`BleLink.requestHighPriority`).
+
+    @Test
+    fun `fast link is asserted the moment the have listing starts`() {
+        val h = Harness()
+        h.checker.onCommandLine("CHECK_TILES 1")
+        assertEquals(listOf(true), h.transport.fastLinkCalls)
+    }
+
+    @Test
+    fun `fast link is released exactly once when the check succeeds`() {
+        val h = Harness()
+        h.index.put(13, 4482, 2839, slotA)
+        h.check(HeldTile(13, 4482, 2839, slotA))
+
+        assertEquals(listOf(true, false), h.transport.fastLinkCalls)
+    }
+
+    @Test
+    fun `fast link is released exactly once when the have listing is truncated`() {
+        // Same defect the "lost lines" test above guards against: a
+        // count-mismatch answers `checked unknown`, not a verdict, and the
+        // fast link still has to come back.
+        val h = Harness()
+        h.checker.onCommandLine("CHECK_TILES 4 fmt 3")
+        h.checker.onCommandLine("INFO have_total=4")
+        h.checker.onCommandLine("INFO have_11_1120_710=ec483e47")
+        h.checker.onCommandLine("OK")
+
+        assertEquals(listOf("have", "checked unknown"), h.transport.commands)
+        assertEquals(listOf(true, false), h.transport.fastLinkCalls)
+    }
+
+    @Test
+    fun `fast link is released exactly once when the device stops answering`() {
+        val h = Harness()
+        h.checker.onCommandLine("CHECK_TILES 1")
+        h.scheduler.fire()
+
+        assertEquals(FreshnessChecker.Phase.IDLE, h.checker.phase)
+        assertEquals(listOf(true, false), h.transport.fastLinkCalls)
+    }
+
+    @Test
+    fun `fast link is released exactly once when a hung index read times out`() {
+        // The READING-phase timeout path -- a different armTimeout() branch
+        // than the LISTING one above, both routed through the same finish().
+        val h = Harness()
+        h.index.hang = true
+        h.checker.onCommandLine("CHECK_TILES 1")
+        h.have(HeldTile(13, 4482, 2839, slotA))
+        h.scheduler.fire()
+
+        assertEquals(FreshnessChecker.Phase.IDLE, h.checker.phase)
+        assertEquals(listOf(true, false), h.transport.fastLinkCalls)
+    }
+
+    @Test
+    fun `fast link is released exactly once when the link drops mid-check`() {
+        val h = Harness()
+        h.checker.onCommandLine("CHECK_TILES 1")
+        h.checker.onDisconnected()
+
+        assertEquals(listOf(true, false), h.transport.fastLinkCalls)
+    }
+
+    @Test
+    fun `a restart answered immediately releases the fast link the abandoned listing was holding`() {
+        // The listing/reading phase this restart abandons never reaches
+        // finish() -- start()'s own reset() clears it -- so if the new
+        // CHECK_TILES answers immediately (nothing to check) instead of
+        // reaching a new LISTING, the old run's fast link would otherwise
+        // never come back.
+        val h = Harness()
+        h.checker.onCommandLine("CHECK_TILES 5")
+        assertEquals(listOf(true), h.transport.fastLinkCalls)
+
+        h.checker.onCommandLine("CHECK_TILES 0")
+        assertEquals(listOf(true, false), h.transport.fastLinkCalls)
+        assertEquals(FreshnessChecker.Phase.IDLE, h.checker.phase)
+    }
+
+    @Test
+    fun `a restart into a fresh listing does not release the fast link in between`() {
+        // The common restart case: reasserting true is a harmless no-op on
+        // the link (same as TileFetcher's own restart), and must not be
+        // preceded by a spurious release -- that would be a false "battery
+        // saved" moment mid-check, not a real one.
+        val h = Harness()
+        h.checker.onCommandLine("CHECK_TILES 5")
+        h.checker.onCommandLine("CHECK_TILES 1")
+
+        assertEquals(listOf(true, true), h.transport.fastLinkCalls)
+    }
+
     // --- harness ------------------------------------------------------------
 
     private class Harness {
@@ -392,7 +495,12 @@ class FreshnessCheckerTest {
 
         override fun maxChunkPayload(): Int = 100
 
-        override fun setFastLink(fast: Boolean) = Unit
+        /** Every `setFastLink` call, in order -- true is acquire, false release. */
+        val fastLinkCalls = mutableListOf<Boolean>()
+
+        override fun setFastLink(fast: Boolean) {
+            fastLinkCalls.add(fast)
+        }
     }
 
     private class FakeScheduler : TileFetcher.Scheduler {
