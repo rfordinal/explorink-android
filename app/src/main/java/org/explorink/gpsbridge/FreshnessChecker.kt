@@ -209,6 +209,15 @@ class FreshnessChecker(
         if (!r.complete) return
 
         cancelTimeout()
+        if (r.truncated) {
+            // `checked unknown`, never a verdict: the device must keep believing
+            // its tiles might be stale, or a lost line silently pins an old tile
+            // on the card until something else replaces it.
+            Log.w(TAG, "have listing lost lines: ${r.tiles.size} of ${r.total} arrived")
+            answerUnknown()
+            finish("listing truncated, ${r.tiles.size} of ${r.total}")
+            return
+        }
         val tiles = r.tiles
         examined = tiles.size
         if (tiles.isEmpty()) {

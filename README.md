@@ -277,6 +277,14 @@ phone  -> device  stale <z> <col> <row>          one per differing tile
 phone  -> device  checked <n> | checked unknown
 ```
 
+**`have_total` is checked against the lines that arrive, and a short listing is
+answered `checked unknown`.** Measured on hardware 2026-08-13: a four-tile
+reply arrived as one tile line, and the check reported "0 stale of 1" for a
+screen holding two out-of-date tiles -- the device believed it and kept them for
+nine days. The device-side cause (one BLE indication per reply line, clobbering
+a one-slot queue) is fixed in the firmware; this end refuses to turn a partial
+listing into a verdict either way (`MissingList.HaveReader.truncated`).
+
 `content_id` is `crc32` over the six per-layer `crc32`s a tile already carries,
 so the device computes it with no seek and no read. Never a timestamp:
 `osm_epoch` does not move when only the build rules change, which is exactly the

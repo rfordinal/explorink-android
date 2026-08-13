@@ -165,6 +165,23 @@ class FreshnessCheckerTest {
     }
 
     @Test
+    fun `a have listing that lost lines is answered unknown, never checked`() {
+        // Measured on hardware 2026-08-13: the device answered `have` with
+        // have_total=4 and four tile lines, one indication each, and the phone
+        // received one of them. The check then reported "0 stale of 1" for a
+        // viewport holding two out-of-date tiles, and the device believed it.
+        val h = Harness()
+        h.checker.onCommandLine("CHECK_TILES 4 fmt 3")
+        h.checker.onCommandLine("INFO have_total=4")
+        h.checker.onCommandLine("INFO have_11_1120_710=ec483e47")
+        h.checker.onCommandLine("OK")
+
+        assertEquals(listOf("have", "checked unknown"), h.transport.commands)
+        assertEquals(0, h.index.reads.size)
+        assertEquals(FreshnessChecker.Phase.IDLE, h.checker.phase)
+    }
+
+    @Test
     fun `CHECK_TILES states its own format version, no NEED_TILES required`() {
         // A device with nothing missing never sends NEED_TILES at all -- this
         // used to leave formatVersion null forever, falling back to a stale

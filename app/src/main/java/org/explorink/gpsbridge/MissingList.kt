@@ -161,6 +161,23 @@ object MissingList {
         var total: Int? = null
             private set
 
+        /**
+         * `OK` arrived, but fewer (or more) tile lines than `have_total` did.
+         *
+         * Not a parse error and not something to work around: the reply is one
+         * indication per batch on a link that can drop one, and a listing that
+         * lost lines describes a *different* viewport from the one the device
+         * holds. Comparing it and answering "nothing is stale" is worse than
+         * not answering -- that is exactly what happened until 2026-08-13, when
+         * a five-line reply arrived as one tile line and the check reported
+         * "0 stale of 1" for a screen holding two out-of-date tiles.
+         */
+        val truncated: Boolean
+            get() {
+                val n = total ?: return false
+                return complete && entries.size != n
+            }
+
         /** Feeds one reply line. Returns true if the line belonged to this listing. */
         fun feed(line: String): Boolean {
             val t = line.trim()
