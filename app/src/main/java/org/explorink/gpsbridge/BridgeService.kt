@@ -254,6 +254,13 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     /** Accuracy of the fix the last packet carried, for [SendPolicy]'s correction check. */
     private var lastSentAccuracyM = 0.0
 
+    /**
+     * True from the moment a link comes up until a fix is accepted on it. Holds
+     * back the link's FIRST packet so it carries a live position rather than the
+     * previous ride's ([onBleState], [acceptFix]).
+     */
+    private var awaitingFixSinceConnect = false
+
     /** Consecutive accepted fixes at or under [SendPolicy.PRECISE_ACCURACY_M]. */
     private var preciseFixStreak = 0
 
@@ -549,6 +556,28 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             if (isConnected) {
                 cancelIdleStop()
                 undoStopRequest()
+                // The send policy starts over on every link, which is what
+                // SendPolicy.Reason.FIRST means -- "nothing has been sent yet on
+                // this link". Without this reset the state survived the
+                // disconnect, so a parked rider opening the map screen got no
+                // packet at all: nothing had moved, the 7 s floor was long past,
+                // and the next reason to send was the one-hour keepalive. The
+                // device sat on the fix off its card until the rider rode 50 m.
+                // One packet per reconnect is the cost, and the device needs it:
+                // its BLE server only exists while the map screen is up
+                // (MapActivity::onEnter), so a reconnect *is* the rider asking
+                // where they are.
+                lastSentFix = null
+                lastSentAtMs = 0L
+                lastSentHeading = -1
+                lastSentAccuracyM = 0.0
+                // ...but not out of whatever `lastFix` still holds. GPS runs only
+                // while the link is up, so after a break `lastFix` is the last
+                // fix of the previous ride -- hours old and kilometres away. That
+                // is a worse answer than the fix the device already has off its
+                // card, so the FIRST packet waits for a fix accepted on this link
+                // ([acceptFix]).
+                awaitingFixSinceConnect = true
             } else {
                 armIdleStop()
             }
@@ -1036,6 +1065,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     /** Makes [location] the trusted position: [lastFix], bearing, and the UI/notification. */
     private fun acceptFix(location: Location) {
         lastFix = location
+        awaitingFixSinceConnect = false
 
         val isPrecise = location.hasAccuracy() && location.accuracy <= SendPolicy.PRECISE_ACCURACY_M
         preciseFixStreak = if (isPrecise) preciseFixStreak + 1 else 0
@@ -1109,6 +1139,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private fun trySend() {
         val fix = lastFix ?: return
         if (!ble.isConnected) return
+        // Left over from a previous link, so not worth sending as this link's
+        // position (see [awaitingFixSinceConnect]).
+        if (awaitingFixSinceConnect) return
 
         val nowMs = System.currentTimeMillis()
         val reason = sendReason(nowMs) ?: return

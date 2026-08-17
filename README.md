@@ -422,6 +422,7 @@ confirm.
 | move threshold is raised to | the fix's own accuracy, so a bad fix indoors triggers nothing (no upper bound yet — flagged as a bug in the analysis doc) |
 | move threshold, once the device has said its screen diagonal (`DIAG_M`) | `diagonal_m * 0.008` instead of the flat 50 m — one constant cannot fit every zoom rung, `../docs/ble-map-transfer-protocol.md`, "Viewport diagonal" |
 | also send when | parked, the last packet actually sent carried a fix worse than 20 m accuracy, and the phone has since settled on 3 fixes in a row at ≤10 m (`reason: correction`) — never observed firing on real rides so far, accuracy on this hardware is 3.8 m 95% of the time |
+| always send once | on every new link, `reason: first` — the state above is per-link and resets on connect. Waits for a fix accepted on that link, so it never sends the previous ride's position. Fixed 2026-08-17; before that the state survived the disconnect and a parked rider opening the map screen got no packet at all, `../docs/send-interval-analysis.md` §8 |
 
 What that works out to:
 
