@@ -257,6 +257,15 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     /** Consecutive accepted fixes at or under [SendPolicy.PRECISE_ACCURACY_M]. */
     private var preciseFixStreak = 0
 
+    /**
+     * The ground metres the X4's screen diagonal currently represents, as the
+     * device last stated it (`DIAG_M`, `MissingList.parseDiagonalM`). Null
+     * until one is heard on this link -- an older firmware build never sends
+     * it -- in which case [SendPolicy.moveThresholdM] falls back to its own
+     * constant.
+     */
+    private var lastKnownDiagonalM: Double? = null
+
     private val events = ArrayDeque<String>()
 
     /**
@@ -659,6 +668,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         logger?.logEvent("cmd_in", line, null)
         MissingList.parseNeedTiles(line)?.formatVersion?.let { deviceTileFormat = it }
         MissingList.parseCheckTiles(line)?.formatVersion?.let { deviceTileFormat = it }
+        // A one-shot value, not a listing -- captured here, ahead of the
+        // conversation gate below, so it is never deferred alongside a
+        // NEED_TILES/CHECK_TILES ask.
+        MissingList.parseDiagonalM(line)?.let { lastKnownDiagonalM = it }
 
         // One conversation at a time on this channel.
         //
@@ -1076,7 +1089,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private fun currentAccuracyM(): Double =
         lastFix?.let { if (it.hasAccuracy()) it.accuracy.toDouble() else 0.0 } ?: 0.0
 
-    private fun moveThreshold(): Double = SendPolicy.moveThresholdM(currentAccuracyM())
+    private fun moveThreshold(): Double = SendPolicy.moveThresholdM(currentAccuracyM(), lastKnownDiagonalM)
 
     /** null means "stay quiet"; otherwise the reason, which goes in the log. */
     private fun sendReason(nowMs: Long): SendPolicy.Reason? {
@@ -1089,6 +1102,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             headingChanged = PositionPacket.headingSector(lastBearingDeg) != lastSentHeading,
             lastSentAccuracyM = lastSentAccuracyM,
             consecutivePreciseFixCount = preciseFixStreak,
+            diagonalM = lastKnownDiagonalM,
         )
     }
 

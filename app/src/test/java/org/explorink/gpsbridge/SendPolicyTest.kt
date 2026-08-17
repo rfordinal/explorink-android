@@ -134,6 +134,68 @@ class SendPolicyTest {
     }
 
     @Test
+    fun aKnownDiagonalReplacesTheFlatThreshold() {
+        // Rung 4 (20 m/px, 480x800 px panel): diagonal is ~18,660 m.
+        val diagonalM = 18_660.0
+        val expected = diagonalM * SendPolicy.DIAGONAL_THRESHOLD_FRACTION
+        assertEquals(expected, SendPolicy.moveThresholdM(1.0, diagonalM), 0.01)
+        // Not the flat constant -- the device's own viewport size won.
+        assertEquals(false, expected == SendPolicy.MOVE_THRESHOLD_M)
+    }
+
+    @Test
+    fun noDiagonalHeardYetFallsBackToTheFlatConstant() {
+        // Never heard a DIAG_M on this link -- same behaviour as before this
+        // parameter existed.
+        assertEquals(SendPolicy.MOVE_THRESHOLD_M, SendPolicy.moveThresholdM(1.0, null), 0.0)
+        assertEquals(SendPolicy.MOVE_THRESHOLD_M, SendPolicy.moveThresholdM(1.0), 0.0)
+    }
+
+    @Test
+    fun accuracyStillOverridesADiagonalDerivedThreshold() {
+        // A tiny rung (diagonal near zero, e.g. rung 0) must not let a bad fix
+        // through just because the derived threshold collapsed underneath it.
+        assertEquals(70.0, SendPolicy.moveThresholdM(accuracyM = 70.0, diagonalM = 933.0), 0.0)
+    }
+
+    @Test
+    fun diagonalDerivedThresholdFlowsThroughDecide() {
+        // rung 0 (933 m diagonal): derived threshold ~7.5 m -- far under the
+        // flat 25/50 m constant, so this segment only makes sense once a
+        // diagonal is known. Both movements here are small enough to read as
+        // walking pace, so sinceLastMs is set to WALKING_MIN_INTERVAL_MS --
+        // the floor that actually applies -- rather than MIN_INTERVAL_MS, or
+        // the floor check alone would swallow the result being tested here.
+        val diagonalM = 933.0
+        val derived = diagonalM * SendPolicy.DIAGONAL_THRESHOLD_FRACTION
+
+        // Under the derived threshold: stay quiet.
+        assertNull(
+            SendPolicy.decide(
+                hasSent = true,
+                sinceLastMs = SendPolicy.WALKING_MIN_INTERVAL_MS,
+                movedM = derived - 1.0,
+                accuracyM = acc,
+                headingChanged = false,
+                diagonalM = diagonalM,
+            )
+        )
+        // Over it: MOVED fires, even though this movement would never have
+        // cleared the flat MOVE_THRESHOLD_M constant on its own.
+        assertEquals(
+            SendPolicy.Reason.MOVED,
+            SendPolicy.decide(
+                hasSent = true,
+                sinceLastMs = SendPolicy.WALKING_MIN_INTERVAL_MS,
+                movedM = derived + 1.0,
+                accuracyM = acc,
+                headingChanged = false,
+                diagonalM = diagonalM,
+            ),
+        )
+    }
+
+    @Test
     fun roadSpeedCollapsesToTheFixedCadence() {
         // 90 km/h is 25 m/s, so the move threshold is met well within the 7 s
         // floor, and the floor is the only thing limiting the rate.

@@ -64,6 +64,20 @@ object SendPolicy {
     /** How many precise fixes in a row, so one lucky good fix can't trigger it. */
     const val PRECISE_FIX_STREAK = 3
 
+    /**
+     * [MOVE_THRESHOLD_M] as a fraction of the device's screen diagonal, once
+     * the device has said what that diagonal represents in metres (`DIAG_M`,
+     * `docs/ble-map-transfer-protocol.md`). One constant otherwise has to
+     * guess at every zoom rung at once -- `docs/send-interval-analysis.md`
+     * measured the real per-rung move floor at 0.21% of the diagonal at the
+     * coarsest rung to 1.29% at the finest, not a single ratio. This splits
+     * the difference for the rungs actually ridden so far (2-4, ~0.8-0.9%
+     * there) and, like the zoom ladder's own move-floor and label-count
+     * constants (`zoom-rungs.md`), is a comfort call that needs on-device
+     * tuning, not a measured one.
+     */
+    const val DIAGONAL_THRESHOLD_FRACTION = 0.008
+
     enum class Reason {
         /** Nothing has been sent yet on this link. */
         FIRST,
@@ -88,8 +102,17 @@ object SendPolicy {
     /**
      * Movement has to beat the fix's own accuracy, or a bad fix indoors triggers
      * sends for movement the phone never made.
+     *
+     * @param diagonalM the ground metres the device's screen diagonal
+     *   currently represents (`MissingList.parseDiagonalM`), or null before
+     *   the device has ever said -- an older firmware build, or no `DIAG_M`
+     *   heard yet on this link. Falls back to [MOVE_THRESHOLD_M] either way,
+     *   so a phone that never hears one behaves exactly as before.
      */
-    fun moveThresholdM(accuracyM: Double): Double = maxOf(MOVE_THRESHOLD_M, accuracyM)
+    fun moveThresholdM(accuracyM: Double, diagonalM: Double? = null): Double {
+        val base = diagonalM?.let { it * DIAGONAL_THRESHOLD_FRACTION } ?: MOVE_THRESHOLD_M
+        return maxOf(base, accuracyM)
+    }
 
     /**
      * Average speed since the last send. There is no live speed reading here on
@@ -110,6 +133,7 @@ object SendPolicy {
      * @param lastSentAccuracyM the accuracy of the fix the last packet actually carried
      * @param consecutivePreciseFixCount how many fixes in a row have been at or
      *   under [PRECISE_ACCURACY_M]
+     * @param diagonalM see [moveThresholdM]
      * @return why to send now, or null to stay quiet
      */
     fun decide(
@@ -120,6 +144,7 @@ object SendPolicy {
         headingChanged: Boolean,
         lastSentAccuracyM: Double = 0.0,
         consecutivePreciseFixCount: Int = 0,
+        diagonalM: Double? = null,
     ): Reason? {
         if (!hasSent) return Reason.FIRST
 
@@ -137,7 +162,7 @@ object SendPolicy {
 
         val floorMs = if (isWalkingPace(movedM, sinceLastMs)) WALKING_MIN_INTERVAL_MS else MIN_INTERVAL_MS
         if (sinceLastMs < floorMs) return null
-        if (movedM >= moveThresholdM(accuracyM)) return Reason.MOVED
+        if (movedM >= moveThresholdM(accuracyM, diagonalM)) return Reason.MOVED
         if (headingChanged && movedM >= HEADING_MIN_MOVE_M) return Reason.HEADING
         if (sinceLastMs >= KEEPALIVE_INTERVAL_MS) return Reason.KEEPALIVE
         return null

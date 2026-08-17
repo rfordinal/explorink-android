@@ -420,6 +420,7 @@ confirm.
 | in between, send when | the position moved **50 m** from the last sent one |
 | also send when | the 16-sector heading changed **and** at least 10 m was covered |
 | move threshold is raised to | the fix's own accuracy, so a bad fix indoors triggers nothing (no upper bound yet — flagged as a bug in the analysis doc) |
+| move threshold, once the device has said its screen diagonal (`DIAG_M`) | `diagonal_m * 0.008` instead of the flat 50 m — one constant cannot fit every zoom rung, `../docs/ble-map-transfer-protocol.md`, "Viewport diagonal" |
 | also send when | parked, the last packet actually sent carried a fix worse than 20 m accuracy, and the phone has since settled on 3 fixes in a row at ≤10 m (`reason: correction`) — never observed firing on real rides so far, accuracy on this hardware is 3.8 m 95% of the time |
 
 What that works out to:
@@ -449,7 +450,11 @@ had been quiet (`since_last_ms`). The header carries the four bounds. A reader
 therefore knows which policy produced the file and can replace it.
 
 `SendPolicy` is deliberately free of Android types: it is the part with the
-reasoning in it, so it is the part with unit tests on it (11 of them).
+reasoning in it, so it is the part with unit tests on it (21 of them).
+`BridgeService` holds the one piece of state `SendPolicy` itself must not —
+`lastKnownDiagonalM`, the last `DIAG_M` heard on this link — and passes it in
+as a parameter, the same way it already holds `lastSentFix` and
+`preciseFixStreak`.
 
 ## Fix gate
 

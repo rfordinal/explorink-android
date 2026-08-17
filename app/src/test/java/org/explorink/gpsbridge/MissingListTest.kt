@@ -61,6 +61,21 @@ class MissingListTest {
     }
 
     @Test
+    fun `viewport diagonal is parsed`() {
+        assertEquals(18660.0, MissingList.parseDiagonalM("DIAG_M 18660.0"))
+        assertEquals(18660.0, MissingList.parseDiagonalM("  DIAG_M 18660.0  "))
+        assertEquals(933.0, MissingList.parseDiagonalM("DIAG_M 933"))
+    }
+
+    @Test
+    fun `lines that are not a viewport diagonal parse to null`() {
+        assertNull(MissingList.parseDiagonalM("NEED_TILES 3 fmt 2"))
+        assertNull(MissingList.parseDiagonalM("DIAG_MISSING 1.0"))
+        assertNull(MissingList.parseDiagonalM("DIAG_M not-a-number"))
+        assertNull(MissingList.parseDiagonalM("DIAG_M"))
+    }
+
+    @Test
     fun `a page reads its entries in the order the device sent them`() {
         val page = MissingList.PageReader()
         listOf(

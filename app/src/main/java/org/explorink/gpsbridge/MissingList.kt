@@ -89,6 +89,26 @@ object MissingList {
     fun isFetchCancel(line: String): Boolean = line.trim() == "FETCH_CANCEL"
 
     /**
+     * The device stating the ground distance its screen's diagonal currently
+     * represents, in metres: `DIAG_M <metres>`. Sent unprompted once per zoom
+     * change and once per reconnect (`MapActivity::sendViewportDiagonalIfChanged()`
+     * in the firmware) -- not a listing, no reply expected, same shape as
+     * [isFetchCancel].
+     *
+     * This is what lets the phone size its GPS send-move threshold to what the
+     * panel can actually show instead of one constant guessing at every zoom
+     * rung -- `docs/send-interval-analysis.md`. Null when the line is
+     * something else, or the number after it does not parse -- an older
+     * firmware build simply never sends this line at all, and [SendPolicy]
+     * falls back to its own constant when it never hears one.
+     */
+    fun parseDiagonalM(line: String): Double? {
+        val t = line.trim()
+        if (!t.startsWith("DIAG_M")) return null
+        return t.removePrefix("DIAG_M").trim().toDoubleOrNull()
+    }
+
+    /**
      * The device asking whether the tiles it already holds are still current:
      * `CHECK_TILES <count> fmt <version>`.
      *
