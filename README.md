@@ -405,27 +405,37 @@ each, then fall back to the filtered scan.
 ## Send policy
 
 `SendPolicy.kt`. Distance-driven, not clock-driven — which makes it
-speed-adaptive with no speed term in the decision at all.
+speed-adaptive **only below ~26 km/h**. Above that the time floor alone
+always covers more ground than the move threshold requires, so the policy
+behaves like a plain fixed-interval timer; see
+[`../docs/send-interval-analysis.md`](../docs/send-interval-analysis.md) for
+the real-ride data this was checked against and what it did and didn't
+confirm.
 
 | | |
 |---|---|
-| never faster than | **5 s** — the floor |
+| never faster than | **7 s** — the floor |
+| at walking pace (≤2.2 m/s avg since last send) | **30 s** floor instead |
 | never slower than | **60 min** — the keep-alive, so the device knows the phone is alive |
-| in between, send when | the position moved **25 m** from the last sent one |
+| in between, send when | the position moved **50 m** from the last sent one |
 | also send when | the 16-sector heading changed **and** at least 10 m was covered |
-| move threshold is raised to | the fix's own accuracy, so a bad fix indoors triggers nothing |
+| move threshold is raised to | the fix's own accuracy, so a bad fix indoors triggers nothing (no upper bound yet — flagged as a bug in the analysis doc) |
+| also send when | parked, the last packet actually sent carried a fix worse than 20 m accuracy, and the phone has since settled on 3 fixes in a row at ≤10 m (`reason: correction`) — never observed firing on real rides so far, accuracy on this hardware is 3.8 m 95% of the time |
 
 What that works out to:
 
 | Situation | Packets |
 |---|---|
-| 90 km/h on a road | one every 5 s — the floor, same as the old fixed cadence |
-| 18 km/h | one every 5 s, the break-even point |
+| 100+ km/h on a highway | one every 7 s — the floor; the 50 m threshold never binds here |
+| 25.7 km/h | the break-even point (50 m / 7 s) |
 | 5 km/h hiking | one every ~18 s |
-| parked, lunch break | one an hour |
+| parked, lunch break | one an hour, or none if nothing needed correcting |
 
 The heading rule needs real movement behind it because a stationary phone's
-bearing wanders across all 16 sectors on GPS noise alone.
+bearing wanders across all 16 sectors on GPS noise alone — though real ride
+data found this alone isn't enough at a dead stop (a rider walking to a fuel
+pump clears 10 m easily); gating it on vehicle speed instead is one of the
+analysis doc's recommendations, not yet built.
 
 Location updates stay at 1 Hz regardless — the policy gates the **BLE write**,
 not the fix rate. The raw-fix stream in the recording stays dense, which is what
