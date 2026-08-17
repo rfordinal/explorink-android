@@ -571,12 +571,17 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
                 lastSentAtMs = 0L
                 lastSentHeading = -1
                 lastSentAccuracyM = 0.0
-                // ...but not out of whatever `lastFix` still holds. GPS runs only
-                // while the link is up, so after a break `lastFix` is the last
-                // fix of the previous ride -- hours old and kilometres away. That
-                // is a worse answer than the fix the device already has off its
-                // card, so the FIRST packet waits for a fix accepted on this link
-                // ([acceptFix]).
+                // ...but not out of whatever `lastFix` still holds. With the link
+                // down and no recording running, GPS is off ([updatePowerState]
+                // asks for it on `CONNECTED || isRecording`), so after a break
+                // `lastFix` is the last fix of the previous ride -- hours old and
+                // kilometres away. That is a worse answer than the fix the device
+                // already has off its card, so the FIRST packet waits for a fix
+                // accepted on this link ([acceptFix]).
+                //
+                // A rider who started a recording by hand had GPS running the
+                // whole time, so their `lastFix` is fresh and this costs one 1 Hz
+                // tick for nothing. Harmless, and not worth a second code path.
                 awaitingFixSinceConnect = true
             } else {
                 armIdleStop()
