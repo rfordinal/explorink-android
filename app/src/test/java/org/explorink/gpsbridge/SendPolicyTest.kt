@@ -10,7 +10,7 @@ import org.junit.Test
  */
 class SendPolicyTest {
 
-    private val acc = 5.0 // a normal outdoor fix, below the 25 m move threshold
+    private val acc = 5.0 // a normal outdoor fix, below the 50 m move threshold
 
     @Test
     fun firstPacketAlwaysGoes() {
@@ -28,11 +28,11 @@ class SendPolicyTest {
 
     @Test
     fun nothingGoesFasterThanTheFloor() {
-        // Moving fast enough to earn a packet, but only 4 s since the last one.
+        // Moving fast enough to earn a packet, but only 6 s since the last one.
         assertNull(
             SendPolicy.decide(
                 hasSent = true,
-                sinceLastMs = 4_999,
+                sinceLastMs = 6_999,
                 movedM = 1000.0,
                 accuracyM = acc,
                 headingChanged = true,
@@ -46,8 +46,8 @@ class SendPolicyTest {
             SendPolicy.Reason.MOVED,
             SendPolicy.decide(
                 hasSent = true,
-                sinceLastMs = 5_000,
-                movedM = 25.0,
+                sinceLastMs = 7_000,
+                movedM = 50.0,
                 accuracyM = acc,
                 headingChanged = false,
             ),
@@ -118,32 +118,32 @@ class SendPolicyTest {
 
     @Test
     fun aBadFixRaisesTheThresholdInsteadOfTriggering() {
-        // Indoors: 40 m of "movement" with 40 m of accuracy is not movement.
+        // Indoors: 65 m of "movement" with 70 m of accuracy is not movement.
         assertNull(
             SendPolicy.decide(
                 hasSent = true,
                 sinceLastMs = 30_000,
-                movedM = 39.0,
-                accuracyM = 40.0,
+                movedM = 65.0,
+                accuracyM = 70.0,
                 headingChanged = false,
             )
         )
-        assertEquals(40.0, SendPolicy.moveThresholdM(40.0), 0.0)
+        assertEquals(70.0, SendPolicy.moveThresholdM(70.0), 0.0)
         // A good fix never lowers it below the constant.
         assertEquals(SendPolicy.MOVE_THRESHOLD_M, SendPolicy.moveThresholdM(1.0), 0.0)
     }
 
     @Test
-    fun roadSpeedCollapsesToTheOldFixedCadence() {
-        // 90 km/h is 25 m/s, so the move threshold is met within a second and the
-        // 5 s floor is the only thing limiting the rate.
-        val movedInFiveSeconds = 25.0 * 5
+    fun roadSpeedCollapsesToTheFixedCadence() {
+        // 90 km/h is 25 m/s, so the move threshold is met well within the 7 s
+        // floor, and the floor is the only thing limiting the rate.
+        val movedInSevenSeconds = 25.0 * 7
         assertEquals(
             SendPolicy.Reason.MOVED,
             SendPolicy.decide(
                 hasSent = true,
                 sinceLastMs = SendPolicy.MIN_INTERVAL_MS,
-                movedM = movedInFiveSeconds,
+                movedM = movedInSevenSeconds,
                 accuracyM = acc,
                 headingChanged = false,
             ),
@@ -151,24 +151,24 @@ class SendPolicyTest {
     }
 
     @Test
-    fun hikingPaceSendsEveryTwentySecondsish() {
-        // 5 km/h is 1.39 m/s. At 5 s only 7 m has passed: quiet.
+    fun hikingPaceSendsEveryThirtysixSecondsish() {
+        // 5 km/h is 1.39 m/s. At 7 s only 9.7 m has passed: quiet.
         assertNull(
             SendPolicy.decide(
                 hasSent = true,
-                sinceLastMs = 5_000,
-                movedM = 1.39 * 5,
+                sinceLastMs = 7_000,
+                movedM = 1.39 * 7,
                 accuracyM = acc,
                 headingChanged = false,
             )
         )
-        // By 18 s it is 25 m: send.
+        // By 36 s it is just past 50 m: send.
         assertEquals(
             SendPolicy.Reason.MOVED,
             SendPolicy.decide(
                 hasSent = true,
-                sinceLastMs = 18_000,
-                movedM = 1.39 * 18,
+                sinceLastMs = 36_000,
+                movedM = 1.39 * 36,
                 accuracyM = acc,
                 headingChanged = false,
             ),
@@ -185,7 +185,102 @@ class SendPolicyTest {
 
     @Test
     fun boundsAreWhatTheBriefAsksFor() {
-        assertEquals(5_000L, SendPolicy.MIN_INTERVAL_MS)
+        assertEquals(7_000L, SendPolicy.MIN_INTERVAL_MS)
         assertEquals(60L * 60L * 1000L, SendPolicy.KEEPALIVE_INTERVAL_MS)
+        assertEquals(30_000L, SendPolicy.WALKING_MIN_INTERVAL_MS)
+    }
+
+    @Test
+    fun walkingPaceBlocksAMoveThatWouldOtherwiseQualify() {
+        // 50 m in 25 s is 2 m/s -- walking pace -- and clears the 50 m move
+        // threshold, but the 30 s walking floor hasn't elapsed yet.
+        assertNull(
+            SendPolicy.decide(
+                hasSent = true,
+                sinceLastMs = 25_000,
+                movedM = 50.0,
+                accuracyM = acc,
+                headingChanged = false,
+            )
+        )
+    }
+
+    @Test
+    fun walkingPaceSendsOnceItsOwnFloorElapses() {
+        // Same 2 m/s pace, now 30 s in: the walking floor is satisfied.
+        assertEquals(
+            SendPolicy.Reason.MOVED,
+            SendPolicy.decide(
+                hasSent = true,
+                sinceLastMs = 30_000,
+                movedM = 60.0,
+                accuracyM = acc,
+                headingChanged = false,
+            ),
+        )
+    }
+
+    @Test
+    fun correctionFiresWhenABadFixSettlesWhileParked() {
+        assertEquals(
+            SendPolicy.Reason.CORRECTION,
+            SendPolicy.decide(
+                hasSent = true,
+                sinceLastMs = SendPolicy.STATIONARY_MIN_MS,
+                movedM = SendPolicy.STATIONARY_MOVE_MAX_M,
+                accuracyM = SendPolicy.PRECISE_ACCURACY_M,
+                headingChanged = false,
+                lastSentAccuracyM = SendPolicy.NOT_PRECISE_ACCURACY_M + 0.1,
+                consecutivePreciseFixCount = SendPolicy.PRECISE_FIX_STREAK,
+            ),
+        )
+    }
+
+    @Test
+    fun correctionWaitsForTheStreak() {
+        // One precise fix short of the streak: stay quiet, not a lucky single fix.
+        assertNull(
+            SendPolicy.decide(
+                hasSent = true,
+                sinceLastMs = SendPolicy.STATIONARY_MIN_MS,
+                movedM = SendPolicy.STATIONARY_MOVE_MAX_M,
+                accuracyM = SendPolicy.PRECISE_ACCURACY_M,
+                headingChanged = false,
+                lastSentAccuracyM = SendPolicy.NOT_PRECISE_ACCURACY_M + 0.1,
+                consecutivePreciseFixCount = SendPolicy.PRECISE_FIX_STREAK - 1,
+            )
+        )
+    }
+
+    @Test
+    fun correctionWaitsForTheStationaryTime() {
+        // Parked only 9.999 s: correction hasn't earned its bypass yet.
+        assertNull(
+            SendPolicy.decide(
+                hasSent = true,
+                sinceLastMs = SendPolicy.STATIONARY_MIN_MS - 1,
+                movedM = SendPolicy.STATIONARY_MOVE_MAX_M,
+                accuracyM = SendPolicy.PRECISE_ACCURACY_M,
+                headingChanged = false,
+                lastSentAccuracyM = SendPolicy.NOT_PRECISE_ACCURACY_M + 0.1,
+                consecutivePreciseFixCount = SendPolicy.PRECISE_FIX_STREAK,
+            )
+        )
+    }
+
+    @Test
+    fun correctionIgnoresAnAlreadyGoodLastSentFix() {
+        // The last sent fix was already at the "not precise" boundary, not past it.
+        assertNull(
+            SendPolicy.decide(
+                hasSent = true,
+                sinceLastMs = SendPolicy.STATIONARY_MIN_MS,
+                movedM = SendPolicy.STATIONARY_MOVE_MAX_M,
+                accuracyM = SendPolicy.PRECISE_ACCURACY_M,
+                headingChanged = false,
+                lastSentAccuracyM = SendPolicy.NOT_PRECISE_ACCURACY_M,
+                consecutivePreciseFixCount = SendPolicy.PRECISE_FIX_STREAK,
+            )
+        )
     }
 }

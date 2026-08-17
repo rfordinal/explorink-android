@@ -251,6 +251,12 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private var lastSentHeading = -1
     private var lastSendReason: String? = null
 
+    /** Accuracy of the fix the last packet carried, for [SendPolicy]'s correction check. */
+    private var lastSentAccuracyM = 0.0
+
+    /** Consecutive accepted fixes at or under [SendPolicy.PRECISE_ACCURACY_M]. */
+    private var preciseFixStreak = 0
+
     private val events = ArrayDeque<String>()
 
     /**
@@ -1018,6 +1024,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private fun acceptFix(location: Location) {
         lastFix = location
 
+        val isPrecise = location.hasAccuracy() && location.accuracy <= SendPolicy.PRECISE_ACCURACY_M
+        preciseFixStreak = if (isPrecise) preciseFixStreak + 1 else 0
+
         headingHistory.addLast(
             HeadingTrend.Point(location.latitude, location.longitude, location.elapsedRealtimeNanos)
         )
@@ -1078,6 +1087,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             movedM = movedSinceLastSent() ?: 0.0,
             accuracyM = currentAccuracyM(),
             headingChanged = PositionPacket.headingSector(lastBearingDeg) != lastSentHeading,
+            lastSentAccuracyM = lastSentAccuracyM,
+            consecutivePreciseFixCount = preciseFixStreak,
         )
     }
 
@@ -1119,6 +1130,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // back next.
         lastSentFix = Location(fix)
         lastSentHeading = heading
+        lastSentAccuracyM = accuracyM
         lastSendReason = reason.logName
 
         ble.write(bytes) { ok, error ->
