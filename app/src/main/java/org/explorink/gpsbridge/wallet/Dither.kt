@@ -77,6 +77,29 @@ class MonoImage(val width: Int, val height: Int, val pixels: ByteArray) {
 
     operator fun get(x: Int, y: Int): Int = pixels[y * width + x].toInt() and 0xff
 
+    companion object {
+        /**
+         * Inverse of [pack1bpp]: MSB-first 1bpp rows back to one byte per pixel.
+         * Same polarity, read the other way -- **bit 1 = white**, bit 0 = black ink.
+         */
+        fun unpack1bpp(data: ByteArray, width: Int, height: Int): MonoImage {
+            val stride = (width + 7) / 8
+            require(data.size == stride * height) {
+                "expected ${stride * height} bytes for ${width}x$height, got ${data.size}"
+            }
+            val px = ByteArray(width * height)
+            for (y in 0 until height) {
+                val rowBase = y * stride
+                val outBase = y * width
+                for (x in 0 until width) {
+                    val bit = (data[rowBase + (x shr 3)].toInt() shr (7 - (x and 7))) and 1
+                    px[outBase + x] = if (bit != 0) 255.toByte() else 0
+                }
+            }
+            return MonoImage(width, height, px)
+        }
+    }
+
     /**
      * Pack a logical region into panel-native byte order, the last step before an
      * asset payload is written.
@@ -117,6 +140,30 @@ class MonoImage(val width: Int, val height: Int, val pixels: ByteArray) {
         }
         return out
     }
+
+    /**
+     * Inverse of [packNativeRegion] over a whole asset: panel-native bytes back to
+     * the logical portrait image the rider sees.
+     *
+     * From the same rule, read backwards: `logical(x, y) = native(y, LW - 1 - x)`,
+     * with `LW` = the logical width = this image's height. Used by the verify loop
+     * ([CodeReader.decodeAsset]) and by the on-phone code viewer; the device never
+     * does this -- it blits.
+     */
+    fun unrotateNative(): MonoImage {
+        val lw = height          // logical width  == native row count
+        val lh = width           // logical height == native column count
+        val out = ByteArray(lw * lh)
+        for (y in 0 until lh) {
+            for (x in 0 until lw) {
+                out[y * lw + x] = pixels[(lw - 1 - x) * width + y]
+            }
+        }
+        return MonoImage(lw, lh, out)
+    }
+
+    /** 0/255 pixels as an 8-bit grey raster, for a decoder or a preview. */
+    fun toGray(): GrayImage = GrayImage(width, height, pixels.copyOf())
 
     /**
      * Pack without rotating: MSB-first rows of this image as it stands. Used for a

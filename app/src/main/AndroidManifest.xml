@@ -109,6 +109,14 @@
             android:label="Wallet item"
             android:screenOrientation="portrait" />
 
+        <!-- One machine-readable code, full screen, decoded from the stored asset
+             (phase P5). Not locked to portrait: a landscape code is meant to be
+             looked at sideways. -->
+        <activity
+            android:name=".wallet.WalletCodeActivity"
+            android:exported="false"
+            android:label="Wallet code" />
+
         <service
             android:name=".BridgeService"
             android:exported="false"

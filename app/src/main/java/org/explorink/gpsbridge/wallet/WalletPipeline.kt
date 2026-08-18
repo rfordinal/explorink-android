@@ -33,6 +33,25 @@ class WalletPipeline(
         val name: String,
         val dpiX: Double? = null,
         val dpiY: Double? = null,
+        /**
+         * Machine-readable codes to put on this page (phase P5). The pipeline
+         * regenerates each one clean from its payload; it never crops the photo.
+         * `WalletImporter` fills this in from [CodeReader.detect].
+         */
+        val codes: List<CodeRequest> = emptyList(),
+    )
+
+    /**
+     * One code to render onto its own full-screen asset.
+     *
+     * [orientation] is `"auto"` (the arithmetic decides), `"portrait"` or
+     * `"landscape"`. Forcing it is what puts both variants of one payload on a
+     * card, the same as the generator's `--code-both-orientations`.
+     */
+    class CodeRequest(
+        val symbology: Symbology,
+        val payload: String,
+        val orientation: String = "auto",
     )
 
     /**
@@ -62,7 +81,7 @@ class WalletPipeline(
         }
 
         val perPage = assetsPerPage(resolvedPaper)
-        val total = perPage * sources.size
+        val total = perPage * sources.size + sources.sumOf { it.codes.size }
         var done = 0
 
         val pages = ArrayList<WalletPage>(sources.size)
@@ -70,7 +89,8 @@ class WalletPipeline(
             val pageId = "p%03d".format(i + 1)
             // Step 2: deterministic contrast, once, on the full-resolution grey.
             val gray = source.gray.autocontrast(WalletFormat.AUTOCONTRAST_CUTOFF)
-            pages.add(buildPage(itemId, pageId, gray, resolvedPaper, version, sink) {
+            pages.add(buildPage(itemId, pageId, gray, resolvedPaper, version, sink,
+                source.codes) {
                 done++
                 progress?.invoke(done, total)
             })
@@ -105,6 +125,7 @@ class WalletPipeline(
         paper: String,
         version: Int,
         sink: AssetSink,
+        codes: List<CodeRequest>,
         tick: () -> Unit,
     ): WalletPage {
         val levels = LinkedHashMap<String, WalletLevel>()
@@ -144,9 +165,65 @@ class WalletPipeline(
             }
             levels[level] = WalletLevel(cols, rows, dx, dy, entries, pi)
         }
-        // Codes are phase P5 on this side. The list exists so the manifest shape
-        // is final now.
-        return WalletPage(pageId, paper, levels, emptyList())
+        val codeEntries = ArrayList<MachineReadableCode>(codes.size)
+        for ((index, request) in codes.withIndex()) {
+            codeEntries.add(buildCode(sink, itemId, pageId, index, request, version))
+            tick()
+        }
+        return WalletPage(pageId, paper, levels, codeEntries)
+    }
+
+    // --- machine-readable codes (phase P5) -----------------------------------
+
+    /**
+     * Render, store and verify one code. The manifest entry comes back.
+     *
+     * `verified` is the result of decoding the **stored** asset and nothing else
+     * (`docs/wallet-format.md` section 10). A false here means the code must not
+     * be presented to the rider as trusted; it is not a warning to swallow.
+     *
+     * `index` is the code's position in the page's flat code list, and it is also
+     * the asset id's index -- so the two orientations of one payload get two ids
+     * with no special scheme.
+     */
+    private fun buildCode(
+        sink: AssetSink,
+        itemId: String,
+        pageId: String,
+        index: Int,
+        request: CodeRequest,
+        version: Int,
+    ): MachineReadableCode {
+        val rendered = CodeWriter.render(request.symbology, request.payload, panel,
+            request.orientation)
+        val layout = rendered.layout
+        val payload = CodeWriter.pack(rendered.canvas, panel, layout.orientation)
+        if (payload.size != panel.assetBytes) {
+            throw AssertionError(
+                "code asset is ${payload.size} bytes, panel ${panel.name} wants ${panel.assetBytes}")
+        }
+        val aid = WalletFormat.assetId(panel.name, itemId, pageId,
+            WalletFormat.ASSET_MACHINE_CODE, index, version)
+        val entry = writeAsset(sink, aid, WalletFormat.ASSET_MACHINE_CODE, 0, 0, payload, version,
+            width = panel.width, height = panel.height, rowBytes = panel.rowBytes,
+            presentation = layout.presentation)
+        val verified = CodeReader.verify(payload, panel, request.symbology, request.payload,
+            layout.presentation)
+        return MachineReadableCode(
+            id = "c%03d".format(index + 1),
+            symbology = request.symbology.key,
+            payload = request.payload,
+            verified = verified,
+            assetId = aid,
+            orientation = layout.orientation,
+            presentation = layout.presentation,
+            moduleSize = layout.moduleSize,
+            quietZone = layout.quietZone,
+            codeWidthPx = layout.codeWidthPx,
+            codeHeightPx = layout.codeHeightPx,
+            sha256 = entry.sha256,
+            rleLen = entry.rleLen,
+        )
     }
 
     /**

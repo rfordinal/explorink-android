@@ -62,7 +62,8 @@ object WalletImporter {
             val itemId = WalletFormat.itemIdFor(finalTitle, names)
             val pipeline = WalletPipeline(Panels.byName(store.panelName))
             val sources = loaded.map {
-                WalletPipeline.PageSource(it.gray, it.name, it.dpiX, it.dpiY)
+                WalletPipeline.PageSource(it.gray, it.name, it.dpiX, it.dpiY,
+                    codes = detectCodes(it))
             }
             var page = 0
             val item = pipeline.buildItem(
@@ -87,6 +88,35 @@ object WalletImporter {
             Log.w(TAG, "import failed", t)
             Outcome.Failed(t.message ?: t.javaClass.simpleName)
         }
+    }
+
+    /**
+     * Codes on one imported page (phase P5).
+     *
+     * Runs on the grey pixels **as decoded**, before `autocontrast`: that is the
+     * photograph, and the fewer steps between the camera and the decoder the
+     * better. Only the payload and the symbology are taken from it -- the code the
+     * device shows is regenerated clean by [CodeWriter], never cropped out of the
+     * photo (`docs/wallet-format.md` section 10).
+     *
+     * Never fails an import. A page with no code is the normal case (a passport
+     * spread, a photo of a contract), and a decoder that throws on a damaged
+     * region must not cost the rider the whole document.
+     */
+    fun detectCodes(page: ImageImport.Loaded): List<WalletPipeline.CodeRequest> {
+        val found = try {
+            CodeReader.detect(page.gray)
+        } catch (t: Throwable) {
+            Log.w(TAG, "code detection failed on ${page.name}", t)
+            return emptyList()
+        }
+        for (f in found) {
+            // The payload is personal data (a boarding pass names its passenger),
+            // so the log gets the symbology and a length, never the text.
+            Log.i(TAG, "code on ${page.name}: ${f.symbology.key}, " +
+                "${f.payload.length} chars, found at ${f.stage}")
+        }
+        return found.map { WalletPipeline.CodeRequest(it.symbology, it.payload) }
     }
 
     /**

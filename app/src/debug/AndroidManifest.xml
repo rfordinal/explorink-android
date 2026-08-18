@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug-only additions. Merged into the main manifest for the debug variant
+     only, so a release build has none of this.
+
+     The self-test activity is exported because `adb shell am start` cannot launch
+     a non-exported one, and the whole point of it is to be driven from adb: it
+     reads image files out of the app's private directory and reports what code
+     detection made of them (phase P5, `docs/android-wallet.md` section 13). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <activity
+            android:name=".wallet.WalletCodeSelfTestActivity"
+            android:exported="true"
+            android:label="Wallet code self-test" />
+    </application>
+</manifest>

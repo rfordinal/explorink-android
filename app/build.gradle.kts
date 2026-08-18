@@ -74,6 +74,20 @@ dependencies {
     // which is what this app targets. 1.19.0 demands SDK 37 / AGP 9.
     implementation("androidx.core:core-ktx:1.17.0")
 
+    // Machine-readable codes (phase P5, `docs/android-wallet.md` section 13).
+    // The second dependency this app has ever taken, and the reason is the verify
+    // loop: a code is worthless unless the STORED asset decodes back, so the
+    // library has to both write and read all six symbologies, offline.
+    //
+    // Pure Java, so the whole code path -- write, render, pack, decode, verify --
+    // runs in `./gradlew test` on the laptop against fixtures from
+    // `tools/walletgen.py`. That is what makes parity checkable at all; the
+    // alternatives are native (zxing-cpp's Android AAR, 2.9 MB, JNI only) or
+    // read-only (ML Kit barcode-scanning bundled, 9.9 MB, no writer), and neither
+    // can be exercised in a JVM unit test. Costs and the full comparison:
+    // `docs/android-wallet.md` section 13.
+    implementation("com.google.zxing:core:3.5.3")
+
     // The 19-byte encoder, the transfer wire format and the tile-fetch state
     // machine are pure JVM code, so they are checked on the laptop rather than
     // only on the phone. `unitTests.isReturnDefaultValues` above is what lets

@@ -25,8 +25,11 @@ minSdk 31, targetSdk 36, compileSdk 36. Debug-signed only.
    transfer channel. See "Fetching missing tiles" below.
 5. Renders documents into Personal Wallet assets for the device: gallery picker
    or Android share target, one item per document, panel-native 1bpp screens
-   plus a manifest, byte-identical to `tools/walletgen.py`. Nothing is sent to
-   the device yet -- the sync phase does not exist. See `../docs/android-wallet.md`.
+   plus a manifest, byte-identical to `tools/walletgen.py`. Finds the
+   machine-readable codes in an imported photo, regenerates each one clean on its
+   own full screen, and marks it verified only when the stored bytes decode back
+   (phase P5). Nothing is sent to the device yet -- the sync phase does not
+   exist. See `../docs/android-wallet.md`.
 
 Items 1-4 run in a foreground service, so they keep going with the screen
 locked and the app swiped away. The wallet is a plain screen: no service, no
@@ -556,12 +559,14 @@ android/
                          its layer directory
     TileSource.kt        the CDN seam: tiles, with ?crc= and verification
     IndexSource.kt       the CDN seam for index byte ranges
-    wallet/              Personal Wallet (phase P4): data model, JSON manifest
-                         store, the image pipeline (Pillow-identical Lanczos and
-                         Floyd-Steinberg, native rotation, RLE sidecar), the
-                         share target and the two screens. Everything except
-                         ImageImport/WalletImporter and the activities is plain
-                         JVM code, so the pipeline is unit-tested on the laptop.
+    wallet/              Personal Wallet (phases P4 and P5): data model, JSON
+                         manifest store, the image pipeline (Pillow-identical
+                         Lanczos and Floyd-Steinberg, native rotation, RLE
+                         sidecar), machine-readable codes (CodeLayout,
+                         CodeWriter, CodeReader), the share target and the three
+                         screens. Everything except ImageImport/WalletImporter
+                         and the activities is plain JVM code, so the pipeline
+                         and the whole code path are unit-tested on the laptop.
                          ../docs/android-wallet.md
   app/src/test/java/...  PositionPacketTest, SendPolicyTest, FixGateTest,
                          HeadingTrendTest, TransferFramesTest,
@@ -569,13 +574,21 @@ android/
                          TileHeaderTest, FreshnessCheckerTest, plus the wallet
                          tests (ResampleTest, DitherTest, RleTest, JsonTest,
                          OrientTest, PerspectiveWarpTest, WalletFormatTest,
-                         WalletStoreTest, WalletParityTest) -- 278 tests,
+                         WalletStoreTest, WalletParityTest, CodeLayoutTest,
+                         CodeWriterTest, CodeVerifyTest, CodeParityTest,
+                         CodeDetectTest, CodePipelineTest) -- 331 tests,
                          pure JVM
+  app/src/debug/java/... WalletCodeSelfTestActivity: debug-only, adb-driven,
+                         runs code detection over images in the app's private
+                         directory. Not in a release build.
   app/src/test/resources/wallet-parity/
                          the wallet parity fixture: the input page and every
                          byte tools/walletgen.py produced from it. Regenerate
                          with tools/wallet_parity_fixture.py, only on a
                          deliberate format change.
+  app/src/test/resources/wallet-code-parity/
+                         the same for codes: every case's matrix, layout and the
+                         generator's own asset bytes. tools/wallet_code_fixture.py.
 ```
 
 ## Build
@@ -596,8 +609,11 @@ Unit tests (packet layout — worth running after any protocol change):
 ```
 
 Toolchain used: JDK 17, Gradle 8.14.3, AGP 8.13.2, Kotlin 2.2.21,
-build-tools 36.0.0, `androidx.core:core-ktx:1.17.0` (the only dependency —
-`FileProvider` for the share button; the UI is plain framework views).
+build-tools 36.0.0, and two dependencies: `androidx.core:core-ktx:1.17.0`
+(`FileProvider` for the share button; the UI is plain framework views) and
+`com.google.zxing:core:3.5.3` (machine-readable codes -- writes and reads all six
+symbologies offline, pure Java, so the verify loop runs in a laptop unit test;
++591 kB of dex, `../docs/android-wallet.md` section 13.2).
 
 `local.properties` is gitignored and holds `sdk.dir`.
 

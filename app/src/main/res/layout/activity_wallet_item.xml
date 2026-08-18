@@ -32,6 +32,14 @@
             android:text="" />
     </ScrollView>
 
+    <!-- One row per machine-readable code (phase P5): tapping it opens the code
+         full screen, decoded from the stored asset. -->
+    <LinearLayout
+        android:id="@+id/itemCodes"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical" />
+
     <Button
         android:id="@+id/btnItemDelete"
         android:layout_width="match_parent"

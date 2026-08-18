@@ -2,8 +2,11 @@ package org.explorink.gpsbridge.wallet
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.os.Bundle
+import android.view.ViewGroup
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 import org.explorink.gpsbridge.R
 
@@ -50,12 +53,14 @@ class WalletItemActivity : Activity() {
         if (item == null) {
             tvTitle.text = "Item is gone"
             tvBody.text = "It was deleted, or this wallet was rebuilt."
+            findViewById<LinearLayout>(R.id.itemCodes).removeAllViews()
             btnDelete.isEnabled = false
             return
         }
 
         tvTitle.text = item.title
         tvBody.text = describe(item, store.loadState().stateOf(item.id))
+        renderCodes(item)
         btnDelete.isEnabled = true
         btnDelete.setOnClickListener {
             AlertDialog.Builder(this)
@@ -67,6 +72,38 @@ class WalletItemActivity : Activity() {
                 }
                 .setNegativeButton("Keep", null)
                 .show()
+        }
+    }
+
+    /**
+     * One button per machine-readable code, because a code is the one asset a
+     * rider will want to LOOK at before the device has it: it either scans or it
+     * does not. Tapping opens it full screen ([WalletCodeActivity]).
+     *
+     * An unverified code says so on its own button. `verified` means the stored
+     * asset decoded back (`docs/wallet-format.md` section 10) and nothing else, so
+     * a false here is the difference between "a picture of a code" and "a code".
+     */
+    private fun renderCodes(item: WalletItem) {
+        val box = findViewById<LinearLayout>(R.id.itemCodes)
+        box.removeAllViews()
+        for (page in item.pages) {
+            for (code in page.codes) {
+                box.addView(Button(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT)
+                    isAllCaps = false
+                    text = "${page.id} ${code.id}  ${code.symbology}  ${code.orientation}" +
+                        "  ${code.moduleSize} px/module  " +
+                        (if (code.verified) "verified" else "NOT VERIFIED")
+                    setOnClickListener {
+                        startActivity(Intent(this@WalletItemActivity, WalletCodeActivity::class.java)
+                            .putExtra(WalletCodeActivity.EXTRA_ITEM_ID, item.id)
+                            .putExtra(WalletCodeActivity.EXTRA_CODE_ID, code.id))
+                    }
+                })
+            }
         }
     }
 
@@ -103,13 +140,18 @@ class WalletItemActivity : Activity() {
                 }
             }
             if (page.codes.isEmpty()) {
-                sb.append("  codes       none (phase P5)\n")
+                sb.append("  codes       none found on this page\n")
             } else {
                 for (c in page.codes) {
                     sb.append("  code ").append(c.id).append(' ').append(c.symbology)
                         .append(' ').append(c.orientation)
-                        .append(if (c.verified) " verified" else " NOT VERIFIED")
+                        .append(", ").append(c.moduleSize).append(" px/module, qz ")
+                        .append(c.quietZone).append(", ").append(c.codeWidthPx).append('x')
+                        .append(c.codeHeightPx).append(" px, ")
+                        .append(c.payload.length).append(" chars")
+                        .append(if (c.verified) ", verified" else ", NOT VERIFIED")
                         .append('\n')
+                    sb.append("             ").append(c.assetId).append('\n')
                 }
             }
         }
