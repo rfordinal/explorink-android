@@ -23,9 +23,14 @@ minSdk 31, targetSdk 36, compileSdk 36. Debug-signed only.
 4. Answers the device when it asks for the map tiles it is missing: pages the
    list off the command characteristic and pushes the tiles back over the
    transfer channel. See "Fetching missing tiles" below.
+5. Renders documents into Personal Wallet assets for the device: gallery picker
+   or Android share target, one item per document, panel-native 1bpp screens
+   plus a manifest, byte-identical to `tools/walletgen.py`. Nothing is sent to
+   the device yet -- the sync phase does not exist. See `../docs/android-wallet.md`.
 
-All of it runs in a foreground service, so it keeps going with the screen
-locked and the app swiped away.
+Items 1-4 run in a foreground service, so they keep going with the screen
+locked and the app swiped away. The wallet is a plain screen: no service, no
+BLE, no GPS.
 
 No route logic, no cloud.
 
@@ -551,11 +556,26 @@ android/
                          its layer directory
     TileSource.kt        the CDN seam: tiles, with ?crc= and verification
     IndexSource.kt       the CDN seam for index byte ranges
+    wallet/              Personal Wallet (phase P4): data model, JSON manifest
+                         store, the image pipeline (Pillow-identical Lanczos and
+                         Floyd-Steinberg, native rotation, RLE sidecar), the
+                         share target and the two screens. Everything except
+                         ImageImport/WalletImporter and the activities is plain
+                         JVM code, so the pipeline is unit-tested on the laptop.
+                         ../docs/android-wallet.md
   app/src/test/java/...  PositionPacketTest, SendPolicyTest, FixGateTest,
                          HeadingTrendTest, TransferFramesTest,
                          MissingListTest, TileFetcherTest, TileIndexTest,
-                         TileHeaderTest, FreshnessCheckerTest -- 117 tests,
+                         TileHeaderTest, FreshnessCheckerTest, plus the wallet
+                         tests (ResampleTest, DitherTest, RleTest, JsonTest,
+                         OrientTest, PerspectiveWarpTest, WalletFormatTest,
+                         WalletStoreTest, WalletParityTest) -- 278 tests,
                          pure JVM
+  app/src/test/resources/wallet-parity/
+                         the wallet parity fixture: the input page and every
+                         byte tools/walletgen.py produced from it. Regenerate
+                         with tools/wallet_parity_fixture.py, only on a
+                         deliberate format change.
 ```
 
 ## Build

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The wallet list. Plain views, one screen, same shape as activity_main.xml:
+     a scrolling column with a monospace status block on top. Rows are built in
+     code (WalletActivity.row) so there is no adapter and no RecyclerView. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/tvWalletHead"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="monospace"
+        android:paddingBottom="8dp"
+        android:textSize="13sp"
+        android:text="Wallet" />
+
+    <Button
+        android:id="@+id/btnWalletImport"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Import pages from gallery"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="4dp"
+        android:paddingBottom="8dp"
+        android:textSize="12sp"
+        android:text="Or share pictures to ExplorInk GPS from any app. Several pictures at once become one multi-page item." />
+
+    <TextView
+        android:id="@+id/tvWalletBusy"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="monospace"
+        android:paddingBottom="8dp"
+        android:textSize="13sp"
+        android:visibility="gone"
+        android:text="rendering..." />
+
+    <TextView
+        android:id="@+id/tvWalletEmpty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="12dp"
+        android:textSize="14sp"
+        android:text="No documents yet. Nothing is on the device until a sync phase exists." />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:id="@+id/walletList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ScrollView>
+</LinearLayout>

@@ -79,6 +79,36 @@
             </intent-filter>
         </activity>
 
+
+        <!-- The wallet: a list of prepared documents, and the app's share target.
+             `exported=true` is required for a share target; the intent filters
+             below are the only way in from outside. singleTop so a second share
+             lands in the open activity through onNewIntent instead of stacking a
+             second copy of the list. -->
+        <activity
+            android:name=".wallet.WalletActivity"
+            android:exported="true"
+            android:label="ExplorInk Wallet"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".wallet.WalletItemActivity"
+            android:exported="false"
+            android:label="Wallet item"
+            android:screenOrientation="portrait" />
+
         <service
             android:name=".BridgeService"
             android:exported="false"

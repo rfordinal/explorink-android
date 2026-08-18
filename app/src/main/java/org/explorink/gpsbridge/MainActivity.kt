@@ -80,6 +80,7 @@ class MainActivity : Activity(), BridgeService.Observer {
     private lateinit var btnRetry: Button
     private lateinit var btnExport: Button
     private lateinit var btnRecord: Button
+    private lateinit var btnWallet: Button
     private lateinit var btnStop: Button
 
     private val main = Handler(Looper.getMainLooper())
@@ -131,6 +132,7 @@ class MainActivity : Activity(), BridgeService.Observer {
         btnRetry = findViewById(R.id.btnRetry)
         btnExport = findViewById(R.id.btnExport)
         btnRecord = findViewById(R.id.btnRecord)
+        btnWallet = findViewById(R.id.btnWallet)
         btnStop = findViewById(R.id.btnStop)
 
         btnWake.setOnClickListener { onWakePressed() }
@@ -138,6 +140,9 @@ class MainActivity : Activity(), BridgeService.Observer {
         btnRetry.setOnClickListener { onRetryPressed() }
         btnExport.setOnClickListener { shareLog() }
         btnRecord.setOnClickListener { onRecordPressed() }
+        btnWallet.setOnClickListener {
+            startActivity(Intent(this, org.explorink.gpsbridge.wallet.WalletActivity::class.java))
+        }
         btnStop.setOnClickListener { onStopPressed() }
 
         // Version, once, at the bottom. Debug builds carry the commit they were

@@ -168,6 +168,14 @@
             android:text="Forget the X4"
             android:visibility="gone" />
 
+        <!-- The wallet is a separate screen, not part of the bridge status: it
+             does not need BLE, GPS or the service. -->
+        <Button
+            android:id="@+id/btnWallet"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Wallet" />
+
         <Button
             android:id="@+id/btnRecord"
             android:layout_width="match_parent"
