@@ -3,6 +3,11 @@
 Sends the phone's GPS position to the Xteink X4 over BLE and records the ride
 for replay. One window. Built to `docs/android-app-brief.md`.
 
+Public pages for this side of the system:
+[explorink.com/development/ble-gps/](https://explorink.com/development/ble-gps/)
+and [explorink.com/how-it-works/](https://explorink.com/how-it-works/) — keep
+them true in the same pass as any change here (`docs/site.md`).
+
 Package `org.explorink.gpsbridge`, app label **ExplorInk GPS**.
 minSdk 31, targetSdk 36, compileSdk 36. Debug-signed only.
 
