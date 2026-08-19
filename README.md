@@ -534,8 +534,8 @@ android/
                          command at a time. No BLE, no Android: unit-tested
     PinList.kt           the pin wire: the four `pin` commands and the readers
                          for their replies. Pure
-    PinCoordinates.kt    pasted text (a pair, a geo: link, a maps URL) to a
-                         coordinate, and what it refuses to guess at. Pure
+    PinCoordinates.kt    pasted text (a pair, DMS, a geo: link, a maps URL) to
+                         a coordinate, and what it refuses to guess at. Pure
     PinGeo.kt            distance to a pin and how it is written, ported from
                          the device's own PinGeo so the two agree. Pure
     PinKinds.kt          the pin catalogue keys, mirrored from the firmware
@@ -576,7 +576,7 @@ android/
                          MissingListTest, TileFetcherTest, TileIndexTest,
                          TileHeaderTest, FreshnessCheckerTest, PinListTest,
                          PinGeoTest, PinCoordinatesTest, PinManagerTest --
-                         240 tests, pure JVM
+                         246 tests, pure JVM
 ```
 
 ## Build
@@ -698,13 +698,21 @@ re-reads the device after every change. Pins only answer while the device is on 
 map screen; anywhere else it says `pins=unavailable`, which is shown as itself and
 never as an empty list.
 
-Full mechanism, what the coordinate field accepts and refuses, and the channel it
-shares with the tile fetch: [`../docs/android-pins.md`](../docs/android-pins.md).
-**Nothing in it has run against real hardware yet.**
+The field reads decimal degrees, degrees-minutes-seconds (what Google Maps shows
+when a place's coordinates are tapped), a `geo:` link and a full Maps URL. DMS is
+read *before* the bare pair on purpose: with the symbols stripped,
+`48 09 05.4N 17 07 47.1E` used to read as `48, 9` and offer to pin Germany --
+measured on the phone 2026-08-19.
+
+Full mechanism, what the field refuses, and the channel pins share with the tile
+fetch: [`../docs/android-pins.md`](../docs/android-pins.md). **Run against the real
+X4 2026-08-19**: list, save from a coordinate, save from DMS, delete, the history,
+the phone's clock in the record. The channel gate and `pins=unavailable` are still
+unverified.
 
 ## Verification status
 
-Laptop: clean build, zero Kotlin warnings, 240/240 unit tests.
+Laptop: clean build, zero Kotlin warnings, 246/246 unit tests.
 
 **Auto-start verified on hardware 2026-08-11**, Galaxy S24 (SM-S928B, Android 16)
 against the real X4: paired, app process killed, map reopened on the device, and
