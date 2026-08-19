@@ -242,6 +242,19 @@ class WalletActivity : Activity() {
             Toast.makeText(this, "an import is already running", Toast.LENGTH_SHORT).show()
             return
         }
+        // Camera EXIF on the first page pre-ticks "photograph", because a photo wants
+        // error diffusion and a scan does not. Read off the UI thread: it opens the Uri.
+        Thread({
+            val camera = try {
+                ImageImport.load(this, uris.first()).fromCamera
+            } catch (t: Throwable) {
+                false
+            }
+            MainThread.post { showImportDialog(uris, camera) }
+        }, "wallet-exif").start()
+    }
+
+    private fun showImportDialog(uris: List<Uri>, cameraSource: Boolean) {
         val suggested = try {
             WalletImporter.titleFrom(ImageImport.displayName(this, uris.first()))
         } catch (t: Throwable) {
@@ -268,12 +281,14 @@ class WalletActivity : Activity() {
         val photo = CheckBox(this).apply {
             text = "photograph: smooth tones by dithering (a scan does not want this)"
             textSize = 13f
-            isChecked = false
+            // Pre-ticked for a camera file, and only a suggestion: a photographed
+            // document is a real case, and EXIF cannot tell the two apart.
+            isChecked = cameraSource
             isEnabled = false
         }
         grey.setOnCheckedChangeListener { _, checked ->
             photo.isEnabled = checked
-            if (!checked) photo.isChecked = false
+            photo.isChecked = checked && cameraSource
         }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL

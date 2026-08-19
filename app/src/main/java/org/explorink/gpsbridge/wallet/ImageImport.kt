@@ -47,6 +47,16 @@ object ImageImport {
         val dpiY: Double?,
         val exifOrientation: Int,
         val sampleSize: Int,
+        /**
+         * True when the file carries camera EXIF -- a `Make` or a `Model`.
+         *
+         * Used only to **pre-tick** the photograph box at import, because a camera photo
+         * wants error diffusion and a scan does not (`docs/android-wallet.md` 16b). It is
+         * a suggestion the rider can undo, never a decision: a photographed document is
+         * a real case and so is a screenshot of a photograph, and neither is decidable
+         * from EXIF.
+         */
+        val fromCamera: Boolean = false,
     )
 
     /**
@@ -73,11 +83,14 @@ object ImageImport {
         var orientation = Orient.NORMAL
         var dpiX: Double? = null
         var dpiY: Double? = null
+        var fromCamera = false
         try {
             open(context, uri).use { input ->
                 val exif = ExifInterface(input)
                 orientation = exif.getAttributeInt(
                     ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+                fromCamera = exif.getAttribute(ExifInterface.TAG_MAKE) != null ||
+                    exif.getAttribute(ExifInterface.TAG_MODEL) != null
                 val unit = exif.getAttributeInt(ExifInterface.TAG_RESOLUTION_UNIT, 2)
                 // 2 = inches, 3 = centimetres. Anything else is not a DPI we can use.
                 val rx = ratio(exif.getAttribute(ExifInterface.TAG_X_RESOLUTION))
@@ -104,7 +117,8 @@ object ImageImport {
         } finally {
             bitmap.recycle()
         }
-        return Loaded(Orient.apply(gray, orientation), name, dpiX, dpiY, orientation, sample)
+        return Loaded(Orient.apply(gray, orientation), name, dpiX, dpiY, orientation, sample,
+            fromCamera = fromCamera)
     }
 
     /**
