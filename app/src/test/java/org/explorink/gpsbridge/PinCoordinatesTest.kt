@@ -73,9 +73,56 @@ class PinCoordinatesTest {
     }
 
     @Test
-    fun `degrees minutes seconds is refused rather than half read`() {
-        val reason = reason("48°26'13.9\"N 17°01'06.9\"E")
-        assertTrue(reason, reason.contains("Degrees, minutes"))
+    fun `degrees minutes seconds is read`() {
+        // What Google Maps shows when you tap a place's coordinates, so it is what
+        // a rider copies most often.
+        val p = parsed("48°09'05.4\"N 17°07'47.1\"E")
+        assertEquals(481515000, p.latE7)
+        assertEquals(171297500, p.lonE7)
+    }
+
+    @Test
+    fun `dms with the symbols stripped is still dms, not a bare pair`() {
+        // Measured on the phone 2026-08-19: this exact string read as `48, 9` --
+        // Germany, 700 km from the place asked for -- because the bare pair matched
+        // its first two numbers. Nothing in the parser noticed.
+        val p = parsed("48 09 05.4N 17 07 47.1E")
+        assertEquals(481515000, p.latE7)
+        assertEquals(171297500, p.lonE7)
+    }
+
+    @Test
+    fun `the hemisphere letters carry the sign`() {
+        val p = parsed("33°52'07.9\"S 151°12'33.5\"W")
+        assertEquals(-338688611, p.latE7)
+        assertEquals(-1512093056, p.lonE7)
+    }
+
+    @Test
+    fun `longitude written first still lands as longitude`() {
+        // Some sources write it that way, and a silent swap puts the pin in the sea.
+        val p = parsed("17°07'47.1\"E 48°09'05.4\"N")
+        assertEquals(481515000, p.latE7)
+        assertEquals(171297500, p.lonE7)
+    }
+
+    @Test
+    fun `dms with no seconds`() {
+        val p = parsed("48°09'N 17°07'E")
+        assertEquals(481500000, p.latE7)
+        assertEquals(171166667, p.lonE7)
+    }
+
+    @Test
+    fun `dms shaped text that cannot be read is refused, never guessed`() {
+        val reason = reason("48°N something 17°E")
+        assertTrue(reason, reason.contains("degrees, minutes and seconds"))
+    }
+
+    @Test
+    fun `minutes and seconds out of their range are refused`() {
+        assertTrue(reason("48°75'05.4\"N 17°07'47.1\"E").isNotEmpty())
+        assertTrue(reason("48°09'75.4\"N 17°07'47.1\"E").isNotEmpty())
     }
 
     @Test

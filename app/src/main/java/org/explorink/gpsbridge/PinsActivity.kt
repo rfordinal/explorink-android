@@ -450,8 +450,11 @@ class PinsActivity : Activity(), BridgeService.Observer {
             }
             row.findViewById<TextView>(R.id.tvRowDistance).text =
                 if (fix == null) {
-                    // Never "0 m": zero is a real distance and reads as "you are
-                    // standing on it", the same rule the device's own list follows.
+                    // `-` is "nothing to measure from", and it has to be distinct
+                    // from a number: `0 m` is a real answer and means the rider is
+                    // standing on the pin -- seen on the phone 2026-08-19, where the
+                    // Destination pin sat at the phone's own position and read
+                    // `0 m` correctly. The device rounds the same way.
                     "-"
                 } else {
                     PinGeo.formatDistance(
