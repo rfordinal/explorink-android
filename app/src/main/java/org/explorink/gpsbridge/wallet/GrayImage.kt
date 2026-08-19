@@ -35,6 +35,31 @@ class GrayImage(val width: Int, val height: Int, val pixels: ByteArray) {
     }
 
     /**
+     * A gamma curve, `out = 255 * (in/255)^(1/g)`.
+     *
+     * `g > 1` lifts the mid tones, `g < 1` pushes them down, `g == 1` is the identity
+     * and returns **this same image** so a document's path is untouched byte for byte.
+     *
+     * **Why it is a knob and not a constant:** e-ink reflectance is not sRGB, so the
+     * right value depends on the panel and nobody has measured it here. The default
+     * everywhere is 1.0 -- no correction -- and the number only moves when a four-step
+     * wedge has been photographed off the glass. A guessed gamma baked in as a default
+     * would be indistinguishable from a measured one to the next reader, which is worse
+     * than none.
+     */
+    fun gamma(g: Double): GrayImage {
+        if (g == 1.0) return this
+        require(g > 0.0) { "gamma must be positive, got $g" }
+        val lut = IntArray(256) { i ->
+            val v = Math.pow(i / 255.0, 1.0 / g) * 255.0
+            v.toInt().coerceIn(0, 255)
+        }
+        val out = ByteArray(pixels.size)
+        for (i in pixels.indices) out[i] = lut[pixels[i].toInt() and 0xff].toByte()
+        return GrayImage(width, height, out)
+    }
+
+    /**
      * `ImageOps.autocontrast(img, cutoff)`, ported from the Pillow Python source
      * (`PIL/ImageOps.py`): histogram, drop `cutoff` percent of pixels off each
      * end, then remap so the darkest surviving level becomes 0 and the lightest

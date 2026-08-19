@@ -51,12 +51,46 @@ class WalletPipeline(
      */
     val grey: Boolean = false,
     /**
+     * How the tones of this document are meant to be read.
+     *
+     * [Tone.DOCUMENT] is a scan: flat paper, hard text, and grey levels taken by
+     * nearest value so a margin stays one flat tone.
+     *
+     * [Tone.PHOTO] is a photograph: the grey levels come out of Floyd-Steinberg error
+     * diffusion instead, because nearest-value posterises a continuous image into three
+     * or four bands. The maintainer's own photo on the panel is what produced this
+     * (2026-08-19): "prvu foto zobrazilo (skaredo)".
+     *
+     * It changes **only how grey levels are produced**. The 1bpp path already dithers,
+     * the asset ids, the layout, the geometry and the encryption are untouched, and a
+     * DOCUMENT import is byte for byte what it was before this existed.
+     */
+    val tone: Tone = Tone.DOCUMENT,
+    /**
+     * Gamma applied after the resize and before quantisation, `1.0` for none.
+     *
+     * Unmeasured on purpose -- see [GrayImage.gamma]. It exists so a measured value has
+     * somewhere to go without touching the pipeline again.
+     */
+    val gamma: Double = 1.0,
+    /**
      * The encryption seam. [AssetCipher.None] writes a cleartext tree,
      * [Aes256CtrCipher] an encrypted one -- and the id recipe, the header flags and
      * whether a sidecar is written all follow from it.
      */
     val cipher: AssetCipher = AssetCipher.None,
 ) {
+
+    /** What a document is: a scan of paper, or a photograph. */
+    enum class Tone(val key: String) {
+        DOCUMENT("document"),
+        PHOTO("photo");
+
+        companion object {
+            fun of(key: String?): Tone =
+                entries.firstOrNull { it.key == key } ?: DOCUMENT
+        }
+    }
 
     init {
         require(!grey || pageImage) {
@@ -134,7 +168,8 @@ class WalletPipeline(
                 progress?.invoke(done, total)
             })
         }
-        return WalletItem(itemId, title, createdAt, sortOrder, pages, grey = grey)
+        return WalletItem(itemId, title, createdAt, sortOrder, pages, grey = grey,
+            tone = tone.key)
     }
 
     /** How many assets one page produces, so a UI can show real progress. */
@@ -180,7 +215,15 @@ class WalletPipeline(
             // the 6.1 MB level canvas plus its quantised copy plus the rotated one,
             // ~20 MB peak against ~12 MB. Read, not measured on a phone.
             val mono = canvas!!.dither()
-            val greyLevels = if (grey) GreyLevels.quantise(canvas) else null
+            // Nearest level for a scan, error diffusion for a photograph. Gamma first
+            // when a measured one has been set; the default 1.0 returns the same image.
+            val greyLevels = if (grey) {
+                val toned = canvas.gamma(gamma)
+                when (tone) {
+                    Tone.DOCUMENT -> GreyLevels.quantise(toned)
+                    Tone.PHOTO -> GreyLevels.diffuse(toned)
+                }
+            } else null
             canvas = null
             val assetType = WalletFormat.LEVEL_TYPE.getValue(level)
 

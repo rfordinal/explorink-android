@@ -16,7 +16,7 @@
       "createdAt": "2026-08-18T00:00:00Z",
       "sortOrder": 0,
       "grey": true,
-      "tone": "document",
+      "tone": "photo",
       "pages": [
         {
           "id": "p001",
@@ -49,8 +49,8 @@
                 "nativeHeight": 480,
                 "rowBytes": 200,
                 "rawLen": 96000,
-                "sha256": "6850f72b4a35ae5017f688c5c1fb52962d9126a9d2b6e597801afd42283de824",
-                "rleLen": 31143,
+                "sha256": "7d72016c20d9f5639b7190689e191c45d77059df9a1805b3973cbee80d5682dd",
+                "rleLen": 46692,
                 "windowStepX": 400,
                 "windowStepY": 240,
                 "focalX": 0,
@@ -82,8 +82,8 @@
                 "lsbOffset": 48000,
                 "msbOffset": 96000,
                 "rawLen": 144000,
-                "sha256": "df3cc9d422eca7ae535d10077b2466061291faae4ccd6ab647298d1b9be9008c",
-                "rleLen": 48767
+                "sha256": "2d8aa6b2f1c94b712322e415ac632cd05387128fc7246c5b79d8868b5a084bc2",
+                "rleLen": 72004
               }
             },
             "detail": {
@@ -113,8 +113,8 @@
                 "nativeHeight": 960,
                 "rowBytes": 400,
                 "rawLen": 384000,
-                "sha256": "921af8eb269a59435b0abd6fdc44474ded0aa2e639a700321c06fd0480f51557",
-                "rleLen": 86525,
+                "sha256": "9b94df2a0411e44a1a4a5802612b6ab9cb4abd5d8ee545edcc81cb865a24a9dc",
+                "rleLen": 162534,
                 "windowStepX": 400,
                 "windowStepY": 240,
                 "focalX": 0,
@@ -146,8 +146,8 @@
                 "lsbOffset": 48000,
                 "msbOffset": 96000,
                 "rawLen": 144000,
-                "sha256": "27ac69d49d815854ab01af184d7d5e0fca192c97dae2a7ccd3999414c2bfa445",
-                "rleLen": 74209
+                "sha256": "4f754e344e00ec870cc040e68e3e6e09ffb56939aa7ab59d6c9ce8d421c854d5",
+                "rleLen": 82971
               }
             },
             "one_to_one": {
@@ -177,8 +177,8 @@
                 "nativeHeight": 1819,
                 "rowBytes": 644,
                 "rawLen": 1171436,
-                "sha256": "38e87b210c58decfa1ae54a7d374515ef6a8b607e90c24859b8fbadd8ab269a8",
-                "rleLen": 216701,
+                "sha256": "cc7882982de1fe8429d0a0669dfc08af8a733970344c4c7deded164c9b420bdc",
+                "rleLen": 511089,
                 "windowStepX": 400,
                 "windowStepY": 240,
                 "focalX": 800,
@@ -210,8 +210,8 @@
                 "lsbOffset": 48000,
                 "msbOffset": 96000,
                 "rawLen": 144000,
-                "sha256": "14363873590d697e4fc3ebf28d3155a6a8273fcaafcdd56bf7906b56871eeec4",
-                "rleLen": 86705
+                "sha256": "53fb50bb32025b6961e6211d722e37efebd43ed0ef080e7da8f53e6e1aac5aa2",
+                "rleLen": 106183
               }
             }
           },

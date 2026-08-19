@@ -57,6 +57,17 @@ class WalletParityTest {
         const val TILES = "wallet-parity-tiles"
         const val GREY = "wallet-parity-grey"
 
+        /**
+         * `--grey --tone photo`: the same grey assets by error diffusion.
+         *
+         * Its own fixture because the diffusion rounds in code rather than through a
+         * table, and the two languages disagree by default -- Kotlin's `/` truncates
+         * toward zero, Python's `//` floors, so `-9/16` is 0 on one side and -1 on the
+         * other. One pixel of disagreement is a different asset id and a wallet the
+         * device cannot match.
+         */
+        const val PHOTO = "wallet-parity-photo"
+
         /** Where the shared input page lives. */
         const val INPUT = "wallet-parity"
 
@@ -98,6 +109,8 @@ class WalletParityTest {
             val sourceName: String get() = Json.asString(source["file"])
             val tiles: Boolean get() = run["tiles"] == true
             val grey: Boolean get() = run["grey"] == true
+            val tone: WalletPipeline.Tone
+                get() = WalletPipeline.Tone.of(run["tone"] as String?)
             val encrypted: Boolean get() = run["encrypted"] == true
 
             /** The fixture page, as the grayscale raster both implementations start from. */
@@ -123,7 +136,7 @@ class WalletParityTest {
             fun build(cipher: AssetCipher = AssetCipher.None): Pair<WalletItem, MemoryAssetSink> {
                 val sink = MemoryAssetSink()
                 val pipeline = WalletPipeline(panel, pageImage = run["pageImage"] == true,
-                    tiles = tiles, grey = grey, cipher = cipher)
+                    tiles = tiles, grey = grey, tone = tone, cipher = cipher)
                 val item = pipeline.buildItem(
                     itemId = WalletFormat.itemIdFor(title, listOf(sourceName)),
                     title = title,
@@ -228,6 +241,26 @@ class WalletParityTest {
     @Test
     fun every_asset_file_is_byte_identical_for_a_grey_document() {
         assertEveryFileMatches(Fixture(GREY))
+    }
+
+    @Test
+    fun every_asset_file_is_byte_identical_for_a_photograph() {
+        // The check that catches a rounding difference in the error diffusion, which is
+        // the one part of the grey path written twice as arithmetic rather than shared
+        // as a table.
+        assertEveryFileMatches(Fixture(PHOTO))
+    }
+
+    @Test
+    fun the_photo_tone_actually_produced_different_bytes_than_the_document_tone() {
+        // Otherwise the test above passes by drawing the same thing twice, which is how
+        // a "parity" suite ends up proving nothing.
+        val grey = Fixture(GREY)
+        val photo = Fixture(PHOTO)
+        val greyIds = grey.files.map { Json.asString(it["sha256"]) }.toSet()
+        val photoIds = photo.files.map { Json.asString(it["sha256"]) }.toSet()
+        assertTrue("the two fixtures are the same bytes: diffusion did nothing",
+            (greyIds - photoIds).isNotEmpty())
     }
 
     /**

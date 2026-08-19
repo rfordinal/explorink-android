@@ -16,6 +16,7 @@
       "createdAt": "2026-08-18T00:00:00Z",
       "sortOrder": 0,
       "grey": false,
+      "tone": "document",
       "pages": [
         {
           "id": "p001",

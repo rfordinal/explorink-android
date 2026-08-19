@@ -150,9 +150,13 @@ class WalletStore(
     fun sink(): AssetSink = FileAssetSink(treeDir)
 
     /** A pipeline configured for this store: the right panel and the right cipher. */
-    fun pipeline(grey: Boolean = false, tiles: Boolean = false): WalletPipeline =
+    fun pipeline(
+        grey: Boolean = false,
+        tiles: Boolean = false,
+        tone: WalletPipeline.Tone = WalletPipeline.Tone.DOCUMENT,
+    ): WalletPipeline =
         WalletPipeline(Panels.byName(panelName), pageImage = true, tiles = tiles,
-            grey = grey, cipher = cipher())
+            grey = grey, tone = tone, cipher = cipher())
 
     // --- writing -----------------------------------------------------------
 

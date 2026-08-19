@@ -289,6 +289,16 @@ data class WalletItem(
      * 1bpp assets; nothing is removed, so the device can still draw it 1bpp.
      */
     val grey: Boolean = false,
+    /**
+     * How this document's tones were rendered: `"document"` (nearest grey level) or
+     * `"photo"` (error diffusion into the four levels).
+     *
+     * Recorded so a re-import can be offered with the same choice, and so a rider who
+     * asks "why does this look like a dither" gets an answer. **The device ignores it**
+     * -- it draws the assets it is given -- which is why it is a string here rather
+     * than a format field with a number.
+     */
+    val tone: String = "document",
 ) {
     val pageCount: Int get() = pages.size
     val codeCount: Int get() = pages.sumOf { it.codes.size }
@@ -321,6 +331,7 @@ data class WalletItem(
         "createdAt" to createdAt,
         "sortOrder" to sortOrder,
         "grey" to grey,
+        "tone" to tone,
         "pages" to pages.map { it.toJson() },
     )
 
@@ -332,6 +343,9 @@ data class WalletItem(
             sortOrder = Json.asInt(o["sortOrder"]),
             pages = Json.asList(o["pages"]).map { WalletPage.fromJson(Json.asMap(it)) },
             grey = o["grey"] == true,
+            // Absent means a document written before tone existed, and every one of
+            // those was rendered the document way.
+            tone = (o["tone"] as? String) ?: "document",
         )
     }
 }

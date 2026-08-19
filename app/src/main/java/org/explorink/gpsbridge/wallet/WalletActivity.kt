@@ -261,31 +261,53 @@ class WalletActivity : Activity() {
             textSize = 13f
             isChecked = false
         }
+        // Only meaningful with grey ticked: it changes how the four grey levels are
+        // produced, and a 1bpp page is dithered either way. A photograph rendered the
+        // document way posterises into bands, which is what the panel showed
+        // 2026-08-19.
+        val photo = CheckBox(this).apply {
+            text = "photograph: smooth tones by dithering (a scan does not want this)"
+            textSize = 13f
+            isChecked = false
+            isEnabled = false
+        }
+        grey.setOnCheckedChangeListener { _, checked ->
+            photo.isEnabled = checked
+            if (!checked) photo.isChecked = false
+        }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             val dp = resources.displayMetrics.density
             setPadding((16 * dp).toInt(), 0, (16 * dp).toInt(), 0)
             addView(input)
             addView(grey)
+            addView(photo)
         }
         AlertDialog.Builder(this)
             .setTitle(if (uris.size == 1) "Import 1 page" else "Import ${uris.size} pages")
             .setMessage("One item, ${uris.size} page(s). Title:")
             .setView(box)
             .setPositiveButton("Import") { _, _ ->
-                runImport(uris, input.text.toString().trim(), grey.isChecked)
+                runImport(uris, input.text.toString().trim(), grey.isChecked,
+                    if (photo.isChecked) WalletPipeline.Tone.PHOTO
+                    else WalletPipeline.Tone.DOCUMENT)
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun runImport(uris: List<Uri>, title: String, grey: Boolean) {
+    private fun runImport(
+        uris: List<Uri>,
+        title: String,
+        grey: Boolean,
+        tone: WalletPipeline.Tone = WalletPipeline.Tone.DOCUMENT,
+    ) {
         busy = true
         btnImport.isEnabled = false
         tvBusy.visibility = View.VISIBLE
         tvBusy.text = "rendering ${uris.size} page(s)..."
         Thread({
-            val outcome = WalletImporter.importImages(this, store, uris, title, grey) { p ->
+            val outcome = WalletImporter.importImages(this, store, uris, title, grey, tone) { p ->
                 MainThread.post {
                     tvBusy.text = "page ${p.page}/${p.pages}, asset ${p.asset}/${p.assets}"
                 }

@@ -100,15 +100,20 @@ class WalletCodeSelfTestActivity : Activity() {
             // to get a grey item onto an emulator without tapping the import dialog's
             // checkbox (phase P6/P7 verification).
             val grey = intent.getBooleanExtra("grey", false)
+            // `--ez photo true` renders the grey levels with error diffusion instead of
+            // nearest value, which is the difference between a photograph and three
+            // bands of sky.
+            val tone = if (intent.getBooleanExtra("photo", false)) WalletPipeline.Tone.PHOTO
+                else WalletPipeline.Tone.DOCUMENT
             val title = intent.getStringExtra("title")
                 ?: "Selftest ${file.nameWithoutExtension}"
             val outcome = WalletImporter.importImages(this, store, listOf(Uri.fromFile(file)),
-                title, grey)
+                title, grey, tone)
             val line = when (outcome) {
                 is WalletImporter.Outcome.Ok ->
                     "import ${file.name}: item ${outcome.item.id}, " +
                     "${outcome.item.codeCount} code(s), ${outcome.item.assetCount} assets, " +
-                    "${outcome.millis} ms, grey=${outcome.item.grey}, codes=" +
+                    "${outcome.millis} ms, grey=${outcome.item.grey}, tone=${outcome.item.tone}, codes=" +
                         outcome.item.pages.flatMap { it.codes }
                         .joinToString(", ") {
                             "${it.id}/${it.symbology}/${it.orientation}/${it.moduleSize}px/" +

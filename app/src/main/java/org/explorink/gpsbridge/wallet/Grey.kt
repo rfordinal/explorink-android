@@ -102,6 +102,80 @@ class GreyLevels(val width: Int, val height: Int, val levels: ByteArray) {
     operator fun get(x: Int, y: Int): Int = levels[y * width + x].toInt() and 0xff
 
     companion object {
+
+        /**
+         * What each level is assumed to reflect, 0..255, for error diffusion.
+         *
+         * **Assumed, not measured.** Evenly spaced is the same assumption
+         * [Grey.THRESHOLDS] already makes. If the panel's two middle levels turn out
+         * to sit closer together than this, a diffused photo comes out with the wrong
+         * mid tone -- the fix is to photograph a four-step wedge off the glass and put
+         * the real numbers here, which is the open item in
+         * `firmware/explorink/docs/wallet-grey.md`.
+         */
+        val LEVEL_VALUES = intArrayOf(0, 85, 170, 255)
+
+        /**
+         * Four levels with **Floyd-Steinberg error diffusion**, for photographs.
+         *
+         * [quantise] takes the nearest level per pixel, which is right for a scan: flat
+         * paper stays flat and text stays hard. On a photograph it posterises -- a sky
+         * becomes three bands, and the maintainer's own photo on the panel is what
+         * produced this function (2026-08-19). Diffusion trades those bands for a fine
+         * pattern, which at arm's length reads as a tone.
+         *
+         * Same weights and same serpentine-free order as [Dither.floydSteinberg], so
+         * the two paths are one algorithm at two bit depths: 7/3/5/1, left to right,
+         * error carried in an int accumulator rather than in the image.
+         *
+         * It does **not** replace [quantise]. A document rendered this way gains a
+         * dither pattern in its white margins, which is exactly what grey was supposed
+         * to remove; the caller picks per document.
+         */
+        fun diffuse(src: GrayImage, levelValues: IntArray = LEVEL_VALUES): GreyLevels {
+            require(levelValues.size == Grey.LEVEL_COUNT) {
+                "expected ${Grey.LEVEL_COUNT} level values, got ${levelValues.size}"
+            }
+            val w = src.width
+            val h = src.height
+            val out = ByteArray(w * h)
+            // One row of carried error, plus the next row's. Ints, so nothing rounds
+            // twice; the image itself is never written back into.
+            var err = IntArray(w + 2)
+            var next = IntArray(w + 2)
+            for (y in 0 until h) {
+                for (x in 0 until w) {
+                    val want = (src.pixels[y * w + x].toInt() and 0xff) + err[x + 1]
+                    var best = 0
+                    var bestDist = Int.MAX_VALUE
+                    for (l in levelValues.indices) {
+                        val d = kotlin.math.abs(levelValues[l] - want)
+                        if (d < bestDist) {
+                            bestDist = d
+                            best = l
+                        }
+                    }
+                    out[y * w + x] = best.toByte()
+                    val e = want - levelValues[best]
+                    // floorDiv, not `/`. The error is negative half the time, and
+                    // Kotlin's `/` truncates toward zero while Python's `//` floors:
+                    // `-9 / 16` is 0 here and -1 in `walletgen.py`. One pixel of
+                    // disagreement is a different asset id, so the two implementations
+                    // have to round the same way, and floor is the one the generator
+                    // already does.
+                    err[x + 2] += Math.floorDiv(e * 7, 16)
+                    next[x] += Math.floorDiv(e * 3, 16)
+                    next[x + 1] += Math.floorDiv(e * 5, 16)
+                    next[x + 2] += Math.floorDiv(e * 1, 16)
+                }
+                val swap = err
+                err = next
+                next = swap
+                java.util.Arrays.fill(next, 0)
+            }
+            return GreyLevels(w, h, out)
+        }
+
         /** Nearest level, position independent. See [Grey.THRESHOLDS]. */
         fun quantise(src: GrayImage): GreyLevels {
             val lut = IntArray(256) { Grey.levelOf(it) }

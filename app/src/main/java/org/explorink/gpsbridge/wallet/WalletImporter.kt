@@ -67,6 +67,12 @@ object WalletImporter {
          * on once the assets exist (`WalletStore.setGrey`).
          */
         grey: Boolean = false,
+        /**
+         * A photograph rather than a scan. Only reaches the **grey** levels, where it
+         * swaps nearest-value quantisation for error diffusion: a photo taken the
+         * document way posterises into bands (seen on the panel 2026-08-19).
+         */
+        tone: WalletPipeline.Tone = WalletPipeline.Tone.DOCUMENT,
         onProgress: (Progress) -> Unit = {},
     ): Outcome {
         if (uris.isEmpty()) return Outcome.Failed("nothing to import")
@@ -88,7 +94,7 @@ object WalletImporter {
                 "(key store: ${store.keys.description})")
             // Page images only, no pre-cut tiles (design B, the generator's own default
             // since 2026-08-19), and the store's cipher so an encrypted wallet stays one.
-            val pipeline = store.pipeline(grey = grey)
+            val pipeline = store.pipeline(grey = grey, tone = tone)
             val sources = loaded.map {
                 WalletPipeline.PageSource(it.gray, it.name, it.dpiX, it.dpiY,
                     codes = detectCodes(it))
@@ -111,7 +117,7 @@ object WalletImporter {
             val wallet = store.addItem(item, names)
             Log.i(TAG, "imported ${item.id} '${item.title}': ${item.pageCount} pages, " +
                 "${item.assetCount} assets, ${item.rawBytes} B raw, " +
-                (if (grey) "grey" else "1bpp"))
+                (if (grey) "grey" else "1bpp") + ", tone=${tone.key}")
             Outcome.Ok(item, wallet, System.currentTimeMillis() - started)
         } catch (t: Throwable) {
             Log.w(TAG, "import failed", t)
