@@ -49,7 +49,15 @@ import org.explorink.gpsbridge.TransferFrames
 class WalletBleTransport(
     private val frames: FrameSink,
     private val scheduler: Scheduler,
-    private val cardRoot: String = "trailink",
+    // Empty, and that is the whole point: a BLE begin frame's path is **already
+    // relative to /trailink** -- the receiver prepends its own root
+    // (MapTransferReceiver.cpp, `snprintf(finalPath_, ..., "%s/%s", rootDir_, rel)`).
+    // Shipping "trailink" here wrote every asset to /trailink/trailink/wallet/...
+    // and the device happily answered OK for each one, because it had written and
+    // CRC-verified exactly what it was asked to. Found on hardware 2026-08-19: a
+    // 25-file sync reported "everything confirmed" and the wallet stayed invisible.
+    // Kept as a parameter only so a test can pin the wire path.
+    private val cardRoot: String = "",
 ) : WalletTransport {
 
     /** Everything this needs from a BLE stack, and nothing more. */
