@@ -94,7 +94,12 @@ object WalletImporter {
                 "(key store: ${store.keys.description})")
             // Page images only, no pre-cut tiles (design B, the generator's own default
             // since 2026-08-19), and the store's cipher so an encrypted wallet stays one.
-            val pipeline = store.pipeline(grey = grey, tone = tone)
+            // The tone only reaches the grey levels. Recording "photo" on a 1bpp
+            // document would claim a rendering choice that never happened -- which is
+            // exactly what the manifest said after a dialog let the two disagree
+            // (2026-08-19).
+            val effectiveTone = if (grey) tone else WalletPipeline.Tone.DOCUMENT
+            val pipeline = store.pipeline(grey = grey, tone = effectiveTone)
             val sources = loaded.map {
                 WalletPipeline.PageSource(it.gray, it.name, it.dpiX, it.dpiY,
                     codes = detectCodes(it))
@@ -117,7 +122,7 @@ object WalletImporter {
             val wallet = store.addItem(item, names)
             Log.i(TAG, "imported ${item.id} '${item.title}': ${item.pageCount} pages, " +
                 "${item.assetCount} assets, ${item.rawBytes} B raw, " +
-                (if (grey) "grey" else "1bpp") + ", tone=${tone.key}")
+                (if (grey) "grey" else "1bpp") + ", tone=${effectiveTone.key}")
             Outcome.Ok(item, wallet, System.currentTimeMillis() - started)
         } catch (t: Throwable) {
             Log.w(TAG, "import failed", t)

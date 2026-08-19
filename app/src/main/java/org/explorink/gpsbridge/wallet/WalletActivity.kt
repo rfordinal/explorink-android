@@ -272,23 +272,25 @@ class WalletActivity : Activity() {
         val grey = CheckBox(this).apply {
             text = "grey (scan or photo): richer tone, +635 ms an entry, cannot pan"
             textSize = 13f
-            isChecked = false
-        }
-        // Only meaningful with grey ticked: it changes how the four grey levels are
-        // produced, and a 1bpp page is dithered either way. A photograph rendered the
-        // document way posterises into bands, which is what the panel showed
-        // 2026-08-19.
-        val photo = CheckBox(this).apply {
-            text = "photograph: smooth tones by dithering (a scan does not want this)"
-            textSize = 13f
-            // Pre-ticked for a camera file, and only a suggestion: a photographed
-            // document is a real case, and EXIF cannot tell the two apart.
+            // A camera file is a photograph, and a photograph wants grey: pre-tick both,
+            // as one preset the rider can undo rather than two boxes to discover.
             isChecked = cameraSource
-            isEnabled = false
+        }
+        // Enabled always, and ticking it ticks grey, because the tone only reaches the
+        // GREY levels -- the 1bpp path is dithered either way. It used to be disabled
+        // until grey was ticked while still being pre-ticked and still being read, so a
+        // rider could import with "photograph" showing and get a plain 1bpp document.
+        // That happened on the maintainer's own photos, 2026-08-19.
+        val photo = CheckBox(this).apply {
+            text = "photograph: smooth tones by dithering (implies grey; a scan does not want it)"
+            textSize = 13f
+            isChecked = cameraSource
+        }
+        photo.setOnCheckedChangeListener { _, checked ->
+            if (checked) grey.isChecked = true
         }
         grey.setOnCheckedChangeListener { _, checked ->
-            photo.isEnabled = checked
-            photo.isChecked = checked && cameraSource
+            if (!checked) photo.isChecked = false
         }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -303,8 +305,9 @@ class WalletActivity : Activity() {
             .setMessage("One item, ${uris.size} page(s). Title:")
             .setView(box)
             .setPositiveButton("Import") { _, _ ->
-                runImport(uris, input.text.toString().trim(), grey.isChecked,
-                    if (photo.isChecked) WalletPipeline.Tone.PHOTO
+                runImport(uris, input.text.toString().trim(),
+                    grey = grey.isChecked || photo.isChecked,
+                    tone = if (photo.isChecked) WalletPipeline.Tone.PHOTO
                     else WalletPipeline.Tone.DOCUMENT)
             }
             .setNegativeButton("Cancel", null)
