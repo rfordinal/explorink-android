@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One pin the device reported. The whole row is the button: Replace and Delete
+     both need a confirmation anyway (the device confirms both on its own screen),
+     so they live in the dialog the row opens rather than as two more taps' worth
+     of buttons per row on a phone. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?android:attr/selectableItemBackground"
+    android:orientation="horizontal"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tvRowLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvRowDetail"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:textColor="#FF777777"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvRowDistance"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_vertical"
+        android:fontFamily="monospace"
+        android:paddingStart="8dp"
+        android:textSize="14sp" />
+</LinearLayout>

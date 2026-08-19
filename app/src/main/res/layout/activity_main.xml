@@ -175,6 +175,14 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Wallet" />
+        <!-- Pins: a second window. The list, its per-row actions and the coordinate
+             field do not fit here without pushing the link state off the top
+             (docs/android-pins.md). -->
+        <Button
+            android:id="@+id/btnPins"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Pins" />
 
         <Button
             android:id="@+id/btnRecord"

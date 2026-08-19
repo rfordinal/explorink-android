@@ -77,6 +77,7 @@ class MainActivity : Activity(), BridgeService.Observer {
     private lateinit var tvVersion: TextView
     private lateinit var btnWake: Button
     private lateinit var btnForget: Button
+    private lateinit var btnPins: Button
     private lateinit var btnRetry: Button
     private lateinit var btnExport: Button
     private lateinit var btnRecord: Button
@@ -129,6 +130,7 @@ class MainActivity : Activity(), BridgeService.Observer {
         tvVersion = findViewById(R.id.tvVersion)
         btnWake = findViewById(R.id.btnWake)
         btnForget = findViewById(R.id.btnForget)
+        btnPins = findViewById(R.id.btnPins)
         btnRetry = findViewById(R.id.btnRetry)
         btnExport = findViewById(R.id.btnExport)
         btnRecord = findViewById(R.id.btnRecord)
@@ -137,6 +139,7 @@ class MainActivity : Activity(), BridgeService.Observer {
 
         btnWake.setOnClickListener { onWakePressed() }
         btnForget.setOnClickListener { onForgetPressed() }
+        btnPins.setOnClickListener { startActivity(Intent(this, PinsActivity::class.java)) }
         btnRetry.setOnClickListener { onRetryPressed() }
         btnExport.setOnClickListener { shareLog() }
         btnRecord.setOnClickListener { onRecordPressed() }
@@ -176,7 +179,7 @@ class MainActivity : Activity(), BridgeService.Observer {
     override fun onStop() {
         super.onStop()
         main.removeCallbacks(uiTick)
-        service?.setObserver(null)
+        service?.clearObserver(this)
         if (bound) {
             try {
                 unbindService(connection)
