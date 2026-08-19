@@ -30,6 +30,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import kotlin.math.roundToInt
 
 /**
  * The whole bridge lives here, not in the activity: BLE link, location updates,
@@ -47,7 +48,7 @@ import java.util.TimeZone
  * timer still fires in Doze.
  */
 class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher.Listener,
-    FreshnessChecker.Listener {
+    FreshnessChecker.Listener, PinManager.Listener {
 
     companion object {
         private const val TAG = "BridgeService"
@@ -199,6 +200,33 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private lateinit var tileSource: TileSource
     private lateinit var indexSource: IndexSource
     private lateinit var freshness: FreshnessChecker
+    private lateinit var pins: PinManager
+
+    /**
+     * The device's pins as it last reported them, and nothing derived from them.
+     *
+     * The device is authoritative and this holds no copy of its own: every entry
+     * here came out of a `pin list` reply, and a mutation is followed by another
+     * one ([PinManager]). Null means "never asked on this link", which the pins
+     * screen shows differently from an answered "none saved".
+     */
+    private var devicePins: List<DevicePin>? = null
+
+    /** One line about the last pin command, for the pins screen. */
+    private var pinStatus: String? = null
+
+    /**
+     * True once the device answered `pins=unavailable` on this link: its console
+     * has no pin store, which means the rider is not on the map screen. Cleared by
+     * the next answer that does carry pins.
+     */
+    private var pinsUnavailable = false
+
+    /** The last history page read, and where it sat. Empty until the rider asks. */
+    private var pinHistory: List<PinLogEntry> = emptyList()
+    private var pinHistoryOffset = 0
+    private var pinHistoryTotal: Int? = null
+    private var pinHistoryNext: Int? = null
 
     /**
      * Content ids the freshness check read out of the CDN's index, shared with
@@ -323,6 +351,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         indexSource = CdnIndexSource()
         tileFetcher = TileFetcher(tileSource, fetchTransport, fetchScheduler, this, expectedContentIds)
         freshness = FreshnessChecker(indexSource, expectedContentIds, fetchTransport, fetchScheduler, this)
+        pins = PinManager(pinTransport, fetchScheduler, this)
         createChannel()
         registerReceiver(btReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
         addEvent("service started")
@@ -445,6 +474,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // Before ble.stop(): the abort frame it may send needs a live link.
         freshness.stop()
         tileFetcher.stop()
+        pins.stop()
         tileSource.close()
         indexSource.close()
         ble.stop()
@@ -455,6 +485,19 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
     fun setObserver(o: Observer?) {
         observer = o
+    }
+
+    /**
+     * Drops [o] only if it is still the registered observer.
+     *
+     * Load-bearing with two windows: Android starts the second one before it stops
+     * the first, so the pins screen registers and then the main screen's `onStop`
+     * runs. A bare `setObserver(null)` there cleared the *new* observer, and the
+     * pins screen went blind to everything after its first render -- every reply it
+     * had just asked for landed with nothing listening.
+     */
+    fun clearObserver(o: Observer) {
+        if (observer === o) observer = null
     }
 
     private fun notifyObserver() {
@@ -545,6 +588,13 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         if (wasConnected && !isConnected) {
             tileFetcher.onDisconnected()
             freshness.onDisconnected()
+            pins.onDisconnected()
+            // What the device reported belonged to that link. Keeping it would show
+            // the rider a list they could press Delete on, against a device that is
+            // not there -- and after a reconnect it may not be on the map screen at
+            // all, which is where pins live.
+            devicePins = null
+            pinsUnavailable = false
             // A deferred ask belonged to this connection's conversation. A
             // reconnected device re-asks (NEED_TILES/CHECK_TILES fire again on
             // resubscribe), so replaying a stale one later would answer a
@@ -733,9 +783,19 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             deferredAsk = line
             return
         }
+        // A pin command is a conversation on this same channel and ends on the
+        // same plain `OK`, so it counts here exactly like the other two. The pins
+        // screen holds the channel for at most one command at a time and only
+        // while the rider is on it, so the deferral it causes is short.
+        if ((needTiles || checkTiles) && pins.busy) {
+            addEvent("ask deferred: a pin command is still running")
+            deferredAsk = line
+            return
+        }
 
         tileFetcher.onCommandLine(line)
         freshness.onCommandLine(line)
+        pins.onCommandLine(line)
     }
 
     /**
@@ -750,6 +810,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         val line = deferredAsk ?: return
         if (tileFetcher.phase != TileFetcher.Phase.IDLE) return
         if (freshness.phase != FreshnessChecker.Phase.IDLE) return
+        if (pins.busy) return
         deferredAsk = null
         addEvent("running the deferred ask")
         onCommandLine(line)
@@ -893,6 +954,177 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         runDeferredAsk()
     }
 
+    // --- pins -----------------------------------------------------------
+
+    /** Everything the pins screen needs, snapshotted so it holds no state. */
+    class PinsSnapshot(
+        /**
+         * The device's pins, or null when this link has never answered. Null and
+         * empty read differently to a rider: "not asked yet" against "none saved".
+         */
+        val pins: List<DevicePin>?,
+        /** A pin command is in flight or queued. */
+        val busy: Boolean,
+        /** The last thing that happened, in words. Null before anything has. */
+        val status: String?,
+        /** The device answered `pins=unavailable`: it is not on the map screen. */
+        val unavailable: Boolean,
+        val connected: Boolean,
+        /** The phone's own last fix -- what "save here" would use. */
+        val phoneFix: Location?,
+        val history: List<PinLogEntry>,
+        val historyOffset: Int,
+        val historyTotal: Int?,
+        /** Where the next (older) history page starts, or null at the end. */
+        val historyNext: Int?,
+        /** True while the tile channel is busy, which is when a pin command is refused. */
+        val tilesBusy: Boolean,
+    )
+
+    fun pinsSnapshot(): PinsSnapshot = PinsSnapshot(
+        pins = devicePins,
+        busy = pins.busy,
+        status = pinStatus,
+        unavailable = pinsUnavailable,
+        connected = bleState == BleLink.State.CONNECTED,
+        phoneFix = lastFix,
+        history = pinHistory,
+        historyOffset = pinHistoryOffset,
+        historyTotal = pinHistoryTotal,
+        historyNext = pinHistoryNext,
+        tilesBusy = tileChannelBusy(),
+    )
+
+    private fun tileChannelBusy(): Boolean =
+        tileFetcher.phase != TileFetcher.Phase.IDLE ||
+            freshness.phase != FreshnessChecker.Phase.IDLE
+
+    /**
+     * Why a pin command cannot be sent right now, or null when it can.
+     *
+     * The tile conversations own the same channel and end on the same `OK`, so a
+     * pin command sent across one of them would be answered by its terminator
+     * (the collision measured 2026-08-11, [onCommandLine]). A transfer also has
+     * the rider's data and a fast connection interval riding on it, and it is not
+     * this screen's place to interrupt one.
+     */
+    private fun pinBlocker(): String? = when {
+        bleState != BleLink.State.CONNECTED -> "not connected to the device"
+        tileChannelBusy() -> "map squares are transferring -- try again in a moment"
+        else -> null
+    }
+
+    /** Reads the device's pins. Returns the reason it could not ask, or null. */
+    fun pinsRefresh(): String? {
+        pinBlocker()?.let { return it }
+        pins.refresh()
+        return null
+    }
+
+    /**
+     * Saves a pin at the phone's own last fix.
+     *
+     * The phone's position, deliberately, not the device's: the device's is this
+     * phone's last *sent* packet, which is up to one send interval behind
+     * ([SendPolicy]), and the rider pressing this button means "here, now".
+     */
+    fun pinsSaveHere(key: String): String? {
+        pinBlocker()?.let { return it }
+        val fix = lastFix ?: return "no GPS fix on the phone yet"
+        return pinsSaveAt(
+            key,
+            (fix.latitude * 1e7).roundToInt(),
+            (fix.longitude * 1e7).roundToInt(),
+        )
+    }
+
+    /**
+     * Saves a pin at a coordinate the rider chose. Returns the reason it could
+     * not be sent, or null.
+     *
+     * The UTC second comes from the phone's clock, always: the device has no RTC
+     * and a pin it saves alone carries `0` for "time unknown"
+     * (`firmware/explorink/docs/pins.md`). Filling that field is the cheapest
+     * thing the phone contributes to this feature.
+     */
+    fun pinsSaveAt(key: String, latE7: Int, lonE7: Int): String? {
+        pinBlocker()?.let { return it }
+        pins.save(key, latE7, lonE7, System.currentTimeMillis() / 1000L)
+        return null
+    }
+
+    fun pinsDelete(key: String): String? {
+        pinBlocker()?.let { return it }
+        pins.delete(key)
+        return null
+    }
+
+    /** One page of the device's pin history, newest first. */
+    fun pinsHistory(offset: Int): String? {
+        pinBlocker()?.let { return it }
+        pins.history(offset)
+        return null
+    }
+
+    override fun onPins(pins: List<DevicePin>) {
+        devicePins = pins
+        pinsUnavailable = false
+        pinStatus = if (pins.isEmpty()) "no pins saved on the device" else "${pins.size} pins"
+        logger?.logEvent("pins_list", null, mapOf("count" to pins.size))
+        notifyObserver()
+    }
+
+    override fun onPinHistory(
+        records: List<PinLogEntry>,
+        offset: Int,
+        total: Int?,
+        nextOffset: Int?,
+    ) {
+        pinHistory = records
+        pinHistoryOffset = offset
+        pinHistoryTotal = total
+        pinHistoryNext = nextOffset
+        pinsUnavailable = false
+        notifyObserver()
+    }
+
+    override fun onPinWrite(key: String, deleting: Boolean, ok: Boolean, reason: String?) {
+        val what = if (deleting) "delete" else "save"
+        val label = PinKinds.labelFor(key)
+        pinStatus = if (ok) {
+            "$label ${if (deleting) "deleted" else "saved"}"
+        } else {
+            "could not $what $label: ${reason ?: "unknown reason"}"
+        }
+        addEvent("pin $what $key: ${if (ok) "ok" else reason}")
+        logger?.logEvent(
+            "pin_write",
+            key,
+            mapOf("delete" to deleting, "ok" to ok, "reason" to reason),
+        )
+        notifyObserver()
+    }
+
+    override fun onPinsUnavailable() {
+        pinsUnavailable = true
+        // Not an empty list: the device cannot answer, and overwriting what it last
+        // reported would tell the rider their pins are gone.
+        pinStatus = "the device is not on the map screen"
+        notifyObserver()
+    }
+
+    override fun onPinsError(reason: String) {
+        pinStatus = reason
+        addEvent("pins: $reason")
+        notifyObserver()
+    }
+
+    override fun onPinsBusyChanged() {
+        notifyObserver()
+        // The channel may have just come free for an ask that arrived mid-command.
+        if (!pins.busy) runDeferredAsk()
+    }
+
     /**
      * Everything the fetcher needs from BLE, and nothing more. Written here
      * rather than handing the fetcher a [BleLink] so the fetcher stays testable
@@ -911,6 +1143,18 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
         override fun setFastLink(fast: Boolean) {
             ble.requestHighPriority(fast)
+        }
+    }
+
+    /**
+     * The command channel, for pins. Separate from [fetchTransport] rather than
+     * reusing it: pins send console lines and nothing else, and a transport that
+     * also carried frames and the link-priority switch would let a pin command
+     * change the connection interval by accident.
+     */
+    private val pinTransport = object : PinManager.Transport {
+        override fun sendCommand(line: String, done: (Boolean, String?) -> Unit) {
+            ble.writeCommand(line, done)
         }
     }
 

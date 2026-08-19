@@ -1,7 +1,8 @@
 # ExplorInk GPS — Android companion app
 
 Sends the phone's GPS position to the Xteink X4 over BLE and records the ride
-for replay. One window. Built to `docs/android-app-brief.md`.
+for replay. Two windows: the status page, and the pins screen behind its Pins
+button. Built to `docs/android-app-brief.md`.
 
 Public pages for this side of the system:
 [explorink.com/development/ble-gps/](https://explorink.com/development/ble-gps/)
@@ -525,8 +526,19 @@ android/
   app/src/main/java/org/explorink/gpsbridge/
     BridgeService.kt     the bridge: BLE, GPS, 5s send timer, recorder,
                          counters, notification. Survives a locked screen.
-    MainActivity.kt      the one window. Binds, renders a snapshot, four
+    MainActivity.kt      the status window. Binds, renders a snapshot, the
                          buttons. Holds no state of its own.
+    PinsActivity.kt      the pins window: the device's pins, a coordinate
+                         field, the history pager. Holds no state either
+    PinManager.kt        the pin console conversation as a state machine, one
+                         command at a time. No BLE, no Android: unit-tested
+    PinList.kt           the pin wire: the four `pin` commands and the readers
+                         for their replies. Pure
+    PinCoordinates.kt    pasted text (a pair, a geo: link, a maps URL) to a
+                         coordinate, and what it refuses to guess at. Pure
+    PinGeo.kt            distance to a pin and how it is written, ported from
+                         the device's own PinGeo so the two agree. Pure
+    PinKinds.kt          the pin catalogue keys, mirrored from the firmware
     BleLink.kt           scan, connect, reconnect, the GATT operation queue,
                          all four characteristics, indications; UUIDs and name.
                          pinnedAddress is the paired X4 and the only device it
@@ -562,8 +574,9 @@ android/
   app/src/test/java/...  PositionPacketTest, SendPolicyTest, FixGateTest,
                          HeadingTrendTest, TransferFramesTest,
                          MissingListTest, TileFetcherTest, TileIndexTest,
-                         TileHeaderTest, FreshnessCheckerTest -- 117 tests,
-                         pure JVM
+                         TileHeaderTest, FreshnessCheckerTest, PinListTest,
+                         PinGeoTest, PinCoordinatesTest, PinManagerTest --
+                         240 tests, pure JVM
 ```
 
 ## Build
@@ -672,9 +685,26 @@ jq -c 'select(.type=="packet")' explorink-gps-*.jsonl | head
   does not stop the bridge. The only things that stop it are the **Stop** button
   and the **Stop** notification action.
 
+## Managing the device's pins
+
+The device can only save a pin where the rider is standing: no keyboard, no typed
+coordinates, no map picker. The Pins screen is where a place chosen from text gets
+onto its card, and it is also the only thing that fills the `utc` field in a pin
+record, because the device has no clock of its own.
+
+It drives the firmware's existing console commands (`pin list`, `pin set`,
+`pin del`, `pin log`) on characteristic `...0003`, holds no copy of anything, and
+re-reads the device after every change. Pins only answer while the device is on its
+map screen; anywhere else it says `pins=unavailable`, which is shown as itself and
+never as an empty list.
+
+Full mechanism, what the coordinate field accepts and refuses, and the channel it
+shares with the tile fetch: [`../docs/android-pins.md`](../docs/android-pins.md).
+**Nothing in it has run against real hardware yet.**
+
 ## Verification status
 
-Laptop: clean build, zero Kotlin warnings, 69/69 unit tests.
+Laptop: clean build, zero Kotlin warnings, 240/240 unit tests.
 
 **Auto-start verified on hardware 2026-08-11**, Galaxy S24 (SM-S928B, Android 16)
 against the real X4: paired, app process killed, map reopened on the device, and

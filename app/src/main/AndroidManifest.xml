@@ -79,6 +79,24 @@
             </intent-filter>
         </activity>
 
+        <!-- The pins window. exported=true only for the share filter below: a
+             maps app hands over shared text, which lands in the coordinate field
+             and is never saved without the rider choosing a type and confirming
+             (PinsActivity.prefillFromIntent). -->
+        <activity
+            android:name=".PinsActivity"
+            android:exported="true"
+            android:label="ExplorInk pins"
+            android:launchMode="singleTop"
+            android:parentActivityName=".MainActivity"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".BridgeService"
             android:exported="false"
