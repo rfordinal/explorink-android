@@ -114,7 +114,10 @@ kilobytes over a link the rider is relying on for position, so the rider says
 when. Two places start it, and they ask for different amounts:
 
 - **Home menu > Sync map tiles.** The whole list, up to 200 entries.
-  Preparation, done at home before a ride.
+  Preparation, done at home over a real connection. **It fills the squares the
+  reader already recorded as missing while riding, not an area chosen in advance**
+  -- there is no way to ask for ground nobody has ridden yet
+  (`../docs/roadmap.md`, "Pre-trip caching").
 - **The map screen's autosync**, if the rider turned it on in Settings > Map.
   Sends the same ask with a trailing **`view`**, mid-ride, the moment a frame
   hatches. See "The `view` ask" below.
