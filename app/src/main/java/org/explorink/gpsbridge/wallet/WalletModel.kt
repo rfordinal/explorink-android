@@ -97,6 +97,31 @@ data class WalletPageImage(
     }
 }
 
+/**
+ * The 2bpp whole page (`assetType 6`) and the baked plane set (`assetType 7`) of
+ * one level, emitted only for a document the rider marked grey
+ * (`docs/wallet-format.md` section 13).
+ *
+ * Held as the raw manifest map rather than two more data classes: neither entry
+ * has a field the phone reads back, both are written once and pushed, and the
+ * firmware parses them through one struct whose key names are the contract. A
+ * typed mirror would be a second place for those names to drift, and drifting
+ * key names are exactly the bug that made grey silently decline on hardware
+ * (`docs/wallet-plan.md` 7j).
+ */
+data class WalletGreyEntry(val fields: LinkedHashMap<String, Any?>) {
+    val assetId: String get() = Json.asString(fields["assetId"])
+    val rawLen: Int get() = Json.asInt(fields["rawLen"])
+    val sha256: String get() = Json.asString(fields["sha256"])
+    val rleLen: Int get() = Json.asInt(fields["rleLen"])
+
+    fun toJson(): LinkedHashMap<String, Any?> = fields
+
+    companion object {
+        fun fromJson(o: Map<String, Any?>) = WalletGreyEntry(LinkedHashMap(o))
+    }
+}
+
 /** One zoom level of one page: its tile grid, its tiles, its page image. */
 data class WalletLevel(
     val cols: Int,
@@ -105,6 +130,10 @@ data class WalletLevel(
     val defaultTileY: Int,
     val assets: List<WalletAsset>,
     val pageImage: WalletPageImage?,
+    /** `assetType 6`, the whole page at 2bpp. Only on a grey document. */
+    val greyPageImage: WalletGreyEntry? = null,
+    /** `assetType 7`, one screen with all three planes baked. Only on a grey document. */
+    val greyPlanes: WalletGreyEntry? = null,
 ) {
     fun toJson(): LinkedHashMap<String, Any?> {
         val out = linkedMapOf<String, Any?>(
@@ -115,6 +144,10 @@ data class WalletLevel(
             "assets" to assets.map { it.toJson() },
         )
         if (pageImage != null) out["pageImage"] = pageImage.toJson()
+        // Same order the generator writes them in: pageImage, greyPageImage,
+        // greyPlanes (`tools/walletgen.py`, write_grey_assets).
+        if (greyPageImage != null) out["greyPageImage"] = greyPageImage.toJson()
+        if (greyPlanes != null) out["greyPlanes"] = greyPlanes.toJson()
         return out
     }
 
@@ -126,6 +159,8 @@ data class WalletLevel(
             defaultTileY = Json.asInt(o["defaultTileY"]),
             assets = Json.asList(o["assets"]).map { WalletAsset.fromJson(Json.asMap(it)) },
             pageImage = o["pageImage"]?.let { WalletPageImage.fromJson(Json.asMap(it)) },
+            greyPageImage = o["greyPageImage"]?.let { WalletGreyEntry.fromJson(Json.asMap(it)) },
+            greyPlanes = o["greyPlanes"]?.let { WalletGreyEntry.fromJson(Json.asMap(it)) },
         )
     }
 }
@@ -233,25 +268,54 @@ data class WalletItem(
     val createdAt: String,
     val sortOrder: Int,
     val pages: List<WalletPage>,
+    /**
+     * Four-level grey for THIS document (`docs/wallet-plan.md` 7k, decided on the
+     * panel 2026-08-18). Not a card-wide mode and not a build flag: a scan or a
+     * photo earns the tone, a page of text the rider pans around does not, because
+     * a grey frame costs 2,604 ms and cannot pan at all.
+     *
+     * A grey document carries `greyPageImage` and `greyPlanes` per level beside the
+     * 1bpp assets; nothing is removed, so the device can still draw it 1bpp.
+     */
+    val grey: Boolean = false,
 ) {
     val pageCount: Int get() = pages.size
     val codeCount: Int get() = pages.sumOf { it.codes.size }
     val assetCount: Int get() = pages.sumOf { p ->
-        p.levels.values.sumOf { it.assets.size + (if (it.pageImage != null) 1 else 0) } + p.codes.size
+        p.levels.values.sumOf {
+            it.assets.size + (if (it.pageImage != null) 1 else 0) +
+                (if (it.greyPageImage != null) 1 else 0) + (if (it.greyPlanes != null) 1 else 0)
+        } + p.codes.size
     }
     val rawBytes: Long get() = pages.sumOf { p ->
         p.levels.values.sumOf { l ->
-            l.assets.sumOf { it.rawLen.toLong() } + (l.pageImage?.rawLen?.toLong() ?: 0L)
+            l.assets.sumOf { it.rawLen.toLong() } + (l.pageImage?.rawLen?.toLong() ?: 0L) +
+                (l.greyPageImage?.rawLen?.toLong() ?: 0L) + (l.greyPlanes?.rawLen?.toLong() ?: 0L)
         }
     }
 
-    fun toJson(): LinkedHashMap<String, Any?> = linkedMapOf(
-        "id" to id,
-        "title" to title,
-        "createdAt" to createdAt,
-        "sortOrder" to sortOrder,
-        "pages" to pages.map { it.toJson() },
-    )
+    /**
+     * `grey` is written **only when true**.
+     *
+     * The device treats an absent flag as "no grey", which is the right default: a
+     * card written before grey existed must not start rendering grey frames because
+     * a later firmware learned how (`docs/wallet-format.md` section 13). Omitting it
+     * also keeps a 1bpp manifest byte-identical to what this branch's
+     * `tools/walletgen.py` writes, which is what `WalletParityTest` compares. The
+     * newer generator on the P0 branch writes the key unconditionally; see
+     * `docs/android-wallet.md` section 15 for that divergence.
+     */
+    fun toJson(): LinkedHashMap<String, Any?> {
+        val out = linkedMapOf<String, Any?>(
+            "id" to id,
+            "title" to title,
+            "createdAt" to createdAt,
+            "sortOrder" to sortOrder,
+        )
+        if (grey) out["grey"] = true
+        out["pages"] = pages.map { it.toJson() }
+        return out
+    }
 
     companion object {
         fun fromJson(o: Map<String, Any?>) = WalletItem(
@@ -260,6 +324,7 @@ data class WalletItem(
             createdAt = Json.asString(o["createdAt"]),
             sortOrder = Json.asInt(o["sortOrder"]),
             pages = Json.asList(o["pages"]).map { WalletPage.fromJson(Json.asMap(it)) },
+            grey = o["grey"] == true,
         )
     }
 }
@@ -288,6 +353,8 @@ data class Wallet(
                 val level = page.levels[name] ?: continue
                 for (a in level.assets) out.add(a.assetId)
                 level.pageImage?.let { out.add(it.assetId) }
+                level.greyPageImage?.let { out.add(it.assetId) }
+                level.greyPlanes?.let { out.add(it.assetId) }
             }
             for (c in page.codes) out.add(c.assetId)
         }
@@ -338,79 +405,169 @@ data class Wallet(
 }
 
 /**
- * Where an item stands with respect to the device.
+ * Where an item stands with respect to the device. Brief section 27, verbatim
+ * list.
  *
- * Brief section 27 owns this list. The brief itself is not in this repo (it is
- * the Slovak product spec `ExplorInk - Personal Wallet.md`), so these five are
- * taken from what `docs/wallet-plan.md` states about it (sections 3.5 and 6):
- * per-asset ACK before an item may be called on-device, resume by asset, and
- * "never show Synced for phone-only data". **Assumed, not verified against the
- * brief's own wording** -- confirm when P6 wires the sync queue.
+ * The rule the brief cares about most is negative: **the app must not lie.** So
+ * none of these is stored as a fact about an item. They are DERIVED from the
+ * confirmation ledger ([WalletLocalState.confirmed]) by
+ * [WalletSyncStatus.of], and a confirmation only exists after the device said
+ * what it holds -- `OK <bytes> <crc32hex>` on BLE, `/api/hash` on Wi-Fi. There
+ * is no field anywhere that can say [FULLY_SYNCED] without one, which is what
+ * makes the "unreachable state" tests possible at all.
+ *
+ * The five-value enum P4 shipped (PHONE_ONLY / QUEUED / SYNCING / ON_DEVICE /
+ * FAILED) was a guess at this list, written before the brief was readable here.
+ * Old `state.json` files are migrated on read.
  */
 enum class SyncState {
-    /** Rendered on the phone, nothing sent. The state every import starts in. */
-    PHONE_ONLY,
+    /** Rendered on the phone, nothing confirmed on the card, not queued. */
+    LOCAL_ONLY,
 
-    /** In the sync queue, waiting for a transport. */
+    /** In the queue, nothing of it confirmed yet, no transfer running. */
     QUEUED,
 
-    /** Assets are going over now. */
+    /** A transfer is running and the item is not usable on the device yet. */
     SYNCING,
 
-    /** Every asset acknowledged by the device. Only this one may say "on device". */
-    ON_DEVICE,
+    /**
+     * Manifest, every FIT asset and every **verified** code confirmed. The rider
+     * can find the document, read it at FIT and show a code -- brief section 27's
+     * "Ready on device". Detail and 1:1 are still missing.
+     */
+    USABLE_ON_DEVICE,
 
-    /** A transfer failed and was not retried yet. */
-    FAILED;
+    /** Usable, and the rest of its assets are going over now. */
+    FULL_QUALITY_SYNCING,
+
+    /** Every asset of the item confirmed. The only state that may say "synced". */
+    FULLY_SYNCED,
+
+    /** An asset of this item failed and has not been retried. */
+    ERROR;
 
     fun label(): String = when (this) {
-        PHONE_ONLY -> "phone only"
+        LOCAL_ONLY -> "local only"
         QUEUED -> "queued"
         SYNCING -> "syncing"
-        ON_DEVICE -> "on device"
-        FAILED -> "failed"
+        USABLE_ON_DEVICE -> "usable on device"
+        FULL_QUALITY_SYNCING -> "full quality syncing"
+        FULLY_SYNCED -> "fully synced"
+        ERROR -> "error"
+    }
+
+    /** True only for the one state that means every byte is on the card. */
+    val isFullySynced: Boolean get() = this == FULLY_SYNCED
+
+    /** True when the rider can actually use the document off the panel. */
+    val isUsable: Boolean
+        get() = this == USABLE_ON_DEVICE || this == FULL_QUALITY_SYNCING || this == FULLY_SYNCED
+}
+
+/**
+ * One asset the **device confirmed it holds**, and the only reason any item is
+ * ever shown as synced.
+ *
+ * Keyed by asset id, but the [sha256] is what decides: a re-rendered page keeps
+ * its asset id (the id recipe has no content in it) and gets new bytes, so
+ * comparing the manifest's hash against this one is what makes delta sync fall
+ * out instead of being computed (`docs/android-wallet.md` section 14).
+ */
+data class ConfirmedAsset(
+    val sha256: String,
+    val bytes: Int,
+    /** "ble" or "wifi" -- which transport's confirmation this was. */
+    val transport: String,
+    val atMs: Long,
+) {
+    fun toJson(): LinkedHashMap<String, Any?> = linkedMapOf(
+        "sha256" to sha256,
+        "bytes" to bytes,
+        "transport" to transport,
+        "atMs" to atMs,
+    )
+
+    companion object {
+        fun fromJson(o: Map<String, Any?>) = ConfirmedAsset(
+            sha256 = Json.asString(o["sha256"]),
+            bytes = Json.asInt(o["bytes"]),
+            transport = Json.asString(o["transport"]),
+            atMs = Json.asLong(o["atMs"]),
+        )
     }
 }
 
 /**
- * App-private state that the wallet format does not carry: sync state per item
- * and the source names an item was built from. Kept in `state.json` beside the
- * manifest so `manifest.json` stays byte-identical to a generator run.
+ * App-private state the wallet format does not carry. Kept in `state.json`
+ * beside the manifest so `manifest.json` stays byte-identical to a generator run.
+ *
+ * Three maps, and none of them is an item state:
+ *
+ *  - [confirmed] -- the ledger. What the device said it holds. Survives a kill,
+ *    which is what makes resume work across app restarts (brief section 29).
+ *  - [queued] -- item ids the rider asked to sync. Intent, not progress.
+ *  - [errors] -- asset id to last failure reason. Cleared when that asset lands.
+ *  - [sourceNames] -- the picked images' display names, for the item id recipe.
  */
 data class WalletLocalState(
-    val syncState: Map<String, SyncState> = emptyMap(),
+    val confirmed: Map<String, ConfirmedAsset> = emptyMap(),
+    val queued: Set<String> = emptySet(),
+    val errors: Map<String, String> = emptyMap(),
     val sourceNames: Map<String, List<String>> = emptyMap(),
 ) {
-    fun stateOf(itemId: String): SyncState = syncState[itemId] ?: SyncState.PHONE_ONLY
+    /**
+     * The one question the ledger answers. Both halves matter: the id says which
+     * asset, the hash says which bytes.
+     */
+    fun isConfirmed(assetId: String, sha256: String): Boolean =
+        confirmed[assetId]?.sha256 == sha256
 
     fun toJson(): String {
-        val states = LinkedHashMap<String, Any?>()
-        for ((k, v) in syncState) states[k] = v.name
+        val conf = LinkedHashMap<String, Any?>()
+        for ((k, v) in confirmed) conf[k] = v.toJson()
         val sources = LinkedHashMap<String, Any?>()
         for ((k, v) in sourceNames) sources[k] = v
+        val errs = LinkedHashMap<String, Any?>()
+        for ((k, v) in errors) errs[k] = v
         return Json.write(linkedMapOf<String, Any?>(
-            "version" to 1,
-            "syncState" to states,
+            "version" to 2,
+            "confirmed" to conf,
+            "queued" to queued.toList(),
+            "errors" to errs,
             "sourceNames" to sources,
         )) + "\n"
     }
 
     companion object {
+        /**
+         * A version-1 file (P4/P5) carried a `syncState` map instead of a ledger.
+         * There is no honest migration for it -- "ON_DEVICE" recorded no hash and
+         * no bytes, so it cannot become a confirmation -- so the states are
+         * **dropped** and every item falls back to LOCAL_ONLY. The wallet then
+         * re-syncs once. That is the right way round: forgetting a confirmation
+         * costs a transfer, inventing one shows "synced" for bytes nobody checked.
+         */
         fun fromJson(text: String): WalletLocalState {
             val o = Json.asMap(Json.parse(text))
-            val states = LinkedHashMap<String, SyncState>()
-            for ((k, v) in Json.asMap(o["syncState"] ?: emptyMap<String, Any?>())) {
-                states[k] = try {
-                    SyncState.valueOf(Json.asString(v))
-                } catch (e: IllegalArgumentException) {
-                    SyncState.PHONE_ONLY
-                }
+            val conf = LinkedHashMap<String, ConfirmedAsset>()
+            for ((k, v) in Json.asMap(o["confirmed"] ?: emptyMap<String, Any?>())) {
+                conf[k] = ConfirmedAsset.fromJson(Json.asMap(v))
             }
             val sources = LinkedHashMap<String, List<String>>()
             for ((k, v) in Json.asMap(o["sourceNames"] ?: emptyMap<String, Any?>())) {
                 sources[k] = Json.asList(v).map { Json.asString(it) }
             }
-            return WalletLocalState(states, sources)
+            val errs = LinkedHashMap<String, String>()
+            for ((k, v) in Json.asMap(o["errors"] ?: emptyMap<String, Any?>())) {
+                errs[k] = Json.asString(v)
+            }
+            return WalletLocalState(
+                confirmed = conf,
+                queued = Json.asList(o["queued"] ?: emptyList<Any?>())
+                    .map { Json.asString(it) }.toSet(),
+                errors = errs,
+                sourceNames = sources,
+            )
         }
     }
 }

@@ -13,5 +13,15 @@
             android:name=".wallet.WalletCodeSelfTestActivity"
             android:exported="true"
             android:label="Wallet code self-test" />
+
+        <!-- Starts a real sync from adb and reports what the DEVICE confirmed
+             (phase P6/P7, `docs/android-wallet.md` section 14.9). Exported for the
+             same reason: `adb shell am start` cannot launch a non-exported
+             activity, and this exists to be driven from a command line. Debug
+             variant only, like the class itself. -->
+        <activity
+            android:name=".wallet.WalletSyncTestActivity"
+            android:exported="true"
+            android:label="Wallet sync self-test" />
     </application>
 </manifest>

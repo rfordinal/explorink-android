@@ -40,6 +40,16 @@
         android:layout_height="wrap_content"
         android:orientation="vertical" />
 
+    <!-- The per-document grey toggle. Flipping it rewrites the manifest and
+         nothing else, which is brief section 40's own example of a metadata change
+         that must not re-upload image data. -->
+    <Button
+        android:id="@+id/btnItemGrey"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="12sp"
+        android:text="grey" />
+
     <Button
         android:id="@+id/btnItemDelete"
         android:layout_width="match_parent"

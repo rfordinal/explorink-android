@@ -22,9 +22,30 @@ class WalletPipeline(
     val panel: PanelProfile = Panels.default,
     /** Design B assets. On by default: the device viewer prefers them. */
     val pageImage: Boolean = true,
+    /**
+     * Four-level grey for this document (`docs/wallet-format.md` section 13).
+     *
+     * Per document, never card-wide: the rider marks a scan or a photo grey and
+     * everything else stays 1bpp, because a grey frame costs 2,604 ms and a baked
+     * plane set cannot pan (`docs/wallet-plan.md` 7j, 7k). Adds two assets per level
+     * -- `greyPageImage` (type 6) and `greyPlanes` (type 7) -- and removes nothing,
+     * so the device can still draw the document 1bpp.
+     *
+     * Refused together with `pageImage = false`: grey exists to be compared against
+     * the 1bpp page images on one card, and the plane set is baked at the page
+     * image's own focal window.
+     */
+    val grey: Boolean = false,
     /** The encryption seam. [AssetCipher.None] until P3. */
     val cipher: AssetCipher = AssetCipher.None,
 ) {
+
+    init {
+        require(!grey || pageImage) {
+            "grey needs the page images it is compared against; --grey with no page image " +
+                "is not a configuration anyone wants"
+        }
+    }
 
     /** One source page: grayscale pixels plus whatever the decoder knew about it. */
     class PageSource(
@@ -95,7 +116,7 @@ class WalletPipeline(
                 progress?.invoke(done, total)
             })
         }
-        return WalletItem(itemId, title, createdAt, sortOrder, pages)
+        return WalletItem(itemId, title, createdAt, sortOrder, pages, grey = grey)
     }
 
     /** How many assets one page produces, so a UI can show real progress. */
@@ -105,6 +126,7 @@ class WalletPipeline(
             val (cols, rows) = levelGrid(level, paper)
             n += cols * rows
             if (pageImage) n++
+            if (grey) n += 2
         }
         return n
     }
@@ -130,11 +152,16 @@ class WalletPipeline(
     ): WalletPage {
         val levels = LinkedHashMap<String, WalletLevel>()
         for (level in WalletFormat.LEVELS) {
-            val canvas = levelCanvas(gray, level, paper)
+            var canvas: GrayImage? = levelCanvas(gray, level, paper)
             val (cols, rows) = levelGrid(level, paper)
-            // Step 4. The grey canvas is dropped straight after, so only one big
-            // raster is alive at a time.
-            val mono = canvas.dither()
+            // Step 4. On a 1bpp document the grey canvas is dropped straight after, so
+            // only one big raster is alive at a time. A grey document has to keep it
+            // until the two grey assets are built -- for a 1:1 A4 page on X4 that is
+            // the 6.1 MB level canvas plus its quantised copy plus the rotated one,
+            // ~20 MB peak against ~12 MB. Read, not measured on a phone.
+            val mono = canvas!!.dither()
+            val greyLevels = if (grey) GreyLevels.quantise(canvas) else null
+            canvas = null
             val assetType = WalletFormat.LEVEL_TYPE.getValue(level)
 
             val entries = ArrayList<WalletAsset>(cols * rows)
@@ -163,7 +190,17 @@ class WalletPipeline(
                 pi = writePageImage(sink, itemId, pageId, mono, level, paper, version, cols, rows)
                 tick()
             }
-            levels[level] = WalletLevel(cols, rows, dx, dy, entries, pi)
+            var greyPage: WalletGreyEntry? = null
+            var greyPlanes: WalletGreyEntry? = null
+            if (greyLevels != null) {
+                val pair = writeGreyAssets(sink, itemId, pageId, greyLevels, level, paper,
+                    version, cols, rows)
+                greyPage = pair.first
+                greyPlanes = pair.second
+                tick()
+                tick()
+            }
+            levels[level] = WalletLevel(cols, rows, dx, dy, entries, pi, greyPage, greyPlanes)
         }
         val codeEntries = ArrayList<MachineReadableCode>(codes.size)
         for ((index, request) in codes.withIndex()) {
@@ -313,6 +350,126 @@ class WalletPipeline(
             focalX = clampOrigin(fx, nativeW, panel.width),
             focalY = clampOrigin(fy, nativeH, panel.height),
         )
+    }
+
+    // --- four-level grey (phase P2b, per document) ---------------------------
+
+    /**
+     * Both grey assets for one level: `greyPageImage` (type 6) and `greyPlanes`
+     * (type 7). Returns them in that order, which is the order the manifest writes.
+     *
+     * Two options for the same page on one card, so the panel decides
+     * (`docs/wallet-format.md` section 13):
+     *
+     *  - **type 6** is the whole page at 2bpp, with **identical extent** to the 1bpp
+     *    page image of the same level -- same native size, same window step, same
+     *    focal window. That is what makes the on-glass comparison about grey against
+     *    dither and not about two different crops. It pans; the device pays three
+     *    unpacks per screen.
+     *  - **type 7** is ONE screen -- the level's focal window -- with the base frame
+     *    and both planes already baked, so the device streams three plane-sized
+     *    reads straight to controller RAM. It cannot pan, because a plane set is one
+     *    screen (`Ssd1677Driver.cpp:494-502` writes at the panel's stride).
+     *
+     * Measured on hardware for a FIT screen: 2,604 ms a grey frame against 1,969 ms
+     * for the 1bpp entry, i.e. **+635 ms on entry**, and no pan at all
+     * (`docs/wallet-plan.md` 7j).
+     */
+    private fun writeGreyAssets(
+        sink: AssetSink,
+        itemId: String,
+        pageId: String,
+        levelsImage: GreyLevels,
+        level: String,
+        paper: String,
+        version: Int,
+        cols: Int,
+        rows: Int,
+    ): Pair<WalletGreyEntry, WalletGreyEntry> {
+        val (extW, extH) = pageExtent(levelsImage.width, levelsImage.height, level, paper)
+        val native = levelsImage.crop(0, 0, extW, extH).rotateNative()
+        val nativeW = native.width
+        val nativeH = native.height
+        if (nativeW % 8 != 0) {
+            // Grey keeps the 1bpp alignment (a multiple of 8, not just the 4 a 2bpp
+            // row needs) so the two page images share exactly one geometry.
+            throw AssertionError("native width $nativeW is not a whole number of 1bpp bytes")
+        }
+        val rowBytes = nativeW / 4
+        val payload = native.pack2bpp()
+        if (payload.size != rowBytes * nativeH) {
+            throw AssertionError("2bpp page is ${payload.size} B, want ${rowBytes * nativeH}")
+        }
+
+        val (stepX, stepY) = windowStep()
+        val (fc, fr) = WalletFormat.defaultTile(cols, rows)
+        val (rawX, rawY) = tileWindowOrigin(fc, fr, extW)
+        val focalX = clampOrigin(rawX, nativeW, panel.width)
+        val focalY = clampOrigin(rawY, nativeH, panel.height)
+
+        val greyId = WalletFormat.assetId(panel.name, itemId, pageId,
+            WalletFormat.ASSET_PAGE_IMAGE_GREY, WalletFormat.LEVEL_INDEX.getValue(level), version)
+        val greyEntry = writeAsset(sink, greyId, WalletFormat.ASSET_PAGE_IMAGE_GREY, 0, 0,
+            payload, version, width = nativeW, height = nativeH, rowBytes = rowBytes,
+            bitDepth = WalletFormat.BIT_DEPTH_2BPP)
+
+        val greyPageImage = WalletGreyEntry(linkedMapOf(
+            "assetId" to greyId,
+            "bitDepth" to WalletFormat.BIT_DEPTH_2BPP,
+            "nativeWidth" to nativeW,
+            "nativeHeight" to nativeH,
+            "rowBytes" to rowBytes,
+            "rawLen" to payload.size,
+            "sha256" to greyEntry.sha256,
+            "rleLen" to greyEntry.rleLen,
+            "windowStepX" to stepX,
+            "windowStepY" to stepY,
+            "focalX" to focalX,
+            "focalY" to focalY,
+        ))
+
+        val window = native.crop(focalX, focalY, panel.width, panel.height)
+        val planePayload = window.packPlanes(panel)
+        val planeId = WalletFormat.assetId(panel.name, itemId, pageId,
+            WalletFormat.ASSET_GREY_PLANES, WalletFormat.LEVEL_INDEX.getValue(level), version)
+        val planeEntry = writeAsset(sink, planeId, WalletFormat.ASSET_GREY_PLANES, 0, 0,
+            planePayload, version, width = panel.width, height = panel.height,
+            rowBytes = panel.rowBytes, bitDepth = WalletFormat.BIT_DEPTH_2BPP)
+
+        val greyPlanes = WalletGreyEntry(linkedMapOf(
+            "assetId" to planeId,
+            "bitDepth" to WalletFormat.BIT_DEPTH_2BPP,
+            // The firmware reads every image-like entry through ONE struct
+            // (`PageImageSpec`: nativeWidth, nativeHeight, rowBytes, rawLen,
+            // windowStepX/Y, focalX/Y), so a plane set has to speak that vocabulary or
+            // it parses as present-but-zero and the grey path declines in silence.
+            // Found on hardware 2026-08-18 with `grey_rendered=0` as the only symptom:
+            // the byte layouts matched, the field names did not.
+            "nativeWidth" to panel.width,
+            "nativeHeight" to panel.height,
+            "rowBytes" to panel.rowBytes,
+            // A plane set is exactly one screen, so there is nothing to pan within it.
+            "windowStepX" to 0,
+            "windowStepY" to 0,
+            "focalX" to 0,
+            "focalY" to 0,
+            // Kept as well: the window this set was baked at, in page coordinates.
+            "width" to panel.width,
+            "height" to panel.height,
+            "originX" to focalX,
+            "originY" to focalY,
+            "planeOrder" to Grey.PLANE_NAMES,
+            "planeBytes" to panel.assetBytes,
+            "planeBandRows" to Grey.PLANE_BAND_ROWS,
+            "planeBandCount" to Grey.bandCount(panel.height),
+            "baseOffset" to 0,
+            "lsbOffset" to panel.assetBytes,
+            "msbOffset" to 2 * panel.assetBytes,
+            "rawLen" to planePayload.size,
+            "sha256" to planeEntry.sha256,
+            "rleLen" to planeEntry.rleLen,
+        ))
+        return Pair(greyPageImage, greyPlanes)
     }
 
     /**

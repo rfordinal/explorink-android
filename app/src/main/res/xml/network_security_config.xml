@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The device's web server is plain HTTP on a LAN, and Android blocks cleartext
+     by default for any app targeting API 28 or later. Without this file the
+     wallet's Wi-Fi Fast Sync cannot make a single request: every call fails with
+     "Cleartext HTTP traffic to ... not permitted", which reads like a network
+     fault and is a policy one. Found on an emulator, 2026-08-19.
+
+     The base config stays strict, so the tile CDN keeps being HTTPS-only and no
+     downgrade is possible there. Cleartext is permitted for the device's own
+     addresses and nothing else:
+
+       192.168.4.1     the ESP32 softAP's default address. This is the address the
+                       PRODUCT flow uses, brief sections 35 to 37 have the rider
+                       joining the DEVICE's hotspot, so the address is fixed.
+       192.168.69.20   the address the device answered on in station mode when
+                       Wi-Fi throughput was measured (docs/wallet-plan.md 7d).
+
+     Known limit, stated rather than discovered later: a device on any OTHER
+     DHCP address is refused by this policy, and the fix is an entry here. The
+     debug build has a wider config (src/debug/res/xml) so a lab machine can point
+     the app at an arbitrary host. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.4.1</domain>
+        <domain includeSubdomains="false">192.168.69.20</domain>
+    </domain-config>
+</network-security-config>

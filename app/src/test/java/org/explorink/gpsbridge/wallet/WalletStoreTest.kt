@@ -138,18 +138,26 @@ class WalletStoreTest {
     }
 
     @Test
-    fun sync_state_lives_outside_the_manifest() {
+    fun the_sync_ledger_lives_outside_the_manifest() {
         val store = tempStore()
         store.addItem(item("aaaa000000000000", "One", emptyList()))
-        assertEquals(SyncState.PHONE_ONLY, store.loadState().stateOf("aaaa000000000000"))
-        store.setSyncState("aaaa000000000000", SyncState.ON_DEVICE)
-        assertEquals(SyncState.ON_DEVICE, store.loadState().stateOf("aaaa000000000000"))
-        // The manifest must not have grown a sync field: it has to stay exactly
-        // what the generator would write.
-        assertFalse(File(store.treeDir, "manifest.json").readText().contains("ON_DEVICE"))
-        // A re-render puts the item back to phone-only: the device holds old bytes.
-        store.addItem(item("aaaa000000000000", "One", emptyList()))
-        assertEquals(SyncState.PHONE_ONLY, store.loadState().stateOf("aaaa000000000000"))
+        assertTrue(store.loadState().confirmed.isEmpty())
+
+        // A confirmation is (asset id, sha256): the id says which asset, the hash
+        // says which bytes.
+        val q = WalletSyncQueue(WalletSyncPlan.build(store.load(), store.treeDir))
+        q.queueAll()
+        val a = q.plan.first { it.isManifest }
+        q.confirm(a, "wifi", 1234L)
+        store.saveSyncState(q)
+        assertEquals("wifi", store.loadState().confirmed["manifest"]?.transport)
+        assertTrue(store.loadState().isConfirmed("manifest", a.sha256))
+
+        // The manifest must not have grown a sync field: it has to stay exactly what
+        // the generator would write.
+        val text = File(store.treeDir, "manifest.json").readText()
+        assertFalse(text.contains("confirmed"))
+        assertFalse(text.contains("wifi"))
     }
 
     @Test
@@ -158,7 +166,22 @@ class WalletStoreTest {
         store.addItem(item("aaaa000000000000", "One", emptyList()))
         File(store.root, "state.json").writeText("{not json")
         assertEquals(1, store.load().items.size)
-        assertEquals(SyncState.PHONE_ONLY, store.loadState().stateOf("aaaa000000000000"))
+        assertTrue(store.loadState().confirmed.isEmpty())
+    }
+
+    @Test
+    fun a_version_1_state_file_loses_its_states_rather_than_inventing_confirmations() {
+        val store = tempStore()
+        store.addItem(item("aaaa000000000000", "One", emptyList()))
+        // What P4/P5 wrote: a per-item state with no hash and no byte count behind it.
+        File(store.root, "state.json").writeText(
+            "{\"version\": 1, \"syncState\": {\"aaaa000000000000\": \"ON_DEVICE\"}, " +
+                "\"sourceNames\": {\"aaaa000000000000\": [\"one.png\"]}}")
+        val state = store.loadState()
+        // Forgetting costs a transfer; inventing would show "synced" for bytes
+        // nobody checked. So the states go and the source names stay.
+        assertTrue(state.confirmed.isEmpty())
+        assertEquals(listOf("one.png"), state.sourceNames["aaaa000000000000"])
     }
 
     @Test

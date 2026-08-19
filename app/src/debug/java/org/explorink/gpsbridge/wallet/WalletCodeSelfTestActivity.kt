@@ -77,13 +77,20 @@ class WalletCodeSelfTestActivity : Activity() {
         if (toImport != null) {
             val file = File(dir, toImport)
             val store = WalletImporter.store(this)
+            // `--ez grey true` marks the imported document grey, which is the only way
+            // to get a grey item onto an emulator without tapping the import dialog's
+            // checkbox (phase P6/P7 verification).
+            val grey = intent.getBooleanExtra("grey", false)
+            val title = intent.getStringExtra("title")
+                ?: "Selftest ${file.nameWithoutExtension}"
             val outcome = WalletImporter.importImages(this, store, listOf(Uri.fromFile(file)),
-                "Selftest ${file.nameWithoutExtension}")
+                title, grey)
             val line = when (outcome) {
                 is WalletImporter.Outcome.Ok ->
                     "import ${file.name}: item ${outcome.item.id}, " +
                     "${outcome.item.codeCount} code(s), ${outcome.item.assetCount} assets, " +
-                    "${outcome.millis} ms, codes=" + outcome.item.pages.flatMap { it.codes }
+                    "${outcome.millis} ms, grey=${outcome.item.grey}, codes=" +
+                        outcome.item.pages.flatMap { it.codes }
                         .joinToString(", ") {
                             "${it.id}/${it.symbology}/${it.orientation}/${it.moduleSize}px/" +
                                 (if (it.verified) "verified" else "UNVERIFIED")

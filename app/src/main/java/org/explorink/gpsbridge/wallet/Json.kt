@@ -288,5 +288,12 @@ object Json {
         else -> throw IllegalArgumentException("not a number: $v")
     }
 
+    fun asLong(v: Any?): Long = when (v) {
+        is Long -> v
+        is Int -> v.toLong()
+        is Double -> v.toLong()
+        else -> throw IllegalArgumentException("not a number: $v")
+    }
+
     fun asString(v: Any?): String = v as String
 }

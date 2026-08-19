@@ -36,8 +36,29 @@ object WalletFormat {
     const val ASSET_ONE_TO_ONE_TILE = 3
     const val ASSET_MACHINE_CODE = 4          // phase P5 on this side
     const val ASSET_PAGE_IMAGE = 5            // design B: one whole page per level
+    const val ASSET_PAGE_IMAGE_GREY = 6       // the same page at 2bpp (grey)
+    const val ASSET_GREY_PLANES = 7           // ONE screen, base||lsb||msb, baked
 
-    const val BIT_DEPTH_1BPP = 1              // 2 is reserved for 4-level grey
+    const val BIT_DEPTH_1BPP = 1
+    const val BIT_DEPTH_2BPP = 2              // four-level grey
+
+    /**
+     * **One assetType means one bit depth.** The asset id recipe has `assetType` in
+     * it but not `bitDepth`, so the only reason a grey asset cannot collide with a
+     * 1bpp one is that they use different types. Emit type 5 at bitDepth 2 and the
+     * two share one id and one path, silently, which is the same class of failure the
+     * panel scoping fixed. Named here with a test that demonstrates the collision it
+     * prevents (`docs/wallet-format.md` section 13, "Ids").
+     */
+    val ASSET_TYPE_BIT_DEPTH: Map<Int, Int> = mapOf(
+        ASSET_FIT to BIT_DEPTH_1BPP,
+        ASSET_DETAIL_TILE to BIT_DEPTH_1BPP,
+        ASSET_ONE_TO_ONE_TILE to BIT_DEPTH_1BPP,
+        ASSET_MACHINE_CODE to BIT_DEPTH_1BPP,
+        ASSET_PAGE_IMAGE to BIT_DEPTH_1BPP,
+        ASSET_PAGE_IMAGE_GREY to BIT_DEPTH_2BPP,
+        ASSET_GREY_PLANES to BIT_DEPTH_2BPP,
+    )
 
     const val FLAG_ENCRYPTED = 0x01           // always 0 until P3
 

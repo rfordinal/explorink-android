@@ -59,7 +59,8 @@ class WalletItemActivity : Activity() {
         }
 
         tvTitle.text = item.title
-        tvBody.text = describe(item, store.loadState().stateOf(item.id))
+        tvBody.text = describe(item, syncStatus(item.id))
+        renderGrey(item)
         renderCodes(item)
         btnDelete.isEnabled = true
         btnDelete.setOnClickListener {
@@ -107,12 +108,61 @@ class WalletItemActivity : Activity() {
         }
     }
 
-    private fun describe(item: WalletItem, sync: SyncState): String {
+    /**
+     * The item's state, derived from the ledger the same way the list and the sync
+     * screen derive it -- one derivation, so the three screens cannot disagree.
+     *
+     * Synchronous here, unlike the list: one item screen is one plan build, and the
+     * rider has just tapped a row.
+     */
+    private fun syncStatus(itemId: String): WalletSyncQueue.ItemStatus {
+        val state = store.loadState()
+        val q = WalletSyncQueue(WalletSyncPlan.build(store.load(), store.treeDir),
+            state.confirmed, state.errors, state.queued)
+        return q.statusOf(itemId)
+    }
+
+    /**
+     * The per-document grey toggle (`docs/wallet-plan.md` 7k).
+     *
+     * Flipping the flag rewrites **the manifest and nothing else**, so the whole
+     * cost of the change is one small upload -- brief section 40's own example. The
+     * grey assets stay on the card either way; an absent or false flag simply stops
+     * the device using them.
+     *
+     * Turning grey **on** needs those assets to exist, and they are built at import
+     * from the source pages, which the phone does not keep. So a 1bpp document says
+     * what to do instead rather than offering a button that would silently mark a
+     * document grey with no planes to draw -- which on the device is a page of
+     * present-but-zero geometry and a silently declined grey path, the exact bug
+     * that cost a hardware session.
+     */
+    private fun renderGrey(item: WalletItem) {
+        val btn = findViewById<Button>(R.id.btnItemGrey)
+        val has = store.hasGreyAssets(item)
+        btn.isEnabled = has
+        btn.text = when {
+            !has -> "grey: not built -- re-import this document with grey ticked"
+            item.grey -> "grey is ON -- tap to draw this document 1bpp"
+            else -> "grey is OFF -- tap to draw this document grey"
+        }
+        btn.setOnClickListener {
+            store.setGrey(item.id, !item.grey)
+            render()
+        }
+    }
+
+    private fun describe(item: WalletItem, sync: WalletSyncQueue.ItemStatus): String {
         val sb = StringBuilder()
         sb.append("id          ").append(item.id).append('\n')
         sb.append("created     ").append(item.createdAt).append('\n')
         sb.append("order       ").append(item.sortOrder).append('\n')
-        sb.append("sync        ").append(sync.label()).append('\n')
+        sb.append("sync        ").append(sync.state.label())
+            .append("  ").append(sync.confirmedAssets).append('/').append(sync.assets)
+            .append(" assets confirmed by the device")
+        if (sync.failedAssets > 0) sb.append(", ").append(sync.failedAssets).append(" failed")
+        sb.append('\n')
+        sb.append("grey        ").append(if (item.grey) "yes" else "no").append('\n')
         sb.append("pages       ").append(item.pageCount).append('\n')
         sb.append("assets      ").append(item.assetCount).append('\n')
         sb.append("raw bytes   ").append(item.rawBytes).append('\n')
@@ -137,6 +187,23 @@ class WalletItemActivity : Activity() {
                     sb.append("             ").append(pi.assetId)
                         .append("  ").append(pi.rawLen).append(" B raw, ")
                         .append(pi.rleLen).append(" B rle\n")
+                }
+                // A grey document's two extra assets per level. Shown because "grey
+                // yes" alone does not say whether the planes are actually there, and
+                // a missing plane set is a silently declined grey path on the device.
+                level.greyPageImage?.let {
+                    sb.append("             grey page ").append(it.assetId)
+                        .append("  2bpp, ").append(it.rawLen).append(" B raw, ")
+                        .append(it.rleLen).append(" B rle\n")
+                }
+                level.greyPlanes?.let {
+                    sb.append("             grey planes ").append(it.assetId)
+                        .append("  ").append(Json.asInt(it.fields["planeBandCount"]))
+                        .append(" bands of ").append(Json.asInt(it.fields["planeBandRows"]))
+                        .append(" rows, ").append(it.rawLen).append(" B raw, ")
+                        .append(it.rleLen).append(" B rle, baked at ")
+                        .append(Json.asInt(it.fields["originX"])).append('/')
+                        .append(Json.asInt(it.fields["originY"])).append('\n')
                 }
             }
             if (page.codes.isEmpty()) {

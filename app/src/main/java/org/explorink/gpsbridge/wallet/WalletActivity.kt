@@ -10,6 +10,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -48,6 +49,13 @@ class WalletActivity : Activity() {
     private val store: WalletStore by lazy { WalletImporter.store(this) }
     private var busy = false
 
+    /**
+     * The sync queue, for the per-item states. Null until the worker has hashed the
+     * tree -- and the states read "..." until then rather than guessing, because a
+     * guessed state is exactly what brief section 27 forbids.
+     */
+    private var queue: WalletSyncQueue? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_wallet)
@@ -57,6 +65,9 @@ class WalletActivity : Activity() {
         btnImport = findViewById(R.id.btnWalletImport)
         list = findViewById(R.id.walletList)
         btnImport.setOnClickListener { pickImages() }
+        findViewById<Button>(R.id.btnWalletSync).setOnClickListener {
+            startActivity(Intent(this, WalletSyncActivity::class.java))
+        }
         handleShare(intent)
         render()
     }
@@ -72,6 +83,25 @@ class WalletActivity : Activity() {
     override fun onResume() {
         super.onResume()
         render()
+        refreshStates()
+    }
+
+    /**
+     * Rebuild the plan off the UI thread. Reading and hashing the whole tree is the
+     * honest cost of "the hashes decide" -- ~15 ms for a one-page wallet on a laptop
+     * JVM, and it is why this is not done inside `render()`.
+     */
+    private fun refreshStates() {
+        Thread({
+            val wallet = store.load()
+            val state = store.loadState()
+            val q = WalletSyncQueue(WalletSyncPlan.build(wallet, store.treeDir),
+                state.confirmed, state.errors, state.queued)
+            MainThread.post {
+                queue = q
+                render()
+            }
+        }, "wallet-states").start()
     }
 
     // --- import ------------------------------------------------------------
@@ -175,24 +205,41 @@ class WalletActivity : Activity() {
             setText(suggested)
             setSelection(text.length)
         }
+        // Grey is chosen HERE and not later, because the grey assets are built from
+        // the source pages and the phone does not keep them: a share-target Uri is
+        // not persistable, so there is nothing to re-render from once the dialog is
+        // gone. The item screen can still turn the flag off and back on afterwards,
+        // which costs one manifest upload and no image data.
+        val grey = CheckBox(this).apply {
+            text = "grey (scan or photo): richer tone, +635 ms an entry, cannot pan"
+            textSize = 13f
+            isChecked = false
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val dp = resources.displayMetrics.density
+            setPadding((16 * dp).toInt(), 0, (16 * dp).toInt(), 0)
+            addView(input)
+            addView(grey)
+        }
         AlertDialog.Builder(this)
             .setTitle(if (uris.size == 1) "Import 1 page" else "Import ${uris.size} pages")
             .setMessage("One item, ${uris.size} page(s). Title:")
-            .setView(input)
+            .setView(box)
             .setPositiveButton("Import") { _, _ ->
-                runImport(uris, input.text.toString().trim())
+                runImport(uris, input.text.toString().trim(), grey.isChecked)
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun runImport(uris: List<Uri>, title: String) {
+    private fun runImport(uris: List<Uri>, title: String, grey: Boolean) {
         busy = true
         btnImport.isEnabled = false
         tvBusy.visibility = View.VISIBLE
         tvBusy.text = "rendering ${uris.size} page(s)..."
         Thread({
-            val outcome = WalletImporter.importImages(this, store, uris, title) { p ->
+            val outcome = WalletImporter.importImages(this, store, uris, title, grey) { p ->
                 MainThread.post {
                     tvBusy.text = "page ${p.page}/${p.pages}, asset ${p.asset}/${p.assets}"
                 }
@@ -227,17 +274,22 @@ class WalletActivity : Activity() {
 
     private fun render() {
         val wallet = store.load()
-        val state = store.loadState()
+        val q = queue
         tvHead.text = "Wallet: ${wallet.items.size} item(s), " +
-            "wallet version ${wallet.walletVersion}, panel ${wallet.panelName}"
+            "wallet version ${wallet.walletVersion}, panel ${wallet.panelName}" +
+            (q?.let {
+                val t = it.totals()
+                "\n${bytes(t.pendingBytes)} pending, ${t.confirmedAssets} of " +
+                    "${t.totalAssets} assets confirmed by the device"
+            } ?: "")
         tvEmpty.visibility = if (wallet.items.isEmpty()) View.VISIBLE else View.GONE
         list.removeAllViews()
         for (item in wallet.items) {
-            list.addView(row(item, state))
+            list.addView(row(item, q))
         }
     }
 
-    private fun row(item: WalletItem, state: WalletLocalState): View {
+    private fun row(item: WalletItem, q: WalletSyncQueue?): View {
         val dp = resources.displayMetrics.density
         val outer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -257,18 +309,35 @@ class WalletActivity : Activity() {
         })
         texts.addView(TextView(this).apply {
             text = "${item.pageCount} page(s), ${item.codeCount} code(s), " +
-                "${item.assetCount} assets, ${bytes(item.rawBytes)}"
+                "${item.assetCount} assets, ${bytes(item.rawBytes)}" +
+                (if (item.grey) ", grey" else "")
             textSize = 12f
             typeface = android.graphics.Typeface.MONOSPACE
         })
+        val st = q?.statusOf(item.id)
         texts.addView(TextView(this).apply {
-            text = state.stateOf(item.id).label()
+            text = if (st == null) "..." else buildString {
+                append(st.state.label())
+                append(" -- ${st.confirmedAssets}/${st.assets} assets confirmed")
+                // Brief section 27's own example: "Ready on device / High-resolution
+                // details syncing" is two facts, not one word, so both are shown.
+                if (st.state == SyncState.ERROR && st.usable) {
+                    append("\nusable on device, ${st.failedAssets} asset(s) failed")
+                }
+            }
             textSize = 12f
             typeface = android.graphics.Typeface.MONOSPACE
         })
         texts.setOnClickListener { openItem(item.id) }
         outer.addView(texts)
 
+        // Queue toggle. Intent, not progress: it says the rider wants this document
+        // on the card, and nothing about whether any of it is there.
+        val queued = st != null && item.id in (q?.queuedItems ?: emptySet())
+        outer.addView(smallButton(if (queued) "-" else "+") {
+            store.setQueued(item.id, !queued)
+            refreshStates()
+        })
         outer.addView(smallButton("^") { move(item.id, -1) })
         outer.addView(smallButton("v") { move(item.id, 1) })
         outer.addView(smallButton("X") { confirmDelete(item) })
@@ -292,6 +361,10 @@ class WalletActivity : Activity() {
     private fun move(itemId: String, delta: Int) {
         store.moveItem(itemId, delta)
         render()
+        // Reorder rewrites the manifest, so the manifest's hash changed and it is
+        // pending again -- and nothing else is. Brief section 40, visible in the
+        // header's pending figure.
+        refreshStates()
     }
 
     private fun confirmDelete(item: WalletItem) {
@@ -302,6 +375,7 @@ class WalletActivity : Activity() {
             .setPositiveButton("Delete") { _, _ ->
                 store.deleteItem(item.id)
                 render()
+                refreshStates()
             }
             .setNegativeButton("Keep", null)
             .show()

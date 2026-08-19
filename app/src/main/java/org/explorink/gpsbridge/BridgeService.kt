@@ -545,6 +545,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         if (wasConnected && !isConnected) {
             tileFetcher.onDisconnected()
             freshness.onDisconnected()
+            // Same reason for the wallet: the device deletes its .part when the link
+            // dies, so a half-sent asset is gone and has to go again whole
+            // (MapTransferReceiver.cpp:310-312).
+            walletBle?.onDisconnected()
             // A deferred ask belonged to this connection's conversation. A
             // reconnected device re-asks (NEED_TILES/CHECK_TILES fire again on
             // resubscribe), so replaying a stale one later would answer a
@@ -755,9 +759,55 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         onCommandLine(line)
     }
 
+    /**
+     * One transfer characteristic, two possible senders.
+     *
+     * A status line "says nothing about which transfer it is for"
+     * (`docs/ble-map-transfer-protocol.md:478`), so the only safe rule is that one
+     * sender is active at a time: a wallet sync refuses to start while a tile fetch
+     * is running ([bleBusyWithTiles]), and while a wallet transfer is in flight its
+     * transport gets the line and the fetcher does not.
+     */
     override fun onTransferStatus(line: String) {
         logger?.logEvent("xfer_in", line, null)
+        val wallet = walletBle
+        if (wallet != null && wallet.isBusy) {
+            wallet.onStatusLine(line)
+            return
+        }
         tileFetcher.onStatusLine(line)
+    }
+
+    // --- wallet sync over the same BLE link ---------------------------------
+
+    private var walletBle: org.explorink.gpsbridge.wallet.WalletBleTransport? = null
+
+    /** True while the tile fetcher owns the transfer channel. */
+    fun bleBusyWithTiles(): Boolean = tileFetcher.phase != TileFetcher.Phase.IDLE
+
+    /**
+     * Everything the wallet's BLE transport needs from the link, and nothing more.
+     * Written here rather than handing the transport a [BleLink], so the transport
+     * stays testable with no Bluetooth stack -- and portable, since the seam is
+     * "frames in, results out" rather than a platform type.
+     */
+    fun walletFrameSink(): org.explorink.gpsbridge.wallet.WalletBleTransport.FrameSink =
+        object : org.explorink.gpsbridge.wallet.WalletBleTransport.FrameSink {
+            override fun maxChunkPayload(): Int = ble.maxChunkPayload()
+
+            override fun sendFrame(frame: ByteArray, done: (Boolean, String?) -> Unit) {
+                if (!ble.writeTransferFrame(frame, done)) done(false, "no transfer channel")
+            }
+
+            override fun isConnected(): Boolean = ble.isConnected && ble.tileChannelReady
+
+            override fun setFastLink(fast: Boolean) {
+                ble.requestHighPriority(fast)
+            }
+        }
+
+    fun attachWalletTransport(t: org.explorink.gpsbridge.wallet.WalletBleTransport?) {
+        walletBle = t
     }
 
     override fun onFetchScope(viewportOnly: Boolean) {

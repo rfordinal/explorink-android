@@ -48,6 +48,14 @@ object WalletImporter {
         store: WalletStore,
         uris: List<Uri>,
         title: String,
+        /**
+         * Four-level grey for this document. Chosen at import because the grey
+         * assets are built from the source pages, and the phone does not keep the
+         * originals -- a share-target Uri is not persistable, so there is nothing to
+         * re-render from later. The item screen can still flip the flag off and back
+         * on once the assets exist (`WalletStore.setGrey`).
+         */
+        grey: Boolean = false,
         onProgress: (Progress) -> Unit = {},
     ): Outcome {
         if (uris.isEmpty()) return Outcome.Failed("nothing to import")
@@ -60,7 +68,7 @@ object WalletImporter {
             val names = loaded.map { it.name }
             val finalTitle = title.ifBlank { titleFrom(names.first()) }
             val itemId = WalletFormat.itemIdFor(finalTitle, names)
-            val pipeline = WalletPipeline(Panels.byName(store.panelName))
+            val pipeline = WalletPipeline(Panels.byName(store.panelName), grey = grey)
             val sources = loaded.map {
                 WalletPipeline.PageSource(it.gray, it.name, it.dpiX, it.dpiY,
                     codes = detectCodes(it))
@@ -82,7 +90,8 @@ object WalletImporter {
             )
             val wallet = store.addItem(item, names)
             Log.i(TAG, "imported ${item.id} '${item.title}': ${item.pageCount} pages, " +
-                "${item.assetCount} assets, ${item.rawBytes} B raw")
+                "${item.assetCount} assets, ${item.rawBytes} B raw, " +
+                (if (grey) "grey" else "1bpp"))
             Outcome.Ok(item, wallet, System.currentTimeMillis() - started)
         } catch (t: Throwable) {
             Log.w(TAG, "import failed", t)

@@ -82,11 +82,13 @@ class WalletStore(val root: File, val panelName: String = Panels.DEFAULT_NAME) {
         val state = loadState()
         val sources = LinkedHashMap(state.sourceNames)
         if (sourceNames.isNotEmpty()) sources[item.id] = sourceNames
-        val states = LinkedHashMap(state.syncState)
-        // A fresh render is phone-only again, whatever the old item's state was:
-        // the device holds different bytes now.
-        states[item.id] = SyncState.PHONE_ONLY
-        writeState(WalletLocalState(states, sources))
+        // Nothing is reset here, on purpose. A re-render keeps the same asset ids
+        // (the recipe has no content in it) and produces different BYTES, and the
+        // ledger keys a confirmation to its sha256 -- so every changed asset is
+        // pending again by arithmetic, and every unchanged one stays confirmed.
+        // That is delta sync (brief section 40) falling out instead of being
+        // computed, and it is why there is no per-item state to invalidate.
+        writeState(state.copy(sourceNames = sources))
         write(next)
         collectGarbage(next)
         return next
@@ -100,9 +102,18 @@ class WalletStore(val root: File, val panelName: String = Panels.DEFAULT_NAME) {
         val next = resequence(current, items)
         write(next)
         val state = loadState()
+        // The item's confirmations go with it: those asset ids are gone from the
+        // manifest, and a ledger entry for a file nobody references is just a leak
+        // that grows every time a document is replaced.
+        val gone = current.item(itemId)?.let { item ->
+            Wallet(current.formatVersion, current.walletVersion, current.panelName,
+                listOf(item)).assetIds().toSet()
+        } ?: emptySet()
         writeState(WalletLocalState(
-            state.syncState.filterKeys { it != itemId },
-            state.sourceNames.filterKeys { it != itemId }))
+            confirmed = state.confirmed.filterKeys { it !in gone },
+            queued = state.queued - itemId,
+            errors = state.errors.filterKeys { it !in gone },
+            sourceNames = state.sourceNames.filterKeys { it != itemId }))
         collectGarbage(next)
         return next
     }
@@ -125,12 +136,60 @@ class WalletStore(val root: File, val panelName: String = Panels.DEFAULT_NAME) {
         return next
     }
 
-    fun setSyncState(itemId: String, state: SyncState) {
+    /** Persist the queue's ledger. Called after every device confirmation. */
+    fun saveSyncState(queue: WalletSyncQueue) {
         val cur = loadState()
-        val states = LinkedHashMap(cur.syncState)
-        states[itemId] = state
-        writeState(WalletLocalState(states, cur.sourceNames))
+        writeState(cur.copy(
+            confirmed = LinkedHashMap(queue.confirmed),
+            queued = LinkedHashSet(queue.queuedItems),
+            errors = LinkedHashMap(queue.errors)))
     }
+
+    fun setQueued(itemId: String, queued: Boolean) {
+        val cur = loadState()
+        writeState(cur.copy(
+            queued = if (queued) cur.queued + itemId else cur.queued - itemId))
+    }
+
+    fun queueAll() {
+        val cur = loadState()
+        writeState(cur.copy(queued = load().items.map { it.id }.toSet()))
+    }
+
+    /**
+     * Flip a document's `grey` flag. Bumps `walletVersion`.
+     *
+     * This is the cheap half of the per-document grey toggle: turning grey off
+     * leaves the grey assets on the card and only stops the device using them
+     * (an absent or false flag means no grey), so the whole change is **the
+     * manifest** -- one small file, brief section 40's own example of a metadata
+     * change that must not re-upload image data.
+     *
+     * Turning grey **on** for a document that has no grey assets is refused: the
+     * assets are built from the source pages at import time and the phone does not
+     * keep the originals (a share-target Uri is not persistable). The caller shows
+     * that as "re-import this document as grey".
+     */
+    fun setGrey(itemId: String, grey: Boolean): Wallet {
+        val current = load()
+        val at = current.items.indexOfFirst { it.id == itemId }
+        if (at < 0) return current
+        val item = current.items[at]
+        if (item.grey == grey) return current
+        if (grey && !hasGreyAssets(item)) return current
+        val items = ArrayList(current.items)
+        items[at] = item.copy(grey = grey)
+        val next = resequence(current, items)
+        write(next)
+        return next
+    }
+
+    /** Does this item carry the two grey assets on every level of every page? */
+    fun hasGreyAssets(item: WalletItem): Boolean = item.pages.isNotEmpty() &&
+        item.pages.all { p ->
+            p.levels.isNotEmpty() &&
+                p.levels.values.all { it.greyPlanes != null && it.greyPageImage != null }
+        }
 
     /**
      * `sortOrder` is the item's index at write time, and `walletVersion` increments

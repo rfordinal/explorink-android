@@ -28,12 +28,18 @@ minSdk 31, targetSdk 36, compileSdk 36. Debug-signed only.
    plus a manifest, byte-identical to `tools/walletgen.py`. Finds the
    machine-readable codes in an imported photo, regenerates each one clean on its
    own full screen, and marks it verified only when the stored bytes decode back
-   (phase P5). Nothing is sent to the device yet -- the sync phase does not
-   exist. See `../docs/android-wallet.md`.
+   (phase P5). Marks a document grey and emits its 2bpp page and its baked plane
+   set (phase P6). See `../docs/android-wallet.md`.
+6. Syncs the wallet to the device over **Wi-Fi or BLE, one queue** (phases P6 and
+   P7): priority by user value, resume at asset granularity, delta sync off
+   per-asset hashes, and no item shown as on-device until the device says what it
+   holds -- `OK <bytes> <crc32hex>` on BLE, `GET /api/hash` on Wi-Fi. Switching
+   transport mid-sync continues rather than restarts. `../docs/android-wallet.md`
+   section 14.
 
 Items 1-4 run in a foreground service, so they keep going with the screen
-locked and the app swiped away. The wallet is a plain screen: no service, no
-BLE, no GPS.
+locked and the app swiped away. The wallet screens are plain screens: no GPS, and
+BLE only while a wallet sync is running, borrowed from the same link.
 
 No route logic, no cloud.
 
@@ -559,14 +565,19 @@ android/
                          its layer directory
     TileSource.kt        the CDN seam: tiles, with ?crc= and verification
     IndexSource.kt       the CDN seam for index byte ranges
-    wallet/              Personal Wallet (phases P4 and P5): data model, JSON
+    wallet/              Personal Wallet (phases P4 to P7): data model, JSON
                          manifest store, the image pipeline (Pillow-identical
                          Lanczos and Floyd-Steinberg, native rotation, RLE
-                         sidecar), machine-readable codes (CodeLayout,
-                         CodeWriter, CodeReader), the share target and the three
-                         screens. Everything except ImageImport/WalletImporter
-                         and the activities is plain JVM code, so the pipeline
-                         and the whole code path are unit-tested on the laptop.
+                         sidecar), four-level grey (Grey.kt), machine-readable
+                         codes (CodeLayout, CodeWriter, CodeReader), the sync
+                         engine (WalletSyncPlan, WalletSyncQueue,
+                         WalletSyncEngine, WalletBleTransport,
+                         WalletWifiTransport), the share target and the four
+                         screens. Everything except ImageImport,
+                         WalletImporter, WalletSyncController and the activities
+                         is plain JVM code, so the pipeline, the codes and the
+                         whole sync path are unit-tested on the laptop -- which
+                         is also what keeps the port to iOS cheap.
                          ../docs/android-wallet.md
   app/src/test/java/...  PositionPacketTest, SendPolicyTest, FixGateTest,
                          HeadingTrendTest, TransferFramesTest,

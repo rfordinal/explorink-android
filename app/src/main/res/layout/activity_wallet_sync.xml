@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Wallet Sync screen (brief section 56): connection, pending amount,
+     current transport, current progress, what remains, and the transport choice.
+     Same plain-views shape as activity_wallet.xml (no adapter, no Compose). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/tvSyncHead"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="monospace"
+        android:paddingBottom="8dp"
+        android:textSize="13sp"
+        android:text="reading the wallet..." />
+
+    <TextView
+        android:id="@+id/tvSyncPending"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="4dp"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:text="-" />
+
+    <TextView
+        android:id="@+id/tvSyncRemains"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="monospace"
+        android:paddingBottom="8dp"
+        android:textSize="12sp"
+        android:text="-" />
+
+    <TextView
+        android:id="@+id/tvSyncProgress"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="monospace"
+        android:paddingBottom="8dp"
+        android:textSize="12sp"
+        android:text="idle" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_vertical"
+            android:paddingEnd="8dp"
+            android:textSize="12sp"
+            android:text="device" />
+
+        <EditText
+            android:id="@+id/etSyncHost"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="192.168.69.20"
+            android:importantForAutofill="no"
+            android:inputType="text"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/btnSyncWifi"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Wireless Fast Sync (Wi-Fi)"
+        android:textStyle="bold" />
+
+    <Button
+        android:id="@+id/btnSyncBle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Continue with BLE" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnSyncQueueAll"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Queue all" />
+
+        <Button
+            android:id="@+id/btnSyncStop"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Stop" />
+    </LinearLayout>
+
+    <ScrollView
+        android:id="@+id/syncLogScroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <TextView
+            android:id="@+id/tvSyncLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:paddingTop="8dp"
+            android:textSize="11sp"
+            android:text="" />
+    </ScrollView>
+</LinearLayout>

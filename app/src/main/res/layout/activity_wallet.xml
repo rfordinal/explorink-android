@@ -25,13 +25,19 @@
         android:text="Import pages from gallery"
         android:textStyle="bold" />
 
+    <Button
+        android:id="@+id/btnWalletSync"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Sync to the device" />
+
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingTop="4dp"
         android:paddingBottom="8dp"
         android:textSize="12sp"
-        android:text="Or share pictures to ExplorInk GPS from any app. Several pictures at once become one multi-page item." />
+        android:text="Or share pictures to ExplorInk GPS from any app. Several pictures at once become one multi-page item. Use + on a row to queue it for the device." />
 
     <TextView
         android:id="@+id/tvWalletBusy"
@@ -49,7 +55,7 @@
         android:layout_height="wrap_content"
         android:paddingTop="12dp"
         android:textSize="14sp"
-        android:text="No documents yet. Nothing is on the device until a sync phase exists." />
+        android:text="No documents yet. Nothing is on the device until the device confirms it." />
 
     <ScrollView
         android:layout_width="match_parent"

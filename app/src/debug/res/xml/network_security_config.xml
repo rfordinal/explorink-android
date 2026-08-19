@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: this file shadows the main one for the debug variant.
+
+     Cleartext is permitted everywhere here, for one reason: a debug build is a
+     lab tool that has to be pointed at whatever address the device or a test
+     double happens to be on, a DHCP lease, `127.0.0.1:8099` behind an
+     `adb reverse` to tools/wallet_wifi_double.py, or `10.0.2.2` for the
+     emulator's host. An allowlist cannot cover that and a lab session should not
+     need a rebuild to add an address.
+
+     What it costs: a debug build could in principle talk cleartext to any host.
+     Nothing in the app constructs an http:// URL for anything but the wallet's
+     Wi-Fi transport (the tile CDN's URLs are https:// literals), so there is no
+     downgrade path to exploit, but this file is why the release build keeps the
+     narrow config and this one is not merged into it. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
