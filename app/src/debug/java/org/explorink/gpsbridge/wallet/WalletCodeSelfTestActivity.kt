@@ -73,6 +73,25 @@ class WalletCodeSelfTestActivity : Activity() {
             log.append(line).append('\n')
         }
 
+        // `--es delete <itemId>[,<itemId>...]` removes documents without tapping X on
+        // every row. It exists because a **test** wallet grows fast and the device caps
+        // the encrypted manifest at 32 KB (`WalletCrypto.h`
+        // `kMaxEncryptedManifestBytes`): nine test documents produced a 36,296 byte
+        // manifest and the panel answered "Wallet list is too big for this device",
+        // 2026-08-19. Pruning through the UI is a tap and a dialog per row, with the
+        // rows renumbering under you after each one.
+        val toDelete = intent.getStringExtra("delete")
+        if (toDelete != null) {
+            val store = WalletImporter.store(this)
+            for (id in toDelete.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
+                val before = store.load().items.size
+                val after = store.deleteItem(id).items.size
+                val line = "delete $id: items $before -> $after"
+                Log.i(TAG, line)
+                log.append(line).append('\n')
+            }
+        }
+
         val toImport = intent.getStringExtra("import")
         if (toImport != null) {
             val file = File(dir, toImport)
