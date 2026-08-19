@@ -12,6 +12,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ScrollView
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import org.explorink.gpsbridge.BridgeService
@@ -53,6 +54,8 @@ class WalletSyncActivity : Activity(), WalletSyncController.Listener {
     private lateinit var tvPending: TextView
     private lateinit var tvRemains: TextView
     private lateinit var tvProgress: TextView
+    private lateinit var barTotal: ProgressBar
+    private lateinit var barAsset: ProgressBar
     private lateinit var tvLog: TextView
     private lateinit var etHost: EditText
     private lateinit var logScroll: ScrollView
@@ -83,6 +86,8 @@ class WalletSyncActivity : Activity(), WalletSyncController.Listener {
         tvPending = findViewById(R.id.tvSyncPending)
         tvRemains = findViewById(R.id.tvSyncRemains)
         tvProgress = findViewById(R.id.tvSyncProgress)
+        barTotal = findViewById(R.id.barSyncTotal)
+        barAsset = findViewById(R.id.barSyncAsset)
         tvLog = findViewById(R.id.tvSyncLog)
         etHost = findViewById(R.id.etSyncHost)
         logScroll = findViewById(R.id.syncLogScroll)
@@ -229,6 +234,9 @@ class WalletSyncActivity : Activity(), WalletSyncController.Listener {
         val totals = q.totals()
         val wallet = store.load()
 
+        // The session is published by WalletSyncController, not here: a sync started
+        // from the debug activity has no instance of this screen at all.
+
         val link = bridge?.snapshot()?.bleState?.name ?: "no service"
         tvHead.text = "device: BLE $link" +
             (bridge?.snapshot()?.deviceName?.let { " ($it)" } ?: "") +
@@ -256,7 +264,21 @@ class WalletSyncActivity : Activity(), WalletSyncController.Listener {
             if (eta.isNotEmpty()) append("\n${t?.label}: $eta")
         }
 
+        barTotal.max = 1000
+        barTotal.progress = (totals.fraction * 1000).toInt()
         val inFlight = q.inFlight
+        val inFlightAsset = inFlight?.let { key -> q.plan.firstOrNull { it.key == key } }
+        // The asset bar is indeterminate for nothing in flight rather than empty: an
+        // empty bar reads as "0 percent of something", and between two assets there is
+        // no something.
+        barAsset.visibility = if (inFlightAsset == null) View.INVISIBLE else View.VISIBLE
+        if (inFlightAsset != null) {
+            barAsset.max = 1000
+            val sent = q.sentBytes(inFlight!!).coerceAtMost(inFlightAsset.bytes)
+            barAsset.progress =
+                if (inFlightAsset.bytes <= 0) 0
+                else ((sent.toLong() * 1000) / inFlightAsset.bytes).toInt()
+        }
         tvProgress.text = if (inFlight == null) {
             // Running with nothing in flight is the gap between two assets, which a
             // redraw can genuinely land in. Saying "waiting for the transport" there

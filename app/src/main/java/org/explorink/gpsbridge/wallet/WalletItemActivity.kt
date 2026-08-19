@@ -4,9 +4,12 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import org.explorink.gpsbridge.R
 
@@ -39,12 +42,37 @@ class WalletItemActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        loadedWallet = null
         render()
+        main.removeCallbacks(tick)
+        tick.run()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        main.removeCallbacks(tick)
+    }
+
+    private var loadedWallet: Wallet? = null
+
+    private val main = Handler(Looper.getMainLooper())
+
+    /** 1 Hz while a sync runs, and not a beat otherwise. Same as WalletActivity. */
+    private val tick = object : Runnable {
+        override fun run() {
+            if (WalletSyncSession.queue != null) {
+                render()
+                main.postDelayed(this, 1000L)
+            }
+        }
     }
 
     private fun render() {
         val itemId = intent.getStringExtra(EXTRA_ITEM_ID)
-        val wallet = store.load()
+        // Cached between ticks: this screen also redraws at 1 Hz while a sync runs, and
+        // store.load() decrypts and parses the whole manifest on the main thread, which
+        // is where the BLE transport's callbacks land too.
+        val wallet = loadedWallet ?: store.load().also { loadedWallet = it }
         val item = itemId?.let { wallet.item(it) }
         val tvTitle = findViewById<TextView>(R.id.tvItemTitle)
         val tvBody = findViewById<TextView>(R.id.tvItemBody)
@@ -59,7 +87,14 @@ class WalletItemActivity : Activity() {
         }
 
         tvTitle.text = item.title
-        tvBody.text = describe(item, syncStatus(item.id))
+        val st = syncStatus(item.id)
+        tvBody.text = describe(item, st)
+        val bar = findViewById<ProgressBar>(R.id.barItemSync)
+        bar.max = 1000
+        bar.progress = (st.fraction * 1000).toInt()
+        // Hidden for a document nothing has been sent for: an empty bar there reads as
+        // "sending, nothing through yet".
+        bar.visibility = if (st.fraction > 0f) android.view.View.VISIBLE else android.view.View.GONE
         renderGrey(item)
         renderCodes(item)
         btnDelete.isEnabled = true
@@ -115,7 +150,13 @@ class WalletItemActivity : Activity() {
      * Synchronous here, unlike the list: one item screen is one plan build, and the
      * rider has just tapped a row.
      */
+    /**
+     * Where this document stands. The **running** sync is preferred over a queue rebuilt
+     * from disk: only the live one knows about bytes on the wire, and the rebuilt one
+     * shows a transfer in progress as a frozen count.
+     */
     private fun syncStatus(itemId: String): WalletSyncQueue.ItemStatus {
+        WalletSyncSession.queue?.let { return it.statusOf(itemId) }
         val state = store.loadState()
         val q = WalletSyncQueue(WalletSyncPlan.build(store.load(), store.treeDir),
             state.confirmed, state.errors, state.queued)

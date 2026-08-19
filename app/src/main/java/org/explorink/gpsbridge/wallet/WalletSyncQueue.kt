@@ -195,7 +195,26 @@ class WalletSyncQueue(
             totalBytes = totalBytes,
             confirmedBytes = confirmedBytes,
             usable = usable,
+            manifestConfirmed = manifestOk,
+            inFlightBytes = inFlightBytesOf(itemId),
         )
+    }
+
+    /**
+     * Bytes already handed to the transport for the asset in flight, when that asset
+     * belongs to [itemId].
+     *
+     * The manifest is charged to **no item**: it belongs to the whole wallet, and
+     * counting its bytes against every queued item at once would show progress on
+     * documents nothing is being sent for.
+     */
+    private fun inFlightBytesOf(itemId: String): Long {
+        val key = inFlight ?: return 0L
+        val a = plan.firstOrNull { it.key == key } ?: return 0L
+        if (a.itemId != itemId) return 0L
+        // Never past the asset's own size: a transport reporting more than it was
+        // given would push a bar past 100 percent.
+        return sentBytes(key).coerceAtMost(a.bytes).toLong()
     }
 
     /** Whole-wallet numbers for the sync screen (brief sections 38 and 56). */
@@ -226,6 +245,10 @@ class WalletSyncQueue(
             totalAssets = plan.size,
             totalBytes = totalBytes,
             failedAssets = failures.size,
+            inFlightBytes = inFlight?.let { key ->
+                plan.firstOrNull { it.key == key }
+                    ?.let { sentBytes(key).coerceAtMost(it.bytes).toLong() }
+            } ?: 0L,
         )
     }
 
@@ -246,7 +269,38 @@ class WalletSyncQueue(
         val confirmedBytes: Long,
         /** Manifest, FIT and every verified code confirmed. */
         val usable: Boolean,
-    )
+        /**
+         * True when the wallet's manifest as it stands on disk has been confirmed.
+         *
+         * It is a **wallet-wide** fact carried on every item because it decides each
+         * item's state: importing any document rewrites the manifest, so a document
+         * whose own pages are all on the card still cannot be called synced until the
+         * new index is there too -- the device reads the manifest, and an old index
+         * does not list the new document.
+         */
+        val manifestConfirmed: Boolean = true,
+        /**
+         * Bytes of this item's own asset that are on the wire **right now**, not yet
+         * confirmed. Zero unless an asset of this item is in flight.
+         *
+         * It exists so a progress bar moves during a big asset instead of standing
+         * still for a minute and then jumping: confirmed bytes alone step by whole
+         * assets, and one 1:1 page image is over a megabyte.
+         */
+        val inFlightBytes: Long = 0L,
+    ) {
+        /**
+         * How far this item is, 0..1, counting bytes on the wire as progress.
+         *
+         * **Confirmed bytes and in-flight bytes are not the same promise** and this
+         * blurs them on purpose, for one purpose only: movement. Never derive
+         * "is it on the device" from this -- that is [SyncState.FULLY_SYNCED], which
+         * needs a confirmation per asset. An empty item is 0, never 1.
+         */
+        val fraction: Float
+            get() = if (totalBytes <= 0L) 0f
+            else ((confirmedBytes + inFlightBytes).toFloat() / totalBytes).coerceIn(0f, 1f)
+    }
 
     data class Totals(
         val pendingAssets: Int,
@@ -256,5 +310,12 @@ class WalletSyncQueue(
         val totalAssets: Int,
         val totalBytes: Long,
         val failedAssets: Int,
-    )
+        /** Bytes on the wire right now. Same meaning as [ItemStatus.inFlightBytes]. */
+        val inFlightBytes: Long = 0L,
+    ) {
+        /** Whole-wallet progress, 0..1, in-flight bytes included. See [ItemStatus.fraction]. */
+        val fraction: Float
+            get() = if (totalBytes <= 0L) 0f
+            else ((confirmedBytes + inFlightBytes).toFloat() / totalBytes).coerceIn(0f, 1f)
+    }
 }

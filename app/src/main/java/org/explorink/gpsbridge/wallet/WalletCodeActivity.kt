@@ -85,7 +85,18 @@ class WalletCodeActivity : Activity() {
                 "${WalletFormat.ASSET_HEADER_LEN + panel.assetBytes} B"
             return
         }
-        val payload = bytes.copyOfRange(WalletFormat.ASSET_HEADER_LEN, bytes.size)
+        // Decrypt if the tree is encrypted. Reading the body straight off disk drew the
+        // ciphertext as a bitmap -- a screen of noise, with the caption still claiming
+        // the code was verified (found on a phone 2026-08-19). The store owns the
+        // cipher, so ask it rather than guessing from the header.
+        val header = bytes.copyOfRange(0, WalletFormat.ASSET_HEADER_LEN)
+        val stored = bytes.copyOfRange(WalletFormat.ASSET_HEADER_LEN, bytes.size)
+        val payload = try {
+            store.cipher().open(code.assetId, header, stored)
+        } catch (t: Throwable) {
+            caption.text = "cannot decrypt ${file.name}: $t"
+            return
+        }
         val shown = CodeReader.assetImage(payload, panel, code.presentation)
         image.setImageBitmap(bitmapOf(shown))
         caption.text = buildString {

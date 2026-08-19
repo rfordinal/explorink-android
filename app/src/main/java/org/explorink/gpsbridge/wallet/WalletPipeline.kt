@@ -631,6 +631,18 @@ interface AssetCipher {
     /** Same, for the `.rle` sidecar's EWRL block. Only called when [writesSidecar]. */
     fun sealSidecar(assetId: String, header: ByteArray, block: ByteArray): ByteArray
 
+    /**
+     * The inverse of [seal]: a stored body back to the plaintext bitmap.
+     *
+     * On the interface rather than only on the concrete cipher because **anything that
+     * displays a stored asset needs it**. `WalletCodeActivity` read the body straight
+     * off disk and drew it, which on an encrypted wallet painted the ciphertext: a
+     * screen full of noise under a caption that still said `verified` (found on a phone
+     * 2026-08-19). A viewer cannot know which cipher a tree uses; the store hands it
+     * one, so the operation belongs here.
+     */
+    fun open(assetId: String, header: ByteArray, body: ByteArray): ByteArray
+
     /** A cleartext tree: nothing is encrypted, and the sidecar is written. */
     object None : AssetCipher {
         override val flags: Int get() = 0
@@ -638,5 +650,6 @@ interface AssetCipher {
         override val writesSidecar: Boolean get() = true
         override fun seal(assetId: String, header: ByteArray, payload: ByteArray) = payload
         override fun sealSidecar(assetId: String, header: ByteArray, block: ByteArray) = block
+        override fun open(assetId: String, header: ByteArray, body: ByteArray) = body
     }
 }

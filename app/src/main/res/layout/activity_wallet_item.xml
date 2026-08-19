@@ -32,6 +32,18 @@
             android:text="" />
     </ScrollView>
 
+    <!-- How much of this document the device has confirmed, in bytes. Gone, not
+         empty, for a document nothing has been sent for. -->
+    <ProgressBar
+        android:id="@+id/barItemSync"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="8dp"
+        android:max="1000"
+        android:visibility="gone" />
+
     <!-- One row per machine-readable code (phase P5): tapping it opens the code
          full screen, decoded from the stored asset. -->
     <LinearLayout

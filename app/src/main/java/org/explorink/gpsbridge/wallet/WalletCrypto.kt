@@ -315,7 +315,10 @@ class Aes256CtrCipher(key: ByteArray) : AssetCipher {
             "an encrypted tree writes no RLE sidecar: sealing one would reuse the " +
                 "asset's CTR keystream on a second plaintext")
 
-    /** Plaintext back out of a stored `.dat` body. Used by tests and by a verify pass. */
-    fun open(assetId: String, header: ByteArray, body: ByteArray): ByteArray =
+    /**
+     * Plaintext back out of a stored `.dat` body. CTR, so it is the same operation as
+     * [seal] -- which is why one function can be both without a flag.
+     */
+    override fun open(assetId: String, header: ByteArray, body: ByteArray): ByteArray =
         seal(assetId, header, body)
 }

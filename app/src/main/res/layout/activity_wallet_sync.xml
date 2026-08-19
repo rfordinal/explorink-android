@@ -27,6 +27,16 @@
         android:textStyle="bold"
         android:text="-" />
 
+    <!-- Whole wallet, bytes, in-flight bytes included (WalletSyncQueue.Totals.fraction).
+         max is 1000 rather than 100 so a 4 MB wallet moves between two redraws. -->
+    <ProgressBar
+        android:id="@+id/barSyncTotal"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="4dp"
+        android:max="1000" />
+
     <TextView
         android:id="@+id/tvSyncRemains"
         android:layout_width="match_parent"
@@ -44,6 +54,16 @@
         android:paddingBottom="8dp"
         android:textSize="12sp"
         android:text="idle" />
+
+    <!-- The asset on the wire right now. Hidden, not zeroed, between two assets:
+         an empty bar reads as no progress rather than as nothing in flight. -->
+    <ProgressBar
+        android:id="@+id/barSyncAsset"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:max="1000" />
 
     <LinearLayout
         android:layout_width="match_parent"

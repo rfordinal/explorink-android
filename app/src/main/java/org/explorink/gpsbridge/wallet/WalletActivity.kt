@@ -5,6 +5,8 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -13,6 +15,7 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import org.explorink.gpsbridge.MainThread
@@ -38,6 +41,9 @@ class WalletActivity : Activity() {
     companion object {
         private const val TAG = "WalletActivity"
         private const val REQ_PICK = 11
+
+        /** Same 1 Hz as the pins screen (PinsActivity.UI_TICK_MS), same reason. */
+        private const val UI_TICK_MS = 1000L
     }
 
     private lateinit var tvHead: TextView
@@ -45,9 +51,39 @@ class WalletActivity : Activity() {
     private lateinit var tvBusy: TextView
     private lateinit var btnImport: Button
     private lateinit var list: LinearLayout
+    private lateinit var barHead: ProgressBar
+
+    /**
+     * Redraw while a sync is running. 1 Hz, the same cadence the pins screen uses, and
+     * for the same reason: the numbers move continuously and a screen that only
+     * redraws on resume cannot tell a working transfer from a stalled one.
+     *
+     * It runs **only** while [WalletSyncSession] reports a sync, so an idle wallet
+     * costs nothing.
+     */
+    private val main = Handler(Looper.getMainLooper())
+
+    private val tick = object : Runnable {
+        override fun run() {
+            if (WalletSyncSession.queue != null) {
+                render()
+                main.postDelayed(this, UI_TICK_MS)
+            }
+        }
+    }
 
     private val store: WalletStore by lazy { WalletImporter.store(this) }
     private var busy = false
+
+    /**
+     * The manifest as last read. Cached because [render] runs at 1 Hz while a sync is
+     * running, and reading it means decrypting and parsing the whole thing -- on the
+     * main thread, which is also where the BLE transport's callbacks land.
+     *
+     * Cleared whenever the tree can have changed: an import, a delete, a reorder, a
+     * grey flip, and on every resume.
+     */
+    private var loadedWallet: Wallet? = null
 
     /**
      * The sync queue, for the per-item states. Null until the worker has hashed the
@@ -64,6 +100,7 @@ class WalletActivity : Activity() {
         tvBusy = findViewById(R.id.tvWalletBusy)
         btnImport = findViewById(R.id.btnWalletImport)
         list = findViewById(R.id.walletList)
+        barHead = findViewById(R.id.barWalletHead)
         btnImport.setOnClickListener { pickImages() }
         findViewById<Button>(R.id.btnWalletSync).setOnClickListener {
             startActivity(Intent(this, WalletSyncActivity::class.java))
@@ -82,8 +119,16 @@ class WalletActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        loadedWallet = null
         render()
         refreshStates()
+        main.removeCallbacks(tick)
+        tick.run()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        main.removeCallbacks(tick)
     }
 
     /**
@@ -92,6 +137,7 @@ class WalletActivity : Activity() {
      * JVM, and it is why this is not done inside `render()`.
      */
     private fun refreshStates() {
+        loadedWallet = null
         Thread({
             val wallet = store.load()
             val state = store.loadState()
@@ -272,24 +318,98 @@ class WalletActivity : Activity() {
 
     // --- list --------------------------------------------------------------
 
+    /**
+     * One row's mutable parts, kept so a tick can change numbers without rebuilding the
+     * view.
+     *
+     * Rebuilding the list every second is what made scrolling stutter and what starved
+     * the BLE transport: `removeAllViews()` plus seven fresh views per document, on the
+     * main thread, where the transport's own callbacks also land (measured 2026-08-19 --
+     * 8.3 kB/s fell to 1.2 kB/s with a list open over a running sync).
+     */
+    private class Row(
+        val view: View,
+        val state: TextView,
+        val bar: ProgressBar,
+        val pct: TextView,
+        val queueButton: Button,
+    )
+
+    private val rows = LinkedHashMap<String, Row>()
+
     private fun render() {
-        val wallet = store.load()
-        val q = queue
+        val wallet = loadedWallet ?: store.load().also { loadedWallet = it }
+        // The running sync wins over this screen's own snapshot. Both are the same
+        // class over the same plan; only the live one knows about bytes on the wire,
+        // and reading the stale one during a transfer is what made this screen look
+        // frozen.
+        val q = WalletSyncSession.queue ?: queue
+        val live = WalletSyncSession.statusLine()
         tvHead.text = "Wallet: ${wallet.items.size} item(s), " +
             "wallet version ${wallet.walletVersion}, panel ${wallet.panelName}" +
             (q?.let {
                 val t = it.totals()
                 "\n${bytes(t.pendingBytes)} pending, ${t.confirmedAssets} of " +
                     "${t.totalAssets} assets confirmed by the device"
-            } ?: "")
+            } ?: "") +
+            // Said out loud, because "no progress" and "nothing running" look identical
+            // and only one of them is a problem.
+            "\n" + (live ?: "no sync running -- press Sync to the device")
+        barHead.max = 1000
+        barHead.progress = ((q?.totals()?.fraction ?: 0f) * 1000).toInt()
         tvEmpty.visibility = if (wallet.items.isEmpty()) View.VISIBLE else View.GONE
-        list.removeAllViews()
-        for (item in wallet.items) {
-            list.addView(row(item, q))
+
+        // Rebuild only when the set of documents or their order changed. A tick is the
+        // common case and it touches text and two bars per row.
+        val ids = wallet.items.map { it.id }
+        if (ids != rows.keys.toList()) {
+            rows.clear()
+            list.removeAllViews()
+            for (item in wallet.items) {
+                val r = row(item, q)
+                rows[item.id] = r
+                list.addView(r.view)
+            }
+        } else {
+            for (item in wallet.items) rows[item.id]?.let { update(it, item, q) }
         }
     }
 
-    private fun row(item: WalletItem, q: WalletSyncQueue?): View {
+    /** The parts of a row that change while a sync runs. */
+    private fun update(r: Row, item: WalletItem, q: WalletSyncQueue?) {
+        val st = q?.statusOf(item.id)
+        r.state.text = if (st == null) "..." else buildString {
+            append(st.state.label())
+            append(" -- ${st.confirmedAssets}/${st.assets} assets confirmed")
+            // Brief section 27's own example: "Ready on device / High-resolution
+            // details syncing" is two facts, not one word, so both are shown.
+            if (st.state == SyncState.ERROR && st.usable) {
+                append("\nusable on device, ${st.failedAssets} asset(s) failed")
+            }
+            // Every page of this document is on the card and it still is not "synced",
+            // which reads as a contradiction next to a full bar unless the reason is
+            // said out loud: importing anything rewrites the wallet's index, and the
+            // device reads the index.
+            if (!st.manifestConfirmed && st.assets > 0 && st.confirmedAssets == st.assets) {
+                append("\nall pages on the card, the wallet index still has to go")
+            }
+        }
+        // Bytes, not assets, so a 1.17 MB page image does not look like a stall. Gone,
+        // not empty, for a document nothing has been sent for: an empty bar next to
+        // "local only" invites the reading "sending, 0 percent".
+        val show = st != null && st.fraction > 0f
+        r.bar.visibility = if (show) View.VISIBLE else View.GONE
+        r.pct.visibility = if (show) View.VISIBLE else View.GONE
+        if (show && st != null) {
+            r.bar.progress = (st.fraction * 1000).toInt()
+            r.pct.text = "${(st.fraction * 100).toInt()}% of ${bytes(st.totalBytes)} on the card" +
+                (if (st.inFlightBytes > 0L) ", ${bytes(st.inFlightBytes)} in flight" else "")
+        }
+        val queued = item.id in (q?.queuedItems ?: emptySet())
+        r.queueButton.text = if (queued) "-" else "+"
+    }
+
+    private fun row(item: WalletItem, q: WalletSyncQueue?): Row {
         val dp = resources.displayMetrics.density
         val outer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -314,34 +434,41 @@ class WalletActivity : Activity() {
             textSize = 12f
             typeface = android.graphics.Typeface.MONOSPACE
         })
-        val st = q?.statusOf(item.id)
-        texts.addView(TextView(this).apply {
-            text = if (st == null) "..." else buildString {
-                append(st.state.label())
-                append(" -- ${st.confirmedAssets}/${st.assets} assets confirmed")
-                // Brief section 27's own example: "Ready on device / High-resolution
-                // details syncing" is two facts, not one word, so both are shown.
-                if (st.state == SyncState.ERROR && st.usable) {
-                    append("\nusable on device, ${st.failedAssets} asset(s) failed")
-                }
-            }
+        val state = TextView(this).apply {
             textSize = 12f
             typeface = android.graphics.Typeface.MONOSPACE
-        })
+        }
+        texts.addView(state)
+        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (2 * dp).toInt() }
+        }
+        texts.addView(bar)
+        val pct = TextView(this).apply {
+            textSize = 11f
+            typeface = android.graphics.Typeface.MONOSPACE
+        }
+        texts.addView(pct)
         texts.setOnClickListener { openItem(item.id) }
         outer.addView(texts)
 
         // Queue toggle. Intent, not progress: it says the rider wants this document
         // on the card, and nothing about whether any of it is there.
-        val queued = st != null && item.id in (q?.queuedItems ?: emptySet())
-        outer.addView(smallButton(if (queued) "-" else "+") {
-            store.setQueued(item.id, !queued)
+        val queueButton = smallButton("+") {
+            val nowQueued = item.id in (WalletSyncSession.queue ?: queue)?.queuedItems.orEmpty()
+            store.setQueued(item.id, !nowQueued)
             refreshStates()
-        })
+        }
+        outer.addView(queueButton)
         outer.addView(smallButton("^") { move(item.id, -1) })
         outer.addView(smallButton("v") { move(item.id, 1) })
         outer.addView(smallButton("X") { confirmDelete(item) })
-        return outer
+
+        val r = Row(outer, state, bar, pct, queueButton)
+        update(r, item, q)
+        return r
     }
 
     private fun smallButton(label: String, onClick: () -> Unit): Button {

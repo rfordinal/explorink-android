@@ -51,7 +51,10 @@ class WalletSyncController(
         }
     }
 
-    val engine = WalletSyncEngine(
+    // Explicit type: the engine's own listener calls back into `engine` to publish the
+    // session, and without it Kotlin reports "Type checking has run into a recursive
+    // problem" rather than resolving the cycle.
+    val engine: WalletSyncEngine = WalletSyncEngine(
         bytes = object : WalletSyncEngine.AssetBytes {
             override fun read(a: SyncAsset): ByteArray? {
                 // The manifest's own file name follows the tree's kind -- manifest.json
@@ -63,9 +66,24 @@ class WalletSyncController(
             }
         },
         listener = object : WalletSyncEngine.Listener {
+
+            /**
+             * Tell [WalletSyncSession] where the sync stands, from **the controller**
+             * rather than from a screen.
+             *
+             * It used to be published by `WalletSyncActivity`, so a transfer driven from
+             * the debug activity was invisible: the wallet list said "no sync running"
+             * while bytes were moving (seen 2026-08-19). Every path that syncs builds a
+             * controller, so this is the one place that cannot be forgotten.
+             */
+            private fun publish() {
+                WalletSyncSession.publish(engine.queue, engine.transport?.label, engine.running)
+            }
+
             override fun onSyncStarted(transport: String, pendingAssets: Int, pendingBytes: Long) {
                 listener.onLine("start transport=$transport pending=$pendingAssets " +
                     "bytes=$pendingBytes")
+                publish()
             }
 
             override fun onManifestConflict(conflict: ManifestConflict) {
@@ -76,6 +94,7 @@ class WalletSyncController(
 
             override fun onAssetProgress(a: SyncAsset, sent: Int, total: Int) {
                 listener.onChanged()
+                publish()
             }
 
             override fun onAssetConfirmed(a: SyncAsset, transport: String, detail: String) {
@@ -84,21 +103,25 @@ class WalletSyncController(
                 listener.onLine("confirmed ${a.cls.label} ${a.key} ${a.bytes}B " +
                     "via $transport: $detail")
                 listener.onChanged()
+                publish()
             }
 
             override fun onAssetFailed(a: SyncAsset, reason: String) {
                 listener.onLine("failed ${a.cls.label} ${a.key}: $reason")
                 listener.onChanged()
+                publish()
             }
 
             override fun onSyncFinished(confirmed: Int, failed: Int, remaining: Int, reason: String) {
                 listener.onLine("finish confirmed=$confirmed failed=$failed " +
                     "remaining=$remaining reason=$reason")
                 listener.onFinished(confirmed, failed, remaining, reason)
+                publish()
             }
 
             override fun onQueueChanged() {
                 listener.onChanged()
+                publish()
             }
         },
         persist = { q -> store.saveSyncState(q) },
@@ -153,5 +176,7 @@ class WalletSyncController(
     fun shutdown() {
         engine.stop("screen closed")
         worker.shutdownNow()
+        // A queue left in the session would report a transfer that no longer exists.
+        WalletSyncSession.clear()
     }
 }
