@@ -32,5 +32,16 @@
             android:name=".wallet.WalletKeySelfTestActivity"
             android:exported="true"
             android:label="Wallet key self-test" />
+
+        <!-- Prints the app's real wallet key so the firmware's own test seam
+             (CMD:WALLETPROVISION) can be given the same K. Nothing carries K from
+             the phone to the device yet (BLE provisioning is P4/P6 and does not
+             exist), so this is the only way to test the encrypted chain end to
+             end. Both seams go when BLE provisioning lands. Exported for adb,
+             debug only. -->
+        <activity
+            android:name=".wallet.WalletKeyExportActivity"
+            android:exported="true"
+            android:label="Wallet key export (TEST)" />
     </application>
 </manifest>
