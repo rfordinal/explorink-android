@@ -54,6 +54,19 @@ interface WalletTransport {
     /** Connected, subscribed, and able to take a job right now. */
     fun isReady(): Boolean
 
+    /**
+     * What kind of wallet manifest the **card** already holds.
+     *
+     * Default [ManifestKind.UNKNOWN], because most wires cannot ask: a transport that
+     * only writes has no way to read a directory off the card. Wi-Fi can
+     * (`GET /api/hash`), BLE cannot -- there is no read frame in the protocol.
+     *
+     * Blocking. The engine never calls it; the caller probes off the UI thread and
+     * hands the answer to [WalletSyncEngine.cardManifest], which keeps the engine
+     * free of I/O and testable ([WalletManifestConflict]).
+     */
+    fun probeCardManifest(): ManifestKind = ManifestKind.UNKNOWN
+
     /** Push one file and confirm what the card holds. One job at a time. */
     fun send(job: SendJob, cb: SendCallback)
 

@@ -100,7 +100,12 @@ object WalletSyncPlan {
     fun build(wallet: Wallet, treeDir: File): List<SyncAsset> {
         val out = ArrayList<SyncAsset>()
 
-        val manifest = File(treeDir, "manifest.json")
+        // `manifest.json` or `manifest.enc`, whichever this wallet is written as. The
+        // name is not cosmetic: the device prefers the encrypted one whenever one
+        // exists, so sending the wrong name is a sync that lands and stays invisible
+        // (`docs/wallet-plan.md` 7l).
+        val manifestName = wallet.manifestFileName
+        val manifest = File(treeDir, manifestName)
         if (manifest.isFile) {
             val bytes = manifest.readBytes()
             out.add(SyncAsset(
@@ -108,7 +113,7 @@ object WalletSyncPlan {
                 itemId = null,
                 pageId = null,
                 cls = SyncClass.MANIFEST,
-                relPath = "$CARD_DIR/manifest.json",
+                relPath = "$CARD_DIR/$manifestName",
                 bytes = bytes.size,
                 sha256 = WalletFormat.sha256Hex(bytes),
                 order = 0,

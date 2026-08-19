@@ -223,9 +223,9 @@ class GreyTest {
                 val level = page.levels.getValue(name)
                 assertNotNull("$name greyPageImage", level.greyPageImage)
                 assertNotNull("$name greyPlanes", level.greyPlanes)
-                // Nothing is removed: the device can still draw the document 1bpp.
+                // Nothing is removed: the device can still draw the document 1bpp,
+                // from the same level's 1bpp page image.
                 assertNotNull("$name pageImage", level.pageImage)
-                assertTrue(level.assets.isNotEmpty())
             }
         }
         // ...and the files are really there.
@@ -235,7 +235,7 @@ class GreyTest {
     }
 
     @Test
-    fun a_1bpp_document_emits_neither_and_writes_no_grey_key() {
+    fun a_1bpp_document_emits_neither_and_a_reader_treats_an_absent_flag_as_false() {
         val store = SyncFixtures.store()
         val item = SyncFixtures.addItem(store, "Text")
         assertFalse(item.grey)
@@ -245,10 +245,16 @@ class GreyTest {
                 assertNull(page.levels.getValue(name).greyPlanes)
             }
         }
-        // An ABSENT flag means no grey, which is the right default: a card written
-        // before grey existed must not start rendering grey frames because a later
-        // firmware learned how.
-        assertFalse(store.load().toManifestJson().contains("\"grey\""))
+        // The writer states the flag either way, matching the generator.
+        val text = store.load().toManifestJson()
+        assertTrue(text.contains("\"grey\": false"))
+        // And an ABSENT flag still means no grey, which is the right default: a card
+        // written before grey existed must not start rendering grey frames because a
+        // later firmware learned how. This is the case that matters for an old card,
+        // so it is checked on a manifest with the key stripped out.
+        val old = text.replace("      \"grey\": false,\n", "")
+        assertFalse(old.contains("\"grey\""))
+        assertFalse(Wallet.fromManifestJson(old).items[0].grey)
     }
 
     @Test
@@ -366,7 +372,11 @@ class GreyTest {
         // single-document test and fail this one.
         val parsed = Wallet.fromManifestJson(text)
         assertEquals(listOf(false, true), parsed.items.map { it.grey })
-        assertEquals(1, Regex("\"grey\"").findAll(text).count())
+        // The key is written for both items -- that is what the generator does -- and
+        // the point of the test is that the VALUES do not leak between them.
+        assertEquals(2, Regex("\"grey\"").findAll(text).count())
+        assertEquals(1, Regex("\"grey\": true").findAll(text).count())
+        assertEquals(1, Regex("\"grey\": false").findAll(text).count())
         assertEquals(text, parsed.toManifestJson())
     }
 

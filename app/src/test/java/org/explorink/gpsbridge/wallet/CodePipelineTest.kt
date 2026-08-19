@@ -147,9 +147,11 @@ class CodePipelineTest {
         assertEquals("an id repeats", ids.size, ids.toSet().size)
         assertEquals(ids.size, (sink as MemoryAssetSink).dat.size)
         assertEquals(ids.toSet(), sink.dat.keys)
-        // 24 assets for an A4 page (21 tiles + 3 page images) plus the two codes.
-        assertEquals(26, ids.size)
-        assertEquals(26, item.assetCount)
+        // Three assets for an A4 page -- one page image per zoom level, no pre-cut
+        // tiles since 2026-08-19 -- plus the two codes. It was 26 when the pipeline
+        // still emitted the 21 tiles the device never panned with.
+        assertEquals(5, ids.size)
+        assertEquals(5, item.assetCount)
         assertEquals(2, item.codeCount)
     }
 

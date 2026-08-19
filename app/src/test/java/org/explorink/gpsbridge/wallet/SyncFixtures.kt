@@ -40,8 +40,15 @@ object SyncFixtures {
         grey: Boolean = false,
         paper: String = "a5",
         pages: Int = 1,
+        /**
+         * Pre-cut tiles. Off, like the pipeline's own default -- only the tests that
+         * are *about* tiles (the plan's focal ordering, the tile/page-image agreement)
+         * ask for them.
+         */
+        tiles: Boolean = false,
     ): WalletItem {
-        val pipeline = WalletPipeline(Panels.byName(store.panelName), grey = grey)
+        // The store's own configuration: page images, its cipher, tiles only on ask.
+        val pipeline = store.pipeline(grey = grey, tiles = tiles)
         val sources = (0 until pages).map {
             WalletPipeline.PageSource(page(), "$title-$it.png", codes = if (it == 0) codes else emptyList())
         }
@@ -67,7 +74,7 @@ object SyncFixtures {
     fun bytesOf(store: WalletStore): WalletSyncEngine.AssetBytes =
         object : WalletSyncEngine.AssetBytes {
             override fun read(a: SyncAsset): ByteArray? {
-                val f = if (a.isManifest) File(store.treeDir, "manifest.json")
+                val f = if (a.isManifest) File(store.treeDir, store.manifestFile.name)
                 else store.assetFile(a.key, "dat")
                 return if (f.isFile) f.readBytes() else null
             }

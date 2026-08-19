@@ -60,7 +60,11 @@ object WalletFormat {
         ASSET_GREY_PLANES to BIT_DEPTH_2BPP,
     )
 
-    const val FLAG_ENCRYPTED = 0x01           // always 0 until P3
+    /**
+     * `flags` bit 0 of the asset header: the payload after the 32-byte cleartext
+     * header is AES-256-CTR ciphertext (`docs/wallet-format.md` section 11).
+     */
+    const val FLAG_ENCRYPTED = 0x01
 
     /** Document upright with the device held landscape; payload not rotated. */
     const val PRESENTATION_LANDSCAPE = 0
@@ -72,6 +76,22 @@ object WalletFormat {
     const val ASSET_HEADER_LEN = 32
 
     const val MANIFEST_FORMAT_VERSION = 1
+
+    /** A cleartext tree's manifest. */
+    const val MANIFEST_CLEAR_NAME = "manifest.json"
+
+    /**
+     * An encrypted tree's manifest: the `EWM1` GCM container ([WalletCrypto]).
+     *
+     * **The device prefers this file whenever it exists** -- `treeIsEncrypted()` is an
+     * existence check -- so a cleartext manifest written beside one is invisible, with
+     * nothing reporting an error (`docs/wallet-plan.md` 7l). That is what
+     * [WalletManifestConflict] exists to catch.
+     */
+    const val MANIFEST_ENC_NAME = "manifest.enc"
+
+    /** One backup of the previous good `manifest.enc`. Encrypted trees only. */
+    const val MANIFEST_BAK_NAME = "manifest.bak"
 
     private const val ID_DOMAIN = "explorink-wallet-v1|"
     private const val ITEM_ID_DOMAIN = "explorink-wallet-item-v1|"
@@ -97,27 +117,43 @@ object WalletFormat {
     // --- ids ---------------------------------------------------------------
 
     /**
-     * THE CRYPTO SEAM FOR IDS. P3 replaces this with
-     * `HMAC-SHA256(kName, payload)` under the wallet name key. One function, one
-     * line, nothing else knows how the digest is made -- same seam as
-     * `_id_digest()` in `tools/walletgen.py`.
+     * THE CRYPTO SEAM FOR IDS. One function, one line, nothing else knows how the
+     * digest is made -- same seam as `_id_digest()` in `tools/walletgen.py`.
+     *
+     * P3 did **not** replace it: an id is scoped by panel and by crypto state instead
+     * (see [assetId]), which is what the generator did, so a filename still leaks
+     * nothing on its own without a keyed digest. Swapping this for
+     * `HMAC-SHA256(kName, payload)` remains possible and remains a format change on
+     * both sides; nothing above depends on the digest being sha256.
      */
     private fun idDigest(payload: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(payload)
 
     /**
-     * Deterministic 8-byte asset id, hex, panel-scoped.
+     * Deterministic 8-byte asset id, hex, **panel-scoped and crypto-scoped**.
      *
-     *     sha256("explorink-wallet-v1|" + panel + "|" + item + "|" + page + "|"
-     *            + type + "|" + index + "|" + version)[0:8]
+     *     sha256("explorink-wallet-v1|" + panel + "|" + ("enc"|"clear") + "|"
+     *            + item + "|" + page + "|" + type + "|" + index + "|" + version)[0:8]
      *
-     * The panel name comes first, so the same document built for two panels gets
-     * two different ids and the trees can share a directory.
+     * The panel name is in the input so the same document built for two panels gets
+     * two different ids and the trees can share a directory -- foreign-panel assets
+     * become impossible rather than forbidden.
+     *
+     * The **encryption state** is in the input for the same reason, and it was added
+     * after the collision was hit for real (`docs/wallet-plan.md` 7f): a cleartext
+     * tree and an encrypted tree of the same document used to produce identical ids,
+     * so on one card they occupied the same path and the last one written won. Nothing
+     * was silently wrong -- `flags` bit 0 says what each file is, and a cleartext file
+     * read as ciphertext fails the plaintext hash -- but the symptom was "asset
+     * corrupt" rather than "wrong kind of file". Impossible beats detectable.
      */
     fun assetId(panelName: String, itemId: String, pageId: String,
-                assetType: Int, index: Int, version: Int): String {
+                assetType: Int, index: Int, version: Int,
+                encrypted: Boolean = false): String {
+        val scope = if (encrypted) "enc" else "clear"
         val payload = (ID_DOMAIN +
-            "$panelName|$itemId|$pageId|$assetType|$index|$version").toByteArray(Charsets.UTF_8)
+            "$panelName|$scope|$itemId|$pageId|$assetType|$index|$version")
+            .toByteArray(Charsets.UTF_8)
         return hex(idDigest(payload), 8)
     }
 
@@ -181,6 +217,18 @@ object WalletFormat {
         val sha = MessageDigest.getInstance("SHA-256").digest(payload)
         System.arraycopy(sha, 0, out, 24, 8)
         return out
+    }
+
+    /**
+     * The asset `version` out of a built header (offset 16, u32 LE). The cipher seam
+     * needs it for the CTR IV and the header already carries it, so nothing above has
+     * to pass it a second time.
+     */
+    fun versionOfHeader(header: ByteArray): Int {
+        require(header.size >= ASSET_HEADER_LEN) { "not an asset header" }
+        var v = 0
+        for (i in 3 downTo 0) v = (v shl 8) or (header[16 + i].toInt() and 0xff)
+        return v
     }
 
     private fun putU16(buf: ByteArray, at: Int, v: Int) {

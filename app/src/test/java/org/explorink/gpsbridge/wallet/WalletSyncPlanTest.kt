@@ -56,7 +56,7 @@ class WalletSyncPlanTest {
     @Test
     fun the_page_image_outranks_the_tiles_of_its_own_level() {
         val store = SyncFixtures.store()
-        SyncFixtures.addItem(store, "Passport")
+        SyncFixtures.addItem(store, "Passport", tiles = true)
         val plan = WalletSyncPlan.build(store.load(), store.treeDir)
         val wallet = store.load()
         val pi = wallet.items[0].pages[0].levels.getValue("one_to_one").pageImage!!
@@ -67,7 +67,8 @@ class WalletSyncPlanTest {
     @Test
     fun tiles_go_out_from_the_focal_tile_not_left_to_right() {
         val store = SyncFixtures.store()
-        SyncFixtures.addItem(store, "Passport", paper = "a4")
+        // Tiles are opt-in now, and this test is about the order they go out in.
+        SyncFixtures.addItem(store, "Passport", paper = "a4", tiles = true)
         val wallet = store.load()
         val level = wallet.items[0].pages[0].levels.getValue("one_to_one")
         assertEquals(4, level.cols)
@@ -108,7 +109,7 @@ class WalletSyncPlanTest {
     @Test
     fun the_hash_is_of_the_whole_file_not_of_the_manifests_payload_hash() {
         val store = SyncFixtures.store()
-        SyncFixtures.addItem(store, "Passport")
+        SyncFixtures.addItem(store, "Passport", tiles = true)
         val wallet = store.load()
         val plan = WalletSyncPlan.build(wallet, store.treeDir)
         val fit = wallet.items[0].pages[0].levels.getValue("fit").assets[0]
@@ -152,7 +153,7 @@ class WalletSyncPlanTest {
     @Test
     fun a_missing_file_is_planned_as_zero_bytes_rather_than_skipped() {
         val store = SyncFixtures.store()
-        SyncFixtures.addItem(store, "Passport")
+        SyncFixtures.addItem(store, "Passport", tiles = true)
         val wallet = store.load()
         val fit = wallet.items[0].pages[0].levels.getValue("fit").assets[0]
         assertTrue(store.assetFile(fit.assetId, "dat").delete())

@@ -128,9 +128,7 @@ class WalletSyncActivity : Activity(), WalletSyncController.Listener {
             return
         }
         val t = controller.wifiTransport(host)
-        append("wifi host=$host")
-        controller.engine.useTransport(t)
-        controller.engine.start()
+        startWith(t, "wifi host=$host")
     }
 
     private fun startBle() {
@@ -157,10 +155,41 @@ class WalletSyncActivity : Activity(), WalletSyncController.Listener {
             note("the device is not connected, or its map screen is not open")
             return
         }
-        append("ble mtu-chunk=${b.walletFrameSink().maxChunkPayload()} B")
-        controller.engine.useTransport(t)
-        controller.engine.start()
+        startWith(t, "ble mtu-chunk=${b.walletFrameSink().maxChunkPayload()} B")
     }
+
+    /**
+     * Probe the card, then start -- or stop and ask.
+     *
+     * The rider has to press sync **twice** when the card holds the other kind of
+     * manifest, and that is the point: the first press reports what would happen, the
+     * second is consent. Before this existed, a cleartext sync onto an encrypted card
+     * ran to completion, verified every byte, and changed nothing the rider could see
+     * (`docs/wallet-plan.md` 7l).
+     *
+     * BLE cannot read the card, so it comes back `UNKNOWN` and syncs straight away.
+     * That gap is real and is written down rather than papered over.
+     */
+    private fun startWith(t: WalletTransport, banner: String) {
+        append(banner)
+        controller.engine.useTransport(t)
+        controller.probeCardManifest(t) { conflict ->
+            if (conflict != null && !conflictAccepted) {
+                conflictAccepted = true
+                append("CONFLICT: ${conflict.message}")
+                append(conflict.remedy)
+                note("card holds a ${conflict.card.label} wallet -- press sync again to " +
+                    "send anyway")
+                render()
+                return@probeCardManifest
+            }
+            controller.engine.start(ignoreManifestConflict = conflictAccepted)
+            conflictAccepted = false
+        }
+    }
+
+    /** The rider was shown the conflict and pressing sync again means "do it". */
+    private var conflictAccepted = false
 
     private fun note(text: String) {
         append(text)
@@ -170,6 +199,12 @@ class WalletSyncActivity : Activity(), WalletSyncController.Listener {
     // --- controller callbacks (all on the main thread) ----------------------
 
     override fun onPlanReady(queue: WalletSyncQueue) {
+        // A new plan can be a different wallet, so an accepted conflict does not carry.
+        conflictAccepted = false
+        render()
+    }
+
+    override fun onManifestConflict(conflict: ManifestConflict) {
         render()
     }
 
@@ -198,9 +233,15 @@ class WalletSyncActivity : Activity(), WalletSyncController.Listener {
         tvHead.text = "device: BLE $link" +
             (bridge?.snapshot()?.deviceName?.let { " ($it)" } ?: "") +
             "\nwallet version ${wallet.walletVersion}, ${wallet.items.size} item(s), " +
-            "panel ${wallet.panelName}" +
+            "panel ${wallet.panelName}, ${wallet.manifestKind.label}" +
             "\ntransport: ${t?.label ?: "none"}" +
-            (if (controller.engine.running) " -- syncing" else "")
+            (if (controller.engine.running) " -- syncing" else "") +
+            // The card's own manifest kind is part of where the sync stands, not a
+            // footnote: a mismatch means a completed sync the rider cannot see.
+            "\ncard: ${controller.engine.cardManifest.label} wallet" +
+            (controller.engine.manifestConflict?.let {
+                if (it.invisible) " -- THIS SYNC WOULD BE INVISIBLE" else " -- kind mismatch"
+            } ?: "")
 
         tvPending.text = "${bytes(totals.pendingBytes)} pending"
         val eta = t?.estimateText(totals.pendingBytes) ?: ""

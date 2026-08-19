@@ -1,0 +1,285 @@
+{
+  "formatVersion": 1,
+  "walletVersion": 1,
+  "panel": {
+    "name": "x4",
+    "width": 800,
+    "height": 480,
+    "rowBytes": 100,
+    "assetBytes": 48000
+  },
+  "crypto": null,
+  "items": [
+    {
+      "id": "38c37e815214c036",
+      "title": "Demo A4 Page",
+      "createdAt": "2026-08-18T00:00:00Z",
+      "sortOrder": 0,
+      "grey": false,
+      "pages": [
+        {
+          "id": "p001",
+          "paper": "a4",
+          "levels": {
+            "fit": {
+              "cols": 1,
+              "rows": 1,
+              "defaultTileX": 0,
+              "defaultTileY": 0,
+              "assets": [
+                {
+                  "assetId": "a6a12e278b4ff498",
+                  "type": 1,
+                  "col": 0,
+                  "row": 0,
+                  "rawLen": 48000,
+                  "sha256": "92edadb0c754425fdbaeb80a415641450a7741a185d8fbd6288d8ac5f6bf5392",
+                  "rleLen": 17962
+                }
+              ],
+              "pageImage": {
+                "assetId": "48e70f303d4dbc08",
+                "bitDepth": 1,
+                "nativeWidth": 800,
+                "nativeHeight": 480,
+                "rowBytes": 100,
+                "rawLen": 48000,
+                "sha256": "92edadb0c754425fdbaeb80a415641450a7741a185d8fbd6288d8ac5f6bf5392",
+                "rleLen": 17962,
+                "windowStepX": 400,
+                "windowStepY": 240,
+                "focalX": 0,
+                "focalY": 0
+              }
+            },
+            "detail": {
+              "cols": 2,
+              "rows": 2,
+              "defaultTileX": 0,
+              "defaultTileY": 0,
+              "assets": [
+                {
+                  "assetId": "26204a491eea03a0",
+                  "type": 2,
+                  "col": 0,
+                  "row": 0,
+                  "rawLen": 48000,
+                  "sha256": "a31f289dec6513994654044499e3d5ce8cd161d3c65e63b74d152cdf54b51c43",
+                  "rleLen": 25135
+                },
+                {
+                  "assetId": "3ac46c29e1b340b8",
+                  "type": 2,
+                  "col": 1,
+                  "row": 0,
+                  "rawLen": 48000,
+                  "sha256": "77be4a2f29697a727d065f35ecea6d35d6bcdebfb9a0f577ce51f14072c1562f",
+                  "rleLen": 7785
+                },
+                {
+                  "assetId": "d5f2c358de7142a5",
+                  "type": 2,
+                  "col": 0,
+                  "row": 1,
+                  "rawLen": 48000,
+                  "sha256": "d29aac3acfb0c8ca882fbeee8f70a2fac13e98df3adfb76a11c57206eda780ca",
+                  "rleLen": 18311
+                },
+                {
+                  "assetId": "32430bfe1054cbdd",
+                  "type": 2,
+                  "col": 1,
+                  "row": 1,
+                  "rawLen": 48000,
+                  "sha256": "b99b6829068ee1c7c4f317109ea972091184274f1b6b821b70bf23c378e8650f",
+                  "rleLen": 11046
+                }
+              ],
+              "pageImage": {
+                "assetId": "fc6e6f73e8cb6a87",
+                "bitDepth": 1,
+                "nativeWidth": 1600,
+                "nativeHeight": 960,
+                "rowBytes": 200,
+                "rawLen": 192000,
+                "sha256": "2b77536fcd70c9363fc595a8802538ceefd7c26ca343939873c4a3eda7582bce",
+                "rleLen": 61569,
+                "windowStepX": 400,
+                "windowStepY": 240,
+                "focalX": 0,
+                "focalY": 480
+              }
+            },
+            "one_to_one": {
+              "cols": 4,
+              "rows": 4,
+              "defaultTileX": 1,
+              "defaultTileY": 1,
+              "assets": [
+                {
+                  "assetId": "f828d07314b323cc",
+                  "type": 3,
+                  "col": 0,
+                  "row": 0,
+                  "rawLen": 48000,
+                  "sha256": "9eb2acb2aee7741abf34fa009e0784b0269189405bc05caa275693a2b95d0cb7",
+                  "rleLen": 18788
+                },
+                {
+                  "assetId": "f25940cab28c0a08",
+                  "type": 3,
+                  "col": 1,
+                  "row": 0,
+                  "rawLen": 48000,
+                  "sha256": "5af0f77ae17576af13707aa75fa58363adf6a5ac6032750a02e9c052587b2dab",
+                  "rleLen": 24360
+                },
+                {
+                  "assetId": "1f7eb7c8474fc12f",
+                  "type": 3,
+                  "col": 2,
+                  "row": 0,
+                  "rawLen": 48000,
+                  "sha256": "c42d9c855d1444aa6dcd6656b437297d8fc1f4de440b3429d19dfc4362d43ce1",
+                  "rleLen": 10931
+                },
+                {
+                  "assetId": "8071f687b2621d43",
+                  "type": 3,
+                  "col": 3,
+                  "row": 0,
+                  "rawLen": 48000,
+                  "sha256": "5d4da29e2c449b9d421e73a5d39e963b7f4ab13a14ab6bdaddfa33e460b0ee7d",
+                  "rleLen": 1650
+                },
+                {
+                  "assetId": "18dfe4e71e31c314",
+                  "type": 3,
+                  "col": 0,
+                  "row": 1,
+                  "rawLen": 48000,
+                  "sha256": "8db754b5df9c6f3ef3a03911b3997bd16cc36c76377bbc1c4b9dda0d3b5bd944",
+                  "rleLen": 23424
+                },
+                {
+                  "assetId": "295bdf5f5f525a96",
+                  "type": 3,
+                  "col": 1,
+                  "row": 1,
+                  "rawLen": 48000,
+                  "sha256": "950dde3b775c0b9a29f9450c29679dd876f50e7a7d16f7624ee1798d238121cb",
+                  "rleLen": 29124
+                },
+                {
+                  "assetId": "7c908d0298aefe15",
+                  "type": 3,
+                  "col": 2,
+                  "row": 1,
+                  "rawLen": 48000,
+                  "sha256": "ba523de3e31b28bd10e56e6b045682337f731ed67b24cf4f02be7a66a7507073",
+                  "rleLen": 13158
+                },
+                {
+                  "assetId": "ccc225bfa3c5e1fe",
+                  "type": 3,
+                  "col": 3,
+                  "row": 1,
+                  "rawLen": 48000,
+                  "sha256": "cca3d0a31bd1aa0de1676f4f48c2be8a5e725985da720d9e0e0250f61e413441",
+                  "rleLen": 4781
+                },
+                {
+                  "assetId": "2ad80e895262db39",
+                  "type": 3,
+                  "col": 0,
+                  "row": 2,
+                  "rawLen": 48000,
+                  "sha256": "9c84e0994848f633e0c7ce33c5440e725e05cb70a91d99995c98aa68256cec64",
+                  "rleLen": 8427
+                },
+                {
+                  "assetId": "601370cc265ce61a",
+                  "type": 3,
+                  "col": 1,
+                  "row": 2,
+                  "rawLen": 48000,
+                  "sha256": "c6dfb4cbf235c20d42816f7053194682c7ae774b468b887e94f22db1c87b2f85",
+                  "rleLen": 25099
+                },
+                {
+                  "assetId": "0aab813753bc3cea",
+                  "type": 3,
+                  "col": 2,
+                  "row": 2,
+                  "rawLen": 48000,
+                  "sha256": "f18e0b2841dd4ad4a33d579909824990ae26292f0017f6b81d0a059ac741fb4f",
+                  "rleLen": 12926
+                },
+                {
+                  "assetId": "011a67457dfe7c30",
+                  "type": 3,
+                  "col": 3,
+                  "row": 2,
+                  "rawLen": 48000,
+                  "sha256": "3b7c27f528b326def2ad22291bcf1eb980a482b68b32cf4819ff6bc91360819a",
+                  "rleLen": 2615
+                },
+                {
+                  "assetId": "19f6fa93ef25173d",
+                  "type": 3,
+                  "col": 0,
+                  "row": 3,
+                  "rawLen": 48000,
+                  "sha256": "d94618cfbe8b86a3a05a02bccb372f3b97fa256f74f8ef92eb0c06be96421c41",
+                  "rleLen": 1386
+                },
+                {
+                  "assetId": "c6fcd9859e2b2a55",
+                  "type": 3,
+                  "col": 1,
+                  "row": 3,
+                  "rawLen": 48000,
+                  "sha256": "9e42cb47c8874f4fd1a939da79541e5ca186aca364c186c428d060df0ad1f6af",
+                  "rleLen": 830
+                },
+                {
+                  "assetId": "b12212313b056bcb",
+                  "type": 3,
+                  "col": 2,
+                  "row": 3,
+                  "rawLen": 48000,
+                  "sha256": "9e42cb47c8874f4fd1a939da79541e5ca186aca364c186c428d060df0ad1f6af",
+                  "rleLen": 830
+                },
+                {
+                  "assetId": "61897cc14ff30f73",
+                  "type": 3,
+                  "col": 3,
+                  "row": 3,
+                  "rawLen": 48000,
+                  "sha256": "9e42cb47c8874f4fd1a939da79541e5ca186aca364c186c428d060df0ad1f6af",
+                  "rleLen": 830
+                }
+              ],
+              "pageImage": {
+                "assetId": "44ff9217417ba813",
+                "bitDepth": 1,
+                "nativeWidth": 2576,
+                "nativeHeight": 1819,
+                "rowBytes": 322,
+                "rawLen": 585718,
+                "sha256": "6e05301865225ce2dedb90d4a8e361c05a4c78ef06fd9026a64b86fd83f2d37b",
+                "rleLen": 175228,
+                "windowStepX": 400,
+                "windowStepY": 240,
+                "focalX": 800,
+                "focalY": 859
+              }
+            }
+          },
+          "codes": []
+        }
+      ]
+    }
+  ]
+}

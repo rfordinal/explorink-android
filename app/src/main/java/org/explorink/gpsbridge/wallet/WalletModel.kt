@@ -23,7 +23,8 @@ data class WalletAsset(
     val row: Int,
     val rawLen: Int,
     val sha256: String,
-    val rleLen: Int,
+    /** Sidecar size, or **null on an encrypted tree**, which writes no sidecar. */
+    val rleLen: Int?,
 ) {
     fun toJson(): LinkedHashMap<String, Any?> = linkedMapOf(
         "assetId" to assetId,
@@ -43,7 +44,7 @@ data class WalletAsset(
             row = Json.asInt(o["row"]),
             rawLen = Json.asInt(o["rawLen"]),
             sha256 = Json.asString(o["sha256"]),
-            rleLen = Json.asInt(o["rleLen"]),
+            rleLen = Json.asIntOrNull(o["rleLen"]),
         )
     }
 }
@@ -55,12 +56,19 @@ data class WalletAsset(
  */
 data class WalletPageImage(
     val assetId: String,
+    /**
+     * 1 for the dithered page image, and stated rather than implied: the firmware reads
+     * every image-like entry through one struct, and `greyPageImage` beside it is the
+     * same shape at 2 (`docs/wallet-format.md` section 13).
+     */
+    val bitDepth: Int = WalletFormat.BIT_DEPTH_1BPP,
     val nativeWidth: Int,
     val nativeHeight: Int,
     val rowBytes: Int,
     val rawLen: Int,
     val sha256: String,
-    val rleLen: Int,
+    /** Null on an encrypted tree: no sidecar is written. */
+    val rleLen: Int?,
     val windowStepX: Int,
     val windowStepY: Int,
     val focalX: Int,
@@ -68,6 +76,7 @@ data class WalletPageImage(
 ) {
     fun toJson(): LinkedHashMap<String, Any?> = linkedMapOf(
         "assetId" to assetId,
+        "bitDepth" to bitDepth,
         "nativeWidth" to nativeWidth,
         "nativeHeight" to nativeHeight,
         "rowBytes" to rowBytes,
@@ -83,12 +92,13 @@ data class WalletPageImage(
     companion object {
         fun fromJson(o: Map<String, Any?>) = WalletPageImage(
             assetId = Json.asString(o["assetId"]),
+            bitDepth = Json.asInt(o["bitDepth"]),
             nativeWidth = Json.asInt(o["nativeWidth"]),
             nativeHeight = Json.asInt(o["nativeHeight"]),
             rowBytes = Json.asInt(o["rowBytes"]),
             rawLen = Json.asInt(o["rawLen"]),
             sha256 = Json.asString(o["sha256"]),
-            rleLen = Json.asInt(o["rleLen"]),
+            rleLen = Json.asIntOrNull(o["rleLen"]),
             windowStepX = Json.asInt(o["windowStepX"]),
             windowStepY = Json.asInt(o["windowStepY"]),
             focalX = Json.asInt(o["focalX"]),
@@ -113,7 +123,7 @@ data class WalletGreyEntry(val fields: LinkedHashMap<String, Any?>) {
     val assetId: String get() = Json.asString(fields["assetId"])
     val rawLen: Int get() = Json.asInt(fields["rawLen"])
     val sha256: String get() = Json.asString(fields["sha256"])
-    val rleLen: Int get() = Json.asInt(fields["rleLen"])
+    val rleLen: Int? get() = Json.asIntOrNull(fields["rleLen"])
 
     fun toJson(): LinkedHashMap<String, Any?> = fields
 
@@ -188,7 +198,8 @@ data class MachineReadableCode(
     val codeWidthPx: Int,
     val codeHeightPx: Int,
     val sha256: String,
-    val rleLen: Int,
+    /** Null on an encrypted tree: no sidecar is written. */
+    val rleLen: Int?,
 ) {
     fun toJson(): LinkedHashMap<String, Any?> = linkedMapOf(
         "id" to id,
@@ -220,7 +231,7 @@ data class MachineReadableCode(
             codeWidthPx = Json.asInt(o["codeWidthPx"]),
             codeHeightPx = Json.asInt(o["codeHeightPx"]),
             sha256 = Json.asString(o["sha256"]),
-            rleLen = Json.asInt(o["rleLen"]),
+            rleLen = Json.asIntOrNull(o["rleLen"]),
         )
     }
 }
@@ -295,27 +306,23 @@ data class WalletItem(
     }
 
     /**
-     * `grey` is written **only when true**.
+     * `grey` is written **always**, true or false, because that is what
+     * `tools/walletgen.py` writes and the manifest is compared as text.
      *
-     * The device treats an absent flag as "no grey", which is the right default: a
-     * card written before grey existed must not start rendering grey frames because
-     * a later firmware learned how (`docs/wallet-format.md` section 13). Omitting it
-     * also keeps a 1bpp manifest byte-identical to what this branch's
-     * `tools/walletgen.py` writes, which is what `WalletParityTest` compares. The
-     * newer generator on the P0 branch writes the key unconditionally; see
-     * `docs/android-wallet.md` section 15 for that divergence.
+     * A reader must still treat an **absent** flag as "no grey": a card written before
+     * grey existed must not start rendering grey frames because a later firmware
+     * learned how (`docs/wallet-format.md` section 13). Writing it every time and
+     * reading a missing one as false are both true at once, and the parser below does
+     * the second.
      */
-    fun toJson(): LinkedHashMap<String, Any?> {
-        val out = linkedMapOf<String, Any?>(
-            "id" to id,
-            "title" to title,
-            "createdAt" to createdAt,
-            "sortOrder" to sortOrder,
-        )
-        if (grey) out["grey"] = true
-        out["pages"] = pages.map { it.toJson() }
-        return out
-    }
+    fun toJson(): LinkedHashMap<String, Any?> = linkedMapOf(
+        "id" to id,
+        "title" to title,
+        "createdAt" to createdAt,
+        "sortOrder" to sortOrder,
+        "grey" to grey,
+        "pages" to pages.map { it.toJson() },
+    )
 
     companion object {
         fun fromJson(o: Map<String, Any?>) = WalletItem(
@@ -340,8 +347,31 @@ data class Wallet(
     val walletVersion: Int,
     val panelName: String,
     val items: List<WalletItem>,
+    /**
+     * The `crypto` block: `{scheme, assets, manifest}` on an encrypted tree, **null**
+     * on a cleartext one. The key is always written -- `"crypto": null` -- because
+     * that is what `tools/walletgen.py` writes and the manifest is compared as text.
+     *
+     * Held as the raw map rather than a typed mirror so a manifest written by a newer
+     * scheme survives a round trip through this app instead of being silently
+     * rewritten as ours.
+     */
+    val crypto: Map<String, Any?>? = null,
 ) {
     val panel: PanelProfile get() = Panels.byName(panelName)
+
+    /**
+     * Which manifest file this wallet is written as. **Not a cosmetic difference**:
+     * the device prefers `manifest.enc` whenever one exists, so a cleartext wallet
+     * synced onto a card holding an encrypted one is invisible
+     * (`docs/wallet-plan.md` 7l, [WalletManifestConflict]).
+     */
+    val manifestKind: ManifestKind
+        get() = if (crypto != null) ManifestKind.ENCRYPTED else ManifestKind.CLEARTEXT
+
+    val manifestFileName: String
+        get() = if (crypto != null) WalletFormat.MANIFEST_ENC_NAME
+        else WalletFormat.MANIFEST_CLEAR_NAME
 
     fun item(id: String): WalletItem? = items.firstOrNull { it.id == id }
 
@@ -374,17 +404,19 @@ data class Wallet(
                 "rowBytes" to p.rowBytes,
                 "assetBytes" to p.assetBytes,
             ),
+            "crypto" to crypto,
             "items" to items.map { it.toJson() },
         )
         return Json.write(tree) + "\n"
     }
 
     companion object {
-        fun empty(panelName: String = Panels.DEFAULT_NAME) = Wallet(
+        fun empty(panelName: String = Panels.DEFAULT_NAME, encrypted: Boolean = false) = Wallet(
             formatVersion = WalletFormat.MANIFEST_FORMAT_VERSION,
             walletVersion = 0,
             panelName = panelName,
             items = emptyList(),
+            crypto = if (encrypted) WalletCrypto.descriptor() else null,
         )
 
         fun fromManifestJson(text: String): Wallet {
@@ -399,6 +431,7 @@ data class Wallet(
                 walletVersion = Json.asInt(o["walletVersion"]),
                 panelName = Json.asString(Json.asMap(o["panel"])["name"]),
                 items = Json.asList(o["items"]).map { WalletItem.fromJson(Json.asMap(it)) },
+                crypto = o["crypto"]?.let { Json.asMap(it) },
             )
         }
     }

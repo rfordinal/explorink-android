@@ -27,6 +27,9 @@ class WalletSyncController(
         fun onChanged()
         fun onLine(line: String)
         fun onFinished(confirmed: Int, failed: Int, remaining: Int, reason: String)
+
+        /** The card holds the other kind of manifest. A question, not a failure. */
+        fun onManifestConflict(conflict: ManifestConflict) {}
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -51,7 +54,10 @@ class WalletSyncController(
     val engine = WalletSyncEngine(
         bytes = object : WalletSyncEngine.AssetBytes {
             override fun read(a: SyncAsset): ByteArray? {
-                val f = if (a.isManifest) java.io.File(store.treeDir, "manifest.json")
+                // The manifest's own file name follows the tree's kind -- manifest.json
+                // or manifest.enc. The plan already put the right name in `relPath`; use
+                // it, so the two cannot disagree.
+                val f = if (a.isManifest) java.io.File(store.treeDir, store.manifestFile.name)
                 else store.assetFile(a.key, "dat")
                 return if (f.isFile) f.readBytes() else null
             }
@@ -60,6 +66,12 @@ class WalletSyncController(
             override fun onSyncStarted(transport: String, pendingAssets: Int, pendingBytes: Long) {
                 listener.onLine("start transport=$transport pending=$pendingAssets " +
                     "bytes=$pendingBytes")
+            }
+
+            override fun onManifestConflict(conflict: ManifestConflict) {
+                listener.onLine("manifest conflict local=${conflict.local.label} " +
+                    "card=${conflict.card.label} invisible=${conflict.invisible}")
+                listener.onManifestConflict(conflict)
             }
 
             override fun onAssetProgress(a: SyncAsset, sent: Int, total: Int) {
@@ -99,9 +111,35 @@ class WalletSyncController(
             val state = store.loadState()
             val plan = WalletSyncPlan.build(wallet, store.treeDir)
             val queue = WalletSyncQueue(plan, state.confirmed, state.errors, state.queued)
+            val kind = wallet.manifestKind
             main.post {
+                engine.localManifest = kind
                 engine.setQueue(queue)
                 listener.onPlanReady(queue)
+            }
+        }
+    }
+
+    /**
+     * Ask the card which manifest it holds, off the UI thread, and hand the answer to
+     * the engine.
+     *
+     * Two blocking HTTP round trips on Wi-Fi and an instant `UNKNOWN` on BLE, so it is
+     * cheap enough to run before every sync -- which is when it matters, because the
+     * card can change between two runs. [then] lands on the main thread with the
+     * conflict, or null when there is none.
+     */
+    fun probeCardManifest(t: WalletTransport, then: (ManifestConflict?) -> Unit) {
+        worker.execute {
+            val kind = try {
+                t.probeCardManifest()
+            } catch (e: Throwable) {
+                ManifestKind.UNKNOWN
+            }
+            main.post {
+                engine.cardManifest = kind
+                listener.onLine("card manifest=${kind.label} local=${engine.localManifest.label}")
+                then(engine.manifestConflict)
             }
         }
     }

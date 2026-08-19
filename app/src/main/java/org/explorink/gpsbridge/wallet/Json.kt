@@ -295,5 +295,8 @@ object Json {
         else -> throw IllegalArgumentException("not a number: $v")
     }
 
+    /** Null stays null. `rleLen` is null on every asset of an encrypted tree. */
+    fun asIntOrNull(v: Any?): Int? = if (v == null) null else asInt(v)
+
     fun asString(v: Any?): String = v as String
 }

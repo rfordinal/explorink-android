@@ -1,0 +1,222 @@
+{
+  "formatVersion": 1,
+  "walletVersion": 1,
+  "panel": {
+    "name": "x4",
+    "width": 800,
+    "height": 480,
+    "rowBytes": 100,
+    "assetBytes": 48000
+  },
+  "crypto": null,
+  "items": [
+    {
+      "id": "38c37e815214c036",
+      "title": "Demo A4 Page",
+      "createdAt": "2026-08-18T00:00:00Z",
+      "sortOrder": 0,
+      "grey": true,
+      "pages": [
+        {
+          "id": "p001",
+          "paper": "a4",
+          "levels": {
+            "fit": {
+              "cols": 1,
+              "rows": 1,
+              "defaultTileX": 0,
+              "defaultTileY": 0,
+              "assets": [],
+              "pageImage": {
+                "assetId": "48e70f303d4dbc08",
+                "bitDepth": 1,
+                "nativeWidth": 800,
+                "nativeHeight": 480,
+                "rowBytes": 100,
+                "rawLen": 48000,
+                "sha256": "92edadb0c754425fdbaeb80a415641450a7741a185d8fbd6288d8ac5f6bf5392",
+                "rleLen": 17962,
+                "windowStepX": 400,
+                "windowStepY": 240,
+                "focalX": 0,
+                "focalY": 0
+              },
+              "greyPageImage": {
+                "assetId": "dee64dc844c5523a",
+                "bitDepth": 2,
+                "nativeWidth": 800,
+                "nativeHeight": 480,
+                "rowBytes": 200,
+                "rawLen": 96000,
+                "sha256": "6850f72b4a35ae5017f688c5c1fb52962d9126a9d2b6e597801afd42283de824",
+                "rleLen": 31143,
+                "windowStepX": 400,
+                "windowStepY": 240,
+                "focalX": 0,
+                "focalY": 0
+              },
+              "greyPlanes": {
+                "assetId": "4d789f4ccfdcf096",
+                "bitDepth": 2,
+                "nativeWidth": 800,
+                "nativeHeight": 480,
+                "rowBytes": 100,
+                "windowStepX": 0,
+                "windowStepY": 0,
+                "focalX": 0,
+                "focalY": 0,
+                "width": 800,
+                "height": 480,
+                "originX": 0,
+                "originY": 0,
+                "planeOrder": [
+                  "base",
+                  "lsb",
+                  "msb"
+                ],
+                "planeBytes": 48000,
+                "planeBandRows": 80,
+                "planeBandCount": 6,
+                "baseOffset": 0,
+                "lsbOffset": 48000,
+                "msbOffset": 96000,
+                "rawLen": 144000,
+                "sha256": "df3cc9d422eca7ae535d10077b2466061291faae4ccd6ab647298d1b9be9008c",
+                "rleLen": 48767
+              }
+            },
+            "detail": {
+              "cols": 2,
+              "rows": 2,
+              "defaultTileX": 0,
+              "defaultTileY": 0,
+              "assets": [],
+              "pageImage": {
+                "assetId": "fc6e6f73e8cb6a87",
+                "bitDepth": 1,
+                "nativeWidth": 1600,
+                "nativeHeight": 960,
+                "rowBytes": 200,
+                "rawLen": 192000,
+                "sha256": "2b77536fcd70c9363fc595a8802538ceefd7c26ca343939873c4a3eda7582bce",
+                "rleLen": 61569,
+                "windowStepX": 400,
+                "windowStepY": 240,
+                "focalX": 0,
+                "focalY": 480
+              },
+              "greyPageImage": {
+                "assetId": "7164a597b22ea754",
+                "bitDepth": 2,
+                "nativeWidth": 1600,
+                "nativeHeight": 960,
+                "rowBytes": 400,
+                "rawLen": 384000,
+                "sha256": "921af8eb269a59435b0abd6fdc44474ded0aa2e639a700321c06fd0480f51557",
+                "rleLen": 86525,
+                "windowStepX": 400,
+                "windowStepY": 240,
+                "focalX": 0,
+                "focalY": 480
+              },
+              "greyPlanes": {
+                "assetId": "7ebb808b43a1797f",
+                "bitDepth": 2,
+                "nativeWidth": 800,
+                "nativeHeight": 480,
+                "rowBytes": 100,
+                "windowStepX": 0,
+                "windowStepY": 0,
+                "focalX": 0,
+                "focalY": 0,
+                "width": 800,
+                "height": 480,
+                "originX": 0,
+                "originY": 480,
+                "planeOrder": [
+                  "base",
+                  "lsb",
+                  "msb"
+                ],
+                "planeBytes": 48000,
+                "planeBandRows": 80,
+                "planeBandCount": 6,
+                "baseOffset": 0,
+                "lsbOffset": 48000,
+                "msbOffset": 96000,
+                "rawLen": 144000,
+                "sha256": "27ac69d49d815854ab01af184d7d5e0fca192c97dae2a7ccd3999414c2bfa445",
+                "rleLen": 74209
+              }
+            },
+            "one_to_one": {
+              "cols": 4,
+              "rows": 4,
+              "defaultTileX": 1,
+              "defaultTileY": 1,
+              "assets": [],
+              "pageImage": {
+                "assetId": "44ff9217417ba813",
+                "bitDepth": 1,
+                "nativeWidth": 2576,
+                "nativeHeight": 1819,
+                "rowBytes": 322,
+                "rawLen": 585718,
+                "sha256": "6e05301865225ce2dedb90d4a8e361c05a4c78ef06fd9026a64b86fd83f2d37b",
+                "rleLen": 175228,
+                "windowStepX": 400,
+                "windowStepY": 240,
+                "focalX": 800,
+                "focalY": 859
+              },
+              "greyPageImage": {
+                "assetId": "6a117269b9cef84b",
+                "bitDepth": 2,
+                "nativeWidth": 2576,
+                "nativeHeight": 1819,
+                "rowBytes": 644,
+                "rawLen": 1171436,
+                "sha256": "38e87b210c58decfa1ae54a7d374515ef6a8b607e90c24859b8fbadd8ab269a8",
+                "rleLen": 216701,
+                "windowStepX": 400,
+                "windowStepY": 240,
+                "focalX": 800,
+                "focalY": 859
+              },
+              "greyPlanes": {
+                "assetId": "dcefe0b9e9a762e3",
+                "bitDepth": 2,
+                "nativeWidth": 800,
+                "nativeHeight": 480,
+                "rowBytes": 100,
+                "windowStepX": 0,
+                "windowStepY": 0,
+                "focalX": 0,
+                "focalY": 0,
+                "width": 800,
+                "height": 480,
+                "originX": 800,
+                "originY": 859,
+                "planeOrder": [
+                  "base",
+                  "lsb",
+                  "msb"
+                ],
+                "planeBytes": 48000,
+                "planeBandRows": 80,
+                "planeBandCount": 6,
+                "baseOffset": 0,
+                "lsbOffset": 48000,
+                "msbOffset": 96000,
+                "rawLen": 144000,
+                "sha256": "14363873590d697e4fc3ebf28d3155a6a8273fcaafcdd56bf7906b56871eeec4",
+                "rleLen": 86705
+              }
+            }
+          },
+          "codes": []
+        }
+      ]
+    }
+  ]
+}

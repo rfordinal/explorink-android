@@ -23,6 +23,20 @@ class WalletPipeline(
     /** Design B assets. On by default: the device viewer prefers them. */
     val pageImage: Boolean = true,
     /**
+     * Pre-cut 480x800 screens per level. **Off by default since 2026-08-19**, which
+     * matches `tools/walletgen.py --tiles` being opt-in.
+     *
+     * Design B is what the device uses: one whole-page asset per level, and the viewer
+     * blits an arbitrary window out of it. A pan of a fraction of a view cannot be
+     * expressed by pre-cut tiles at all (`docs/wallet-plan.md` 7a), so tiles were
+     * 21 of the 24 assets a page shipped and the device panned with none of them.
+     * On the fixture A4 page that is 1,844,069 B against 830,247 B.
+     *
+     * The path stays for the tests that exercise it and for a card written before
+     * design B; the device reader is deliberately tolerant of either.
+     */
+    val tiles: Boolean = false,
+    /**
      * Four-level grey for this document (`docs/wallet-format.md` section 13).
      *
      * Per document, never card-wide: the rider marks a scan or a photo grey and
@@ -36,7 +50,11 @@ class WalletPipeline(
      * image's own focal window.
      */
     val grey: Boolean = false,
-    /** The encryption seam. [AssetCipher.None] until P3. */
+    /**
+     * The encryption seam. [AssetCipher.None] writes a cleartext tree,
+     * [Aes256CtrCipher] an encrypted one -- and the id recipe, the header flags and
+     * whether a sidecar is written all follow from it.
+     */
     val cipher: AssetCipher = AssetCipher.None,
 ) {
 
@@ -123,8 +141,10 @@ class WalletPipeline(
     fun assetsPerPage(paper: String): Int {
         var n = 0
         for (level in WalletFormat.LEVELS) {
-            val (cols, rows) = levelGrid(level, paper)
-            n += cols * rows
+            if (tiles) {
+                val (cols, rows) = levelGrid(level, paper)
+                n += cols * rows
+            }
             if (pageImage) n++
             if (grey) n += 2
         }
@@ -164,8 +184,13 @@ class WalletPipeline(
             canvas = null
             val assetType = WalletFormat.LEVEL_TYPE.getValue(level)
 
-            val entries = ArrayList<WalletAsset>(cols * rows)
-            for (row in 0 until rows) {
+            // Pre-cut tiles, only when asked. The grid itself is still described in the
+            // manifest either way: it is what the focal hint and the 1:1 arithmetic are
+            // expressed in, and the device reads a window out of the page image at
+            // those coordinates.
+            val tileRows = if (tiles) rows else 0
+            val entries = ArrayList<WalletAsset>(tileRows * cols)
+            for (row in 0 until tileRows) {
                 for (col in 0 until cols) {
                     // Steps 5 + 6 in one pass: the tile is never materialised as a
                     // separate image, it is packed straight out of the canvas.
@@ -177,7 +202,8 @@ class WalletPipeline(
                     }
                     val index = row * cols + col
                     val aid = WalletFormat.assetId(
-                        panel.name, itemId, pageId, assetType, index, version)
+                        panel.name, itemId, pageId, assetType, index, version,
+                        encrypted = cipher.encrypted)
                     entries.add(writeAsset(sink, aid, assetType, col, row, payload, version,
                         width = panel.width, height = panel.height, rowBytes = panel.rowBytes))
                     tick()
@@ -240,7 +266,7 @@ class WalletPipeline(
                 "code asset is ${payload.size} bytes, panel ${panel.name} wants ${panel.assetBytes}")
         }
         val aid = WalletFormat.assetId(panel.name, itemId, pageId,
-            WalletFormat.ASSET_MACHINE_CODE, index, version)
+            WalletFormat.ASSET_MACHINE_CODE, index, version, encrypted = cipher.encrypted)
         val entry = writeAsset(sink, aid, WalletFormat.ASSET_MACHINE_CODE, 0, 0, payload, version,
             width = panel.width, height = panel.height, rowBytes = panel.rowBytes,
             presentation = layout.presentation)
@@ -330,7 +356,8 @@ class WalletPipeline(
         }
 
         val aid = WalletFormat.assetId(panel.name, itemId, pageId,
-            WalletFormat.ASSET_PAGE_IMAGE, WalletFormat.LEVEL_INDEX.getValue(level), version)
+            WalletFormat.ASSET_PAGE_IMAGE, WalletFormat.LEVEL_INDEX.getValue(level), version,
+            encrypted = cipher.encrypted)
         val entry = writeAsset(sink, aid, WalletFormat.ASSET_PAGE_IMAGE, 0, 0, payload, version,
             width = nativeW, height = nativeH, rowBytes = rowBytes)
 
@@ -339,6 +366,7 @@ class WalletPipeline(
         val (fx, fy) = tileWindowOrigin(fc, fr, extW)
         return WalletPageImage(
             assetId = aid,
+            bitDepth = WalletFormat.BIT_DEPTH_1BPP,
             nativeWidth = nativeW,
             nativeHeight = nativeH,
             rowBytes = rowBytes,
@@ -408,7 +436,8 @@ class WalletPipeline(
         val focalY = clampOrigin(rawY, nativeH, panel.height)
 
         val greyId = WalletFormat.assetId(panel.name, itemId, pageId,
-            WalletFormat.ASSET_PAGE_IMAGE_GREY, WalletFormat.LEVEL_INDEX.getValue(level), version)
+            WalletFormat.ASSET_PAGE_IMAGE_GREY, WalletFormat.LEVEL_INDEX.getValue(level), version,
+            encrypted = cipher.encrypted)
         val greyEntry = writeAsset(sink, greyId, WalletFormat.ASSET_PAGE_IMAGE_GREY, 0, 0,
             payload, version, width = nativeW, height = nativeH, rowBytes = rowBytes,
             bitDepth = WalletFormat.BIT_DEPTH_2BPP)
@@ -431,7 +460,8 @@ class WalletPipeline(
         val window = native.crop(focalX, focalY, panel.width, panel.height)
         val planePayload = window.packPlanes(panel)
         val planeId = WalletFormat.assetId(panel.name, itemId, pageId,
-            WalletFormat.ASSET_GREY_PLANES, WalletFormat.LEVEL_INDEX.getValue(level), version)
+            WalletFormat.ASSET_GREY_PLANES, WalletFormat.LEVEL_INDEX.getValue(level), version,
+            encrypted = cipher.encrypted)
         val planeEntry = writeAsset(sink, planeId, WalletFormat.ASSET_GREY_PLANES, 0, 0,
             planePayload, version, width = panel.width, height = panel.height,
             rowBytes = panel.rowBytes, bitDepth = WalletFormat.BIT_DEPTH_2BPP)
@@ -522,10 +552,19 @@ class WalletPipeline(
             assetType, bitDepth, col, row, width, height, payload, version,
             flags = cipher.flags, presentation = presentation)
 
-        // THE ENCRYPTION SEAM. With AssetCipher.None both calls are the identity
-        // and the bytes are exactly what walletgen.py writes.
+        // THE ENCRYPTION SEAM. With AssetCipher.None the seal is the identity and the
+        // bytes are exactly what walletgen.py writes for a cleartext tree.
         val dat = header + cipher.seal(assetId, header, payload)
-        val rle = header + cipher.sealSidecar(assetId, header, Rle.encode(payload, rowBytes))
+        // An encrypted tree writes NO sidecar: ciphertext does not compress (3.89x
+        // down to 0.99x, measured -- `docs/wallet-format.md` section 12), so absence
+        // is the signal and `rleLen` is null. An empty or 1.01x sidecar would be
+        // worse than none, and sealing one would reuse the asset's CTR keystream on a
+        // second plaintext.
+        val rle = if (cipher.writesSidecar) {
+            header + cipher.sealSidecar(assetId, header, Rle.encode(payload, rowBytes))
+        } else {
+            null
+        }
         sink.write(assetId, dat, rle)
 
         return WalletAsset(
@@ -535,7 +574,7 @@ class WalletPipeline(
             row = row,
             rawLen = payload.size,
             sha256 = WalletFormat.sha256Hex(payload),
-            rleLen = rle.size,
+            rleLen = rle?.size,
         )
     }
 
@@ -544,43 +583,59 @@ class WalletPipeline(
     private fun alignDown(v: Int, n: Int): Int = (v / n) * n
 }
 
-/** Where the pipeline puts the two files of one asset. */
+/**
+ * Where the pipeline puts one asset's files.
+ *
+ * [rle] is **null on an encrypted tree**, which writes no sidecar at all -- absence
+ * is the signal, not an empty file (`docs/wallet-format.md` section 12).
+ */
 interface AssetSink {
-    fun write(assetId: String, dat: ByteArray, rle: ByteArray)
+    fun write(assetId: String, dat: ByteArray, rle: ByteArray?)
 }
 
 /**
  * The encryption seam, and the only one.
  *
- * P3 is landing AES-256-CTR at rest on the laptop side (`docs/wallet-plan.md`
- * section 3.4). When it lands here, one implementation of this interface is the
- * whole change on the pipeline side: the 32-byte header stays cleartext (so a
- * recovery scan can rebuild a lost manifest), `flags` sets bit 0, and the payload
- * that follows becomes ciphertext.
+ * Wired 2026-08-19 by [Aes256CtrCipher]. With [None] the pipeline writes exactly what
+ * `tools/walletgen.py` writes for a cleartext tree; with the real cipher it writes
+ * exactly what `walletgen.py --key` writes.
  *
- * Two decisions P3 owns and this seam deliberately does not pre-empt:
+ * What the format decided, and what this interface therefore has to carry
+ * (`docs/wallet-format.md` section 11):
  *
- *  - whether the header's `sha256_prefix` and the manifest's `sha256` cover the
- *    plaintext (they do today) or the ciphertext;
- *  - whether the sidecar's EWRL block is sealed as one unit or per band. Per band
- *    keeps the band-independent resume the sidecar exists for, which argues for
- *    per band -- hence the separate [sealSidecar] hook rather than one `seal`.
- *
- * Compression must stay **before** encryption: ciphertext does not compress.
+ *  - The 32-byte header stays **cleartext** (so a recovery scan can rebuild a lost
+ *    manifest, and so the device can gate on geometry before it has a key), and
+ *    [flags] sets bit 0 on it.
+ *  - The header's `sha256_prefix` and the manifest's `sha256` cover the
+ *    **plaintext**. On an encrypted asset that is an integrity check after
+ *    decryption and **not a MAC**: only the manifest is authenticated.
+ *  - An encrypted tree writes **no sidecar** -- hence [writesSidecar] rather than a
+ *    per-band sealing scheme. Compression before encryption is moot when there is no
+ *    compression.
+ *  - [encrypted] is in the **asset id recipe**, so a cleartext and an encrypted build
+ *    of one document cannot land on the same path (`docs/wallet-plan.md` 7f).
  */
 interface AssetCipher {
     /** Header flags, e.g. bit 0 = encrypted. */
     val flags: Int
 
+    /** Whether this cipher produces ciphertext. Part of the asset id recipe. */
+    val encrypted: Boolean
+
+    /** Whether a `.rle` sidecar is written beside the `.dat`. False when encrypted. */
+    val writesSidecar: Boolean
+
     /** Plaintext payload in, what goes after the 32-byte header out. */
     fun seal(assetId: String, header: ByteArray, payload: ByteArray): ByteArray
 
-    /** Same, for the `.rle` sidecar's EWRL block. */
+    /** Same, for the `.rle` sidecar's EWRL block. Only called when [writesSidecar]. */
     fun sealSidecar(assetId: String, header: ByteArray, block: ByteArray): ByteArray
 
-    /** Phase P0-P2 on the laptop, P4 here: nothing is encrypted yet. */
+    /** A cleartext tree: nothing is encrypted, and the sidecar is written. */
     object None : AssetCipher {
         override val flags: Int get() = 0
+        override val encrypted: Boolean get() = false
+        override val writesSidecar: Boolean get() = true
         override fun seal(assetId: String, header: ByteArray, payload: ByteArray) = payload
         override fun sealSidecar(assetId: String, header: ByteArray, block: ByteArray) = block
     }

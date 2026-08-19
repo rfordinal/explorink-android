@@ -56,7 +56,22 @@ import java.io.File
  * Extras, all optional: `--es transport wifi|ble|none` (default wifi),
  * `--es host <ip>` (default 192.168.69.20), `--ei item <index>` (default: every
  * item), `--ez reset true` (clear the ledger first), `--ei timeout <seconds>`
- * (default 600).
+ * (default 600), `--ez anyway true` (sync even though the card holds the other kind
+ * of manifest -- see below).
+ *
+ * ## The manifest-kind check
+ *
+ * Before any byte moves, the run reports what the card holds:
+ *
+ *     card manifest=encrypted local=cleartext
+ *     manifest conflict local=cleartext card=encrypted invisible=true
+ *     done ... reason="manifest conflict: ..."
+ *
+ * and **stops**, unless `--ez anyway true` is passed. Wi-Fi can ask the card
+ * (`/api/hash`); BLE cannot read anything, so it reports `card manifest=unknown` and
+ * proceeds. This exists because on 2026-08-19 a cleartext sync onto a card holding
+ * `manifest.enc` confirmed all 25 files in 6.5 minutes and the rider still saw the
+ * old wallet (`docs/wallet-plan.md` 7l).
  *
  * ## What the output means
  *
@@ -83,6 +98,7 @@ class WalletSyncTestActivity : Activity(), WalletSyncController.Listener {
     private var host = WalletWifiTransport.DEFAULT_HOST
     private var itemIndex = -1
     private var timeoutMs = 600_000L
+    private var syncAnyway = false
     private var startedAt = 0L
     private var finished = false
 
@@ -113,6 +129,7 @@ class WalletSyncTestActivity : Activity(), WalletSyncController.Listener {
         host = intent.getStringExtra("host") ?: WalletWifiTransport.DEFAULT_HOST
         itemIndex = intent.getIntExtra("item", -1)
         timeoutMs = intent.getIntExtra("timeout", 600).toLong() * 1000L
+        syncAnyway = intent.getBooleanExtra("anyway", false)
         val reset = intent.getBooleanExtra("reset", false)
 
         controller = WalletSyncController(store, this)
@@ -142,7 +159,8 @@ class WalletSyncTestActivity : Activity(), WalletSyncController.Listener {
         }
 
         emit("wallet version=${wallet.walletVersion} items=${wallet.items.size} " +
-            "panel=${wallet.panelName}")
+            "panel=${wallet.panelName} manifest=${wallet.manifestKind.label} " +
+            "keys=\"${store.keys.description}\"")
         controller.rebuildPlan()
 
         main.postDelayed({
@@ -215,7 +233,7 @@ class WalletSyncTestActivity : Activity(), WalletSyncController.Listener {
                     return@post
                 }
                 controller.engine.useTransport(t)
-                controller.engine.start()
+                startAfterProbe(t)
             }
         }, "wallet-sync-probe").start()
     }
@@ -254,7 +272,24 @@ class WalletSyncTestActivity : Activity(), WalletSyncController.Listener {
         emit("transport ble chunk=${b.walletFrameSink().maxChunkPayload()} " +
             "device=\"${b.snapshot().deviceName}\"")
         controller.engine.useTransport(t)
-        controller.engine.start()
+        startAfterProbe(t)
+    }
+
+    /**
+     * Ask the card which manifest it holds, then start -- or refuse and say why.
+     *
+     * A refusal here is a **result**, not an error to retry: the sync would have
+     * completed and changed nothing visible. `--ez anyway true` is the explicit
+     * override, which is what a rider tapping sync a second time does in the real
+     * screen.
+     */
+    private fun startAfterProbe(t: WalletTransport) {
+        controller.probeCardManifest(t) { conflict ->
+            if (conflict != null && !syncAnyway) {
+                emit("refused invisible=${conflict.invisible} remedy=\"${conflict.remedy}\"")
+            }
+            controller.engine.start(ignoreManifestConflict = syncAnyway)
+        }
     }
 
     override fun onChanged() {

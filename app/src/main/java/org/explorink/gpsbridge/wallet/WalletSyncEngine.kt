@@ -46,6 +46,13 @@ class WalletSyncEngine(
     interface Listener {
         fun onSyncStarted(transport: String, pendingAssets: Int, pendingBytes: Long) {}
 
+        /**
+         * The card holds a manifest of the other kind, so this sync would not do what
+         * the rider thinks. Reported before a single byte moves, and the run does not
+         * start unless the rider says so.
+         */
+        fun onManifestConflict(conflict: ManifestConflict) {}
+
         /** One asset's progress. [sent] is bytes the wire took, not bytes confirmed. */
         fun onAssetProgress(a: SyncAsset, sent: Int, total: Int) {}
 
@@ -70,6 +77,37 @@ class WalletSyncEngine(
     var running: Boolean = false
         private set
 
+    /**
+     * Which manifest this phone's wallet is written as. Set from the wallet whenever
+     * the plan is rebuilt.
+     */
+    var localManifest: ManifestKind = ManifestKind.CLEARTEXT
+
+    /**
+     * Which manifest the **card** holds, as last probed. [ManifestKind.UNKNOWN] until
+     * somebody asks a transport that can answer -- BLE never can.
+     *
+     * Deliberately a plain field set from outside: probing is a blocking round trip and
+     * the engine owns no I/O and no threads (`docs/android-wallet.md`, "iOS notes").
+     */
+    var cardManifest: ManifestKind = ManifestKind.UNKNOWN
+
+    /**
+     * The rider chose to sync onto a card that disagrees. Set only by an explicit
+     * [start] with `ignoreManifestConflict`, and cleared by every plan change so one
+     * decision never covers a later, different conflict.
+     */
+    private var conflictAccepted = false
+
+    /**
+     * The disagreement, or null. **The whole state, in one place**: a cleartext sync
+     * onto a card holding `manifest.enc` lands, verifies, and stays invisible
+     * (`docs/wallet-plan.md` 7l), so this is as much a part of "where the sync stands"
+     * as the pending count is.
+     */
+    val manifestConflict: ManifestConflict?
+        get() = WalletManifestConflict.of(localManifest, cardManifest)
+
     /** Assets confirmed and assets failed in this run, for the finish line. */
     private var confirmedThisRun = 0
     private var failedThisRun = 0
@@ -80,6 +118,9 @@ class WalletSyncEngine(
 
     fun setQueue(q: WalletSyncQueue) {
         queue = q
+        // A new plan may be a different wallet: an acceptance of the old conflict is
+        // not consent to this one.
+        conflictAccepted = false
         listener.onQueueChanged()
     }
 
@@ -100,13 +141,32 @@ class WalletSyncEngine(
         }
     }
 
-    fun start() {
+    /**
+     * Begin a run.
+     *
+     * [ignoreManifestConflict] is the rider's answer to [manifestConflict], and it has
+     * to be passed explicitly every time: a sync that would land and stay invisible is
+     * a decision, not a default. Without it the run **does not start** and the reason
+     * says why -- which is the whole difference from 2026-08-19, when 25 files went over
+     * in six and a half minutes and changed nothing the rider could see.
+     */
+    fun start(ignoreManifestConflict: Boolean = false) {
         if (running) return
         val t = transport
         if (t == null || !t.isReady()) {
             listener.onSyncFinished(0, 0, queue.pending().size,
                 if (t == null) "no transport" else "${t.label} not ready")
             return
+        }
+        if (ignoreManifestConflict) conflictAccepted = true
+        val conflict = manifestConflict
+        if (conflict != null) {
+            listener.onManifestConflict(conflict)
+            if (!conflictAccepted) {
+                listener.onSyncFinished(0, 0, queue.pending().size,
+                    "manifest conflict: ${conflict.message}")
+                return
+            }
         }
         running = true
         confirmedThisRun = 0

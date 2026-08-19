@@ -29,13 +29,18 @@ minSdk 31, targetSdk 36, compileSdk 36. Debug-signed only.
    machine-readable codes in an imported photo, regenerates each one clean on its
    own full screen, and marks it verified only when the stored bytes decode back
    (phase P5). Marks a document grey and emits its 2bpp page and its baked plane
-   set (phase P6). See `../docs/android-wallet.md`.
+   set (phase P6). **Encrypts the whole tree by default** (phase P3): AES-256-CTR
+   assets, an AES-256-GCM `manifest.enc`, and the wallet key wrapped by a
+   non-exportable AndroidKeyStore key. See `../docs/android-wallet.md` sections 16
+   and 17.
 6. Syncs the wallet to the device over **Wi-Fi or BLE, one queue** (phases P6 and
    P7): priority by user value, resume at asset granularity, delta sync off
    per-asset hashes, and no item shown as on-device until the device says what it
    holds -- `OK <bytes> <crc32hex>` on BLE, `GET /api/hash` on Wi-Fi. Switching
-   transport mid-sync continues rather than restarts. `../docs/android-wallet.md`
-   section 14.
+   transport mid-sync continues rather than restarts. It also **checks what kind of
+   manifest the card already holds** and refuses a sync that would land and stay
+   invisible, rather than deleting anything. `../docs/android-wallet.md`
+   sections 14 and 14.17.
 
 Items 1-4 run in a foreground service, so they keep going with the screen
 locked and the app swiped away. The wallet screens are plain screens: no GPS, and
@@ -572,9 +577,11 @@ android/
                          codes (CodeLayout, CodeWriter, CodeReader), the sync
                          engine (WalletSyncPlan, WalletSyncQueue,
                          WalletSyncEngine, WalletBleTransport,
-                         WalletWifiTransport), the share target and the four
-                         screens. Everything except ImageImport,
-                         WalletImporter, WalletSyncController and the activities
+                         WalletWifiTransport), crypto (WalletCrypto,
+                         WalletKeyVault, WalletManifestConflict), the share
+                         target and the four screens. Everything except
+                         ImageImport, WalletImporter, WalletSyncController,
+                         AndroidWalletKeyStore and the activities
                          is plain JVM code, so the pipeline, the codes and the
                          whole sync path are unit-tested on the laptop -- which
                          is also what keeps the port to iOS cheap.
@@ -587,16 +594,22 @@ android/
                          OrientTest, PerspectiveWarpTest, WalletFormatTest,
                          WalletStoreTest, WalletParityTest, CodeLayoutTest,
                          CodeWriterTest, CodeVerifyTest, CodeParityTest,
-                         CodeDetectTest, CodePipelineTest) -- 331 tests,
-                         pure JVM
+                         CodeDetectTest, CodePipelineTest, WalletCryptoTest,
+                         WalletCryptoParityTest, WalletEncryptedStoreTest,
+                         WalletManifestConflictTest) -- 487 tests, pure JVM
   app/src/debug/java/... WalletCodeSelfTestActivity: debug-only, adb-driven,
                          runs code detection over images in the app's private
-                         directory. Not in a release build.
-  app/src/test/resources/wallet-parity/
-                         the wallet parity fixture: the input page and every
-                         byte tools/walletgen.py produced from it. Regenerate
-                         with tools/wallet_parity_fixture.py, only on a
-                         deliberate format change.
+                         directory. WalletSyncTestActivity: drives a real sync
+                         from adb. WalletKeySelfTestActivity: exercises the
+                         wallet key against the real AndroidKeyStore, which a
+                         laptop test cannot reach. None in a release build.
+  app/src/test/resources/wallet-parity*/
+                         the wallet parity fixtures, four of them (default,
+                         -tiles, -grey, -enc): the input page and every byte
+                         tools/walletgen.py produced from it in each
+                         configuration. Regenerate with
+                         tools/wallet_parity_fixture.py, only on a deliberate
+                         format change. -enc ships the fixed TEST key it used.
   app/src/test/resources/wallet-code-parity/
                          the same for codes: every case's matrix, layout and the
                          generator's own asset bytes. tools/wallet_code_fixture.py.

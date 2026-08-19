@@ -28,7 +28,18 @@ object WalletImporter {
     /** Where the store lives inside the app's private files directory. */
     fun storeRoot(context: Context): File = File(context.filesDir, "wallet")
 
-    fun store(context: Context): WalletStore = WalletStore(storeRoot(context))
+    /**
+     * The app's wallet store, with its key store attached.
+     *
+     * The key is Keystore-wrapped and created on first use ([AndroidWalletKeyStore]).
+     * Every store built here therefore writes an **encrypted** tree once a key exists,
+     * which is what brief section 16 asks for and what stops a phone sync from being
+     * invisible on a card that already holds one (`docs/wallet-plan.md` 7l).
+     */
+    fun store(context: Context): WalletStore {
+        val root = storeRoot(context)
+        return WalletStore(root, keys = AndroidWalletKeyStore.vault(root))
+    }
 
     class Progress(val page: Int, val pages: Int, val asset: Int, val assets: Int)
 
@@ -68,7 +79,16 @@ object WalletImporter {
             val names = loaded.map { it.name }
             val finalTitle = title.ifBlank { titleFrom(names.first()) }
             val itemId = WalletFormat.itemIdFor(finalTitle, names)
-            val pipeline = WalletPipeline(Panels.byName(store.panelName), grey = grey)
+            // Encryption on by default (brief section 16). A wallet that already holds
+            // cleartext items stays cleartext -- converting needs a re-import, because
+            // the asset id recipe is crypto-scoped. Said out loud in the log either way:
+            // a cleartext wallet is the one the device can hide behind a manifest.enc.
+            val enc = store.applyDefaultEncryption()
+            Log.i(TAG, "wallet is ${if (enc) "encrypted" else "cleartext"} " +
+                "(key store: ${store.keys.description})")
+            // Page images only, no pre-cut tiles (design B, the generator's own default
+            // since 2026-08-19), and the store's cipher so an encrypted wallet stays one.
+            val pipeline = store.pipeline(grey = grey)
             val sources = loaded.map {
                 WalletPipeline.PageSource(it.gray, it.name, it.dpiX, it.dpiY,
                     codes = detectCodes(it))

@@ -117,6 +117,36 @@ class WalletWifiTransport(
      */
     override fun isReady(): Boolean = host.isNotEmpty()
 
+    /**
+     * Ask the card which manifest it holds. Two `GET /api/hash` calls, ~60 ms each on
+     * hardware: a 200 means the file is there, a 404 means it is not.
+     *
+     * This is the only transport that can answer, and it is what turns
+     * `docs/wallet-plan.md` 7l's silent failure into a question for the rider. Nothing
+     * is deleted here -- the probe reads and reports.
+     */
+    override fun probeCardManifest(): ManifestKind {
+        val dir = "$cardRoot/${WalletSyncPlan.CARD_DIR}"
+        val enc = exists("$dir/${WalletFormat.MANIFEST_ENC_NAME}")
+        val clear = exists("$dir/${WalletFormat.MANIFEST_CLEAR_NAME}")
+        // A host that did not answer must come back UNKNOWN, never NONE. "No manifest
+        // on the card" and "I could not ask" look identical through a null hash, and
+        // reporting the second as the first is a false all-clear -- the exact shape of
+        // the bug this probe exists to catch.
+        if (enc == null || clear == null) return ManifestKind.UNKNOWN
+        return ManifestKind.of(hasCleartext = clear, hasEncrypted = enc)
+    }
+
+    /** True/false when the device answered, null when it did not. */
+    private fun exists(absPath: String): Boolean? {
+        val r = get("/api/hash?path=" + enc(absPath))
+        return when {
+            r.code == 200 -> true
+            r.code == 404 || r.code == 400 -> false
+            else -> null
+        }
+    }
+
     override fun cancel() {
         cancelled = true
     }

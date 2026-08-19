@@ -23,5 +23,14 @@
             android:name=".wallet.WalletSyncTestActivity"
             android:exported="true"
             android:label="Wallet sync self-test" />
+
+        <!-- Exercises the wallet key against the REAL AndroidKeyStore and reports
+             what protected it. The one part of the crypto path a laptop unit test
+             cannot reach, because AndroidKeyStore is a platform provider
+             (`docs/android-wallet.md` section 17). Exported for adb, debug only. -->
+        <activity
+            android:name=".wallet.WalletKeySelfTestActivity"
+            android:exported="true"
+            android:label="Wallet key self-test" />
     </application>
 </manifest>

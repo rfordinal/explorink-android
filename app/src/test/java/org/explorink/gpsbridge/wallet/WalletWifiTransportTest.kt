@@ -317,4 +317,52 @@ class WalletWifiTransportTest {
         assertEquals(a.size, b.size)
         for (i in a.indices) if (a[i] != b[i]) throw AssertionError("byte $i differs")
     }
+    // --- the card's manifest kind ------------------------------------------
+
+    private fun cardWallet(): File =
+        File(device.cardRoot, "trailink/wallet").also { it.mkdirs() }
+
+    @Test
+    fun an_empty_card_reports_no_wallet() {
+        cardWallet()
+        assertEquals(ManifestKind.NONE, transport.probeCardManifest())
+    }
+
+    @Test
+    fun the_probe_names_which_manifest_the_card_holds() {
+        val dir = cardWallet()
+        File(dir, WalletFormat.MANIFEST_CLEAR_NAME).writeText("{}")
+        assertEquals(ManifestKind.CLEARTEXT, transport.probeCardManifest())
+
+        File(dir, WalletFormat.MANIFEST_ENC_NAME).writeBytes(ByteArray(64))
+        assertEquals(ManifestKind.BOTH, transport.probeCardManifest())
+
+        File(dir, WalletFormat.MANIFEST_CLEAR_NAME).delete()
+        assertEquals(ManifestKind.ENCRYPTED, transport.probeCardManifest())
+    }
+
+    /**
+     * The 2026-08-19 failure, end to end through the real transport: a cleartext phone
+     * against a card holding `manifest.enc`. Before the probe existed this ran to a
+     * clean finish and the rider saw the old wallet (`docs/wallet-plan.md` 7l).
+     */
+    @Test
+    fun a_cleartext_phone_against_an_encrypted_card_is_a_reported_conflict() {
+        File(cardWallet(), WalletFormat.MANIFEST_ENC_NAME).writeBytes(ByteArray(64))
+        val card = transport.probeCardManifest()
+        val conflict = WalletManifestConflict.of(ManifestKind.CLEARTEXT, card)
+        assertTrue(conflict != null && conflict.invisible)
+    }
+
+    /**
+     * A host that does not answer must come back `UNKNOWN`, never `NONE`. "No manifest"
+     * and "I could not ask" look identical through a missing hash, and reporting the
+     * second as the first is a false all-clear.
+     */
+    @Test
+    fun a_dead_host_reports_unknown_rather_than_an_empty_card() {
+        val dead = WalletWifiTransport("127.0.0.1", 1)
+        assertEquals(ManifestKind.UNKNOWN, dead.probeCardManifest())
+    }
+
 }

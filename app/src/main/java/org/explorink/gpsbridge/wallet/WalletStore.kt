@@ -20,10 +20,12 @@ import java.io.File
  * Layout:
  *
  *     <root>/state.json      app-private: sync state, source names
+ *     <root>/wallet.key      the wrapped wallet key K, if this wallet is encrypted
  *     <root>/tree/           a wallet tree, exactly docs/wallet-format.md
- *       manifest.json
+ *       manifest.json        cleartext tree
+ *       manifest.enc         encrypted tree (EWM1 v2), plus one manifest.bak
  *       <2 hex>/<16 hex>.dat
- *       <2 hex>/<16 hex>.rle
+ *       <2 hex>/<16 hex>.rle cleartext trees only -- ciphertext does not compress
  *
  * `tree/` holds nothing of ours, so it can be pushed to the device (or pulled off
  * with `adb pull`) and diffed against a `tools/walletgen.py` run byte for byte.
@@ -31,18 +33,103 @@ import java.io.File
  *
  * Plain `java.io`, no Android types, so the whole store runs in a laptop unit test.
  */
-class WalletStore(val root: File, val panelName: String = Panels.DEFAULT_NAME) {
+class WalletStore(
+    val root: File,
+    val panelName: String = Panels.DEFAULT_NAME,
+    /**
+     * Where the wallet key K lives. [WalletKeyStore.None] means this phone writes a
+     * **cleartext** tree, which the device then hides behind any `manifest.enc`
+     * already on the card (`docs/wallet-plan.md` 7l).
+     */
+    val keys: WalletKeyStore = WalletKeyStore.None,
+) {
 
     val treeDir: File get() = File(root, "tree")
-    private val manifestFile: File get() = File(treeDir, "manifest.json")
+    private val clearManifest: File get() = File(treeDir, WalletFormat.MANIFEST_CLEAR_NAME)
+    private val encManifest: File get() = File(treeDir, WalletFormat.MANIFEST_ENC_NAME)
+    private val bakManifest: File get() = File(treeDir, WalletFormat.MANIFEST_BAK_NAME)
     private val stateFile: File get() = File(root, "state.json")
+
+    // --- encryption --------------------------------------------------------
+
+    /** True when this store writes an encrypted tree: a key exists. */
+    val encrypted: Boolean get() = keys.hasKey()
+
+    /**
+     * Encryption is **on by default** (brief section 16: no cleartext documents at
+     * rest). Call this before writing an item; it creates the key on a wallet that has
+     * no items yet and does nothing otherwise.
+     *
+     * It deliberately does **not** convert an existing cleartext wallet. Flipping the
+     * flag would change every asset id (the recipe is crypto-scoped) while the assets
+     * on disk stayed cleartext under their old ids, so the tree would be half of each.
+     * Converting means re-importing, which needs source pages this app does not keep.
+     * Returns true when the wallet will be written encrypted.
+     */
+    fun applyDefaultEncryption(): Boolean {
+        if (keys === WalletKeyStore.None) return false
+        return enableEncryption()
+    }
+
+    /** Which manifest the local tree actually carries right now. */
+    fun treeKind(): ManifestKind = ManifestKind.of(clearManifest.isFile, encManifest.isFile)
+
+    /** The manifest file this store writes. */
+    val manifestFile: File get() = if (encrypted) encManifest else clearManifest
+
+    /**
+     * The cipher every asset goes through. One place, so nothing above can write half
+     * an encrypted tree.
+     */
+    fun cipher(): AssetCipher =
+        if (encrypted) Aes256CtrCipher(requireKey()) else AssetCipher.None
+
+    private fun requireKey(): ByteArray = keys.loadKey()
+        ?: throw IllegalStateException("this wallet is encrypted but its key is gone")
+
+    /**
+     * Turn encryption on for a wallet that has no items yet.
+     *
+     * **Refused once the tree holds an item**, and that is not laziness: the asset id
+     * recipe is crypto-scoped (`docs/wallet-plan.md` 7f), so every asset would need a
+     * new id and new ciphertext -- a full re-render from the source pages, which this
+     * app does not keep (a share-target `Uri` is not persistable). The caller shows
+     * that as "re-import these documents".
+     */
+    fun enableEncryption(): Boolean {
+        if (encrypted) return true
+        if (load().items.isNotEmpty()) return false
+        keys.createKey()
+        return true
+    }
 
     // --- reading -----------------------------------------------------------
 
-    /** The wallet on disk, or an empty one. Never throws on a missing tree. */
+    /**
+     * The wallet on disk, or an empty one. Never throws on a missing tree.
+     *
+     * It reads **the manifest this store writes**, not "whichever exists": an encrypted
+     * store reads `manifest.enc` and a cleartext one reads `manifest.json`. Falling back
+     * to the other kind would read a manifest whose assets this store cannot decrypt
+     * (or can, but under different ids -- the recipe is crypto-scoped), and half a tree
+     * is worse than none.
+     *
+     * The kinds cannot cross by accident: a key is only ever created for a wallet with
+     * no items ([applyDefaultEncryption]), so a cleartext wallet never grows a key
+     * underneath itself.
+     *
+     * On the **card** the rule is the other way round -- `manifest.enc` wins whenever it
+     * exists, because that is what the firmware does. That asymmetry is the whole reason
+     * [WalletManifestConflict] exists.
+     */
     fun load(): Wallet {
-        if (!manifestFile.isFile) return Wallet.empty(panelName)
-        return Wallet.fromManifestJson(manifestFile.readText(Charsets.UTF_8))
+        if (encrypted) {
+            if (!encManifest.isFile) return Wallet.empty(panelName, encrypted = true)
+            val plain = WalletCrypto.decryptManifest(requireKey(), encManifest.readBytes())
+            return Wallet.fromManifestJson(plain.toString(Charsets.UTF_8))
+        }
+        if (!clearManifest.isFile) return Wallet.empty(panelName)
+        return Wallet.fromManifestJson(clearManifest.readText(Charsets.UTF_8))
     }
 
     fun loadState(): WalletLocalState {
@@ -61,6 +148,11 @@ class WalletStore(val root: File, val panelName: String = Panels.DEFAULT_NAME) {
 
     /** A sink that writes into this store's tree. */
     fun sink(): AssetSink = FileAssetSink(treeDir)
+
+    /** A pipeline configured for this store: the right panel and the right cipher. */
+    fun pipeline(grey: Boolean = false, tiles: Boolean = false): WalletPipeline =
+        WalletPipeline(Panels.byName(panelName), pageImage = true, tiles = tiles,
+            grey = grey, cipher = cipher())
 
     // --- writing -----------------------------------------------------------
 
@@ -200,11 +292,30 @@ class WalletStore(val root: File, val panelName: String = Panels.DEFAULT_NAME) {
         walletVersion = current.walletVersion + 1,
         panelName = current.panelName.ifEmpty { panelName },
         items = items.mapIndexed { i, it -> it.copy(sortOrder = i) },
+        crypto = if (encrypted) WalletCrypto.descriptor() else null,
     )
 
+    /**
+     * Write the manifest. Atomic either way.
+     *
+     * An encrypted tree keeps **one backup** of the previous good `manifest.enc`
+     * (`manifest.bak`, brief section 32's cheap half) and carries **no** cleartext
+     * copy -- a stale `manifest.json` left beside it is exactly the file that makes a
+     * later cleartext sync look like it worked. So it is deleted here, on our own
+     * phone. Nothing is ever deleted from the **card**: that is the rider's call
+     * ([WalletManifestConflict]).
+     */
     private fun write(wallet: Wallet) {
         treeDir.mkdirs()
-        writeAtomic(manifestFile, wallet.toManifestJson().toByteArray(Charsets.UTF_8))
+        val plain = wallet.toManifestJson().toByteArray(Charsets.UTF_8)
+        if (!encrypted) {
+            writeAtomic(clearManifest, plain)
+            return
+        }
+        if (encManifest.isFile) encManifest.copyTo(bakManifest, overwrite = true)
+        writeAtomic(encManifest,
+            WalletCrypto.encryptManifest(requireKey(), plain, wallet.walletVersion))
+        if (clearManifest.isFile) clearManifest.delete()
     }
 
     private fun writeState(state: WalletLocalState) {
@@ -255,13 +366,18 @@ class WalletStore(val root: File, val panelName: String = Panels.DEFAULT_NAME) {
     }
 }
 
-/** Writes assets into a wallet tree: `<shard>/<assetId>.dat` and `.rle`. */
+/**
+ * Writes assets into a wallet tree: `<shard>/<assetId>.dat`, and `.rle` only when the
+ * cipher produced one. A stale sidecar from a previous cleartext build of the same id
+ * is removed rather than left to rot beside ciphertext.
+ */
 class FileAssetSink(private val treeDir: File) : AssetSink {
-    override fun write(assetId: String, dat: ByteArray, rle: ByteArray) {
+    override fun write(assetId: String, dat: ByteArray, rle: ByteArray?) {
         val shard = File(treeDir, WalletFormat.shardOf(assetId))
         shard.mkdirs()
         WalletStore.writeAtomic(File(shard, "$assetId.dat"), dat)
-        WalletStore.writeAtomic(File(shard, "$assetId.rle"), rle)
+        val side = File(shard, "$assetId.rle")
+        if (rle != null) WalletStore.writeAtomic(side, rle) else side.delete()
     }
 }
 
@@ -269,8 +385,8 @@ class FileAssetSink(private val treeDir: File) : AssetSink {
 class MemoryAssetSink : AssetSink {
     val dat = LinkedHashMap<String, ByteArray>()
     val rle = LinkedHashMap<String, ByteArray>()
-    override fun write(assetId: String, dat: ByteArray, rle: ByteArray) {
+    override fun write(assetId: String, dat: ByteArray, rle: ByteArray?) {
         this.dat[assetId] = dat
-        this.rle[assetId] = rle
+        if (rle != null) this.rle[assetId] = rle else this.rle.remove(assetId)
     }
 }
