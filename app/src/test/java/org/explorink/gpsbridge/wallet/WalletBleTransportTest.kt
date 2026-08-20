@@ -57,6 +57,13 @@ class WalletBleTransportTest {
         /** Report a byte count that is not what arrived. */
         var lieAboutBytes = false
 
+        /** Every setFastLink call, in order: the fast link's whole life. */
+        val fastLink = ArrayList<Boolean>()
+
+        override fun setFastLink(fast: Boolean) {
+            fastLink.add(fast)
+        }
+
         override fun maxChunkPayload(): Int = TransferFrames.maxChunkPayload(mtu)
 
         override fun isConnected(): Boolean = connected
@@ -437,5 +444,27 @@ class WalletBleTransportTest {
     private fun assertArrayEquals_(a: ByteArray, b: ByteArray) {
         assertEquals(a.size, b.size)
         for (i in a.indices) if (a[i] != b[i]) throw AssertionError("byte $i differs")
+    }
+
+    @Test
+    fun the_fast_link_is_held_for_the_whole_queue_and_not_per_asset() {
+        // Measured 2026-08-20: raising the connection priority per file left whole files
+        // running at the balanced interval, because Android's negotiation takes hundreds
+        // of milliseconds to land. Inside one transfer, the files that reached 15 ms moved
+        // at 7.5 kB/s and the ones still at 30 ms moved at 3.9 kB/s.
+        val (recv, _, t) = rig()
+        for (i in 1..3) {
+            val r = send(t, "wallet/ab/asset$i.dat", ByteArray(600) { it.toByte() })
+            assertTrue("asset $i did not confirm", r.confirmed != null)
+        }
+
+        // Three assets, one raise, and nothing dropped in between.
+        assertEquals("raised once for the queue, not once per asset",
+            1, recv.fastLink.count { it })
+        assertEquals("nothing may drop it between assets", 0, recv.fastLink.count { !it })
+
+        // The engine's end-of-queue call is what gives the radio back.
+        t.releaseFastLink()
+        assertEquals(listOf(true, false), recv.fastLink)
     }
 }

@@ -24,6 +24,20 @@ interface WalletTransport {
     /** Short id recorded in the ledger: "ble" or "wifi". */
     val name: String
 
+    /**
+     * Give up whatever the transport asked the radio for, because the queue is done.
+     *
+     * Only BLE implements it. It exists because the fast connection interval has to be
+     * held for the **whole queue** rather than per asset: Android's
+     * `requestConnectionPriority` starts a parameter negotiation that takes hundreds of
+     * milliseconds, so raising and dropping it around every file left whole files
+     * running at the slow interval -- measured 3.9 kB/s against 7.5 kB/s inside one
+     * transfer (`docs/BUGS.md` BUG-002).
+     *
+     * Called when the engine finishes or stops. Idempotent.
+     */
+    fun releaseFastLink() {}
+
     /** What the sync screen calls it. */
     val label: String
 

@@ -34,6 +34,14 @@ class GrayImage(val width: Int, val height: Int, val pixels: ByteArray) {
         }
     }
 
+    /** Any 256-entry tone curve, applied pixel by pixel. */
+    fun curve(lut: IntArray): GrayImage {
+        require(lut.size == 256) { "a tone curve needs 256 entries, got ${lut.size}" }
+        val out = ByteArray(pixels.size)
+        for (i in pixels.indices) out[i] = lut[pixels[i].toInt() and 0xff].toByte()
+        return GrayImage(width, height, out)
+    }
+
     /**
      * A gamma curve, `out = 255 * (in/255)^(1/g)`.
      *

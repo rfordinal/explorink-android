@@ -49,8 +49,8 @@
                 "nativeHeight": 480,
                 "rowBytes": 200,
                 "rawLen": 96000,
-                "sha256": "7d72016c20d9f5639b7190689e191c45d77059df9a1805b3973cbee80d5682dd",
-                "rleLen": 46692,
+                "sha256": "9c4682a7c92e2584d07f526bc3a52811dcc68b5949058a8a05a1ff6df84e69c9",
+                "rleLen": 42211,
                 "windowStepX": 400,
                 "windowStepY": 240,
                 "focalX": 0,
@@ -82,8 +82,8 @@
                 "lsbOffset": 48000,
                 "msbOffset": 96000,
                 "rawLen": 144000,
-                "sha256": "2d8aa6b2f1c94b712322e415ac632cd05387128fc7246c5b79d8868b5a084bc2",
-                "rleLen": 72004
+                "sha256": "d64c37efb144d00180c5889503f686333a2884415421c88720f557f40623952f",
+                "rleLen": 67040
               }
             },
             "detail": {
@@ -113,8 +113,8 @@
                 "nativeHeight": 960,
                 "rowBytes": 400,
                 "rawLen": 384000,
-                "sha256": "9b94df2a0411e44a1a4a5802612b6ab9cb4abd5d8ee545edcc81cb865a24a9dc",
-                "rleLen": 162534,
+                "sha256": "3b7bd6f6a62ae9feb58291345cd09a146eade67e8aeef3ce44ddb92c5a654565",
+                "rleLen": 151935,
                 "windowStepX": 400,
                 "windowStepY": 240,
                 "focalX": 0,
@@ -146,8 +146,8 @@
                 "lsbOffset": 48000,
                 "msbOffset": 96000,
                 "rawLen": 144000,
-                "sha256": "4f754e344e00ec870cc040e68e3e6e09ffb56939aa7ab59d6c9ce8d421c854d5",
-                "rleLen": 82971
+                "sha256": "588ec671e68fce1d6aa6092394352a3780153b596f1b73638060093b852093fa",
+                "rleLen": 78352
               }
             },
             "one_to_one": {
@@ -177,8 +177,8 @@
                 "nativeHeight": 1819,
                 "rowBytes": 644,
                 "rawLen": 1171436,
-                "sha256": "cc7882982de1fe8429d0a0669dfc08af8a733970344c4c7deded164c9b420bdc",
-                "rleLen": 511089,
+                "sha256": "81693fab331401f56f695754ffb7ee2f62d3bc597ef4e21d1d1db200aa0bd121",
+                "rleLen": 454961,
                 "windowStepX": 400,
                 "windowStepY": 240,
                 "focalX": 800,
@@ -210,8 +210,8 @@
                 "lsbOffset": 48000,
                 "msbOffset": 96000,
                 "rawLen": 144000,
-                "sha256": "53fb50bb32025b6961e6211d722e37efebd43ed0ef080e7da8f53e6e1aac5aa2",
-                "rleLen": 106183
+                "sha256": "54113d4948365da712bf7be0ce9e746270e88ee9708c464eaf2252777fd93d11",
+                "rleLen": 97520
               }
             }
           },

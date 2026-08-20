@@ -184,6 +184,7 @@ class WalletSyncEngine(
         running = false
         transport?.cancel()
         queue.release()
+        transport?.releaseFastLink()
         listener.onSyncFinished(confirmedThisRun, failedThisRun, queue.pending().size, reason)
         listener.onQueueChanged()
     }
@@ -303,6 +304,9 @@ class WalletSyncEngine(
     private fun finish(reason: String) {
         running = false
         queue.release()
+        // The queue is done, so the radio can slow down. Held for the whole queue and
+        // not per asset: see WalletTransport.releaseFastLink.
+        transport?.releaseFastLink()
         listener.onSyncFinished(confirmedThisRun, failedThisRun, queue.pending().size, reason)
         listener.onQueueChanged()
     }

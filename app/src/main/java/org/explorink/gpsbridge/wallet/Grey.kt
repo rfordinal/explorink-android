@@ -52,6 +52,34 @@ object Grey {
      */
     val THRESHOLDS = intArrayOf(43, 128, 213)
 
+    /**
+     * Where a photograph's white starts, for [photoCurve].
+     *
+     * **Measured, on the maintainer's own photograph, 2026-08-20.** A camera picture of
+     * a normal scene has a mean around 114 and only about 5 % of it above 200, and error
+     * diffusion is faithful to that mean -- so the panel drew 41 % light grey against
+     * 10 % paper white and the whole picture read as grey. The one bright thing an e-ink
+     * panel owns is the paper, and a faithful transfer barely used it.
+     *
+     * Clipping at 200 triples the white (10.5 % to 27.8 %) and leaves the black almost
+     * alone (21.6 % to 19.3 %). A gamma lift was tried against it and rejected: gamma
+     * 1.5 moves the mid tone from 128 to 195, which buys more white by flattening
+     * everything that was meant to be distinguishable, and it halves the black.
+     */
+    const val PHOTO_WHITE_POINT = 200
+
+    /**
+     * The tone curve a photograph goes through before quantisation: stretch 0..200 over
+     * the full range, and anything at or above 200 is paper white.
+     *
+     * Integer arithmetic, and the same expression in `walletgen.py` -- a table both
+     * implementations compute rather than share, so it is pinned by a test over all 256
+     * inputs and by the `wallet-parity-photo` fixture.
+     */
+    fun photoCurve(whitePoint: Int = PHOTO_WHITE_POINT): IntArray = IntArray(256) { i ->
+        if (i >= whitePoint) 255 else (i * 255 / whitePoint).coerceIn(0, 255)
+    }
+
     fun levelOf(value: Int): Int = when {
         value < THRESHOLDS[0] -> BLACK
         value < THRESHOLDS[1] -> DARK
@@ -144,7 +172,13 @@ class GreyLevels(val width: Int, val height: Int, val levels: ByteArray) {
             var err = IntArray(w + 2)
             var next = IntArray(w + 2)
             for (y in 0 until h) {
-                for (x in 0 until w) {
+                // Serpentine: even rows left to right, odd rows right to left. Without it
+                // the error only ever travels one way and a smooth gradient grows
+                // diagonal worms; with it the same gradient measured 0.24 against 0.27
+                // (blurred tone error) and looks visibly more even. Costs nothing.
+                val leftToRight = (y % 2 == 0)
+                for (i in 0 until w) {
+                    val x = if (leftToRight) i else w - 1 - i
                     val want = (src.pixels[y * w + x].toInt() and 0xff) + err[x + 1]
                     var best = 0
                     var bestDist = Int.MAX_VALUE
@@ -163,10 +197,14 @@ class GreyLevels(val width: Int, val height: Int, val levels: ByteArray) {
                     // disagreement is a different asset id, so the two implementations
                     // have to round the same way, and floor is the one the generator
                     // already does.
-                    err[x + 2] += Math.floorDiv(e * 7, 16)
-                    next[x] += Math.floorDiv(e * 3, 16)
+                    //
+                    // The neighbour offsets mirror with the scan direction: `ahead` is
+                    // the next pixel this row will visit, not "to the right".
+                    val ahead = if (leftToRight) 1 else -1
+                    err[x + 1 + ahead] += Math.floorDiv(e * 7, 16)
+                    next[x + 1 - ahead] += Math.floorDiv(e * 3, 16)
                     next[x + 1] += Math.floorDiv(e * 5, 16)
-                    next[x + 2] += Math.floorDiv(e * 1, 16)
+                    next[x + 1 + ahead] += Math.floorDiv(e * 1, 16)
                 }
                 val swap = err
                 err = next

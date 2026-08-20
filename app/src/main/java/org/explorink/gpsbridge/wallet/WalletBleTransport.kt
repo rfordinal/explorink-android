@@ -136,7 +136,7 @@ class WalletBleTransport(
         awaitingReady = true
         awaitingVerdict = false
         writeRetries = 0
-        frames.setFastLink(true)
+        raiseFastLink()
 
         val gen = generation
         arm(READY_TIMEOUT_MS, gen, "no RDY")
@@ -154,6 +154,7 @@ class WalletBleTransport(
         // tells the device to drop its .part now rather than when the link dies.
         frames.sendFrame(TransferFrames.abortFrame()) { _, _ -> }
         reset()
+        releaseFastLink()
     }
 
     /** Call from wherever `...0005` indications arrive. */
@@ -200,6 +201,9 @@ class WalletBleTransport(
 
     /** The link dropped. Whatever was in flight is gone, and its `.part` with it. */
     fun onDisconnected() {
+        // Unconditional: the priority was raised on this connection and the connection
+        // is gone, so the flag has to come down even when no asset was in flight.
+        releaseFastLink()
         if (job == null) return
         fail("disconnected", retryable = false)
     }
@@ -293,6 +297,20 @@ class WalletBleTransport(
         c.onFailed(reason, retryable)
     }
 
+    /**
+     * Clear the per-asset state.
+     *
+     * **The fast link is not dropped here.** This runs after every asset, and a queue is
+     * dozens of them: `requestConnectionPriority` starts a parameter negotiation that
+     * takes hundreds of milliseconds to land, so dropping and re-raising it per file left
+     * whole files running at the balanced interval. Measured 2026-08-20 on one document:
+     * the files that ran at 15 ms moved at 7.3-7.6 kB/s and the ones still at 30 ms
+     * moved at 3.9 kB/s, in the same transfer (`docs/BUGS.md` BUG-002).
+     *
+     * The link is dropped by [releaseFastLink], which the engine calls when the queue is
+     * done, and by [cancel] and [onDisconnected] -- the three places where there really
+     * is no next asset.
+     */
     private fun reset() {
         job = null
         cb = null
@@ -300,7 +318,34 @@ class WalletBleTransport(
         awaitingReady = false
         awaitingVerdict = false
         writeRetries = 0
+    }
+
+    /**
+     * Give the radio back. Idempotent, and safe to call when nothing was raised.
+     *
+     * Separate from [reset] because "this asset is finished" and "the transfer is
+     * finished" are different facts, and only the second one may slow the link.
+     */
+    override fun releaseFastLink() {
+        if (!fastLinkRaised) return
+        fastLinkRaised = false
         frames.setFastLink(false)
+    }
+
+    /**
+     * Whether the radio has been asked for the fast interval on this queue.
+     *
+     * Tracked here as well as in `BleLink` on purpose: the link's own guard stops a
+     * duplicate reaching the Android stack, and this one stops the duplicate being
+     * *made*. A transport that asks per asset reads as if per-asset were the intent,
+     * which is the thing that went wrong.
+     */
+    private var fastLinkRaised = false
+
+    private fun raiseFastLink() {
+        if (fastLinkRaised) return
+        fastLinkRaised = true
+        frames.setFastLink(true)
     }
 
     companion object {

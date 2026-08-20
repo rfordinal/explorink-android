@@ -233,10 +233,22 @@ class BleLink(
      * so this has to come from the central -- there is no device-side substitute
      * (`firmware/explorink/docs/optimization/03-ble-link.md`).
      */
+    /**
+     * What was last asked for, so asking again is free.
+     *
+     * Each `requestConnectionPriority` starts an L2CAP parameter negotiation that takes
+     * hundreds of milliseconds to land, so asking per file made the link spend a
+     * measurable part of every transfer still at the balanced interval
+     * (`docs/BUGS.md` BUG-002). Null means nothing has been asked on this connection.
+     */
+    private var priorityHigh: Boolean? = null
+
     @SuppressLint("MissingPermission")
     fun requestHighPriority(high: Boolean) {
         val g = gatt ?: return
         if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) return
+        if (priorityHigh == high) return
+        priorityHigh = high
         val priority = if (high) {
             BluetoothGatt.CONNECTION_PRIORITY_HIGH
         } else {
@@ -416,6 +428,9 @@ class BleLink(
         transferChar = null
         statusChar = null
         tileChannelReady = false
+        // A new connection starts at the stack's own default, so what this one was
+        // asked for does not carry over.
+        priorityHigh = null
         mtu = 23
         commandBuffer.setLength(0)
         statusBuffer.setLength(0)
@@ -478,6 +493,9 @@ class BleLink(
         transferChar = null
         statusChar = null
         tileChannelReady = false
+        // A new connection starts at the stack's own default, so what this one was
+        // asked for does not carry over.
+        priorityHigh = null
         mtu = 23
         commandBuffer.setLength(0)
         statusBuffer.setLength(0)
@@ -792,6 +810,7 @@ class BleLink(
                             Log.w(TAG, "close", t)
                         }
                         if (gatt === g) gatt = null
+                        priorityHigh = null
                         // Raw field first, like onAdapterOff (:447): failAllOps
                         // below runs the fetcher's abort/skip done-callbacks, and
                         // enqueueWrite()'s own "not connected" check must see the

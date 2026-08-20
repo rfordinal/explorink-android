@@ -221,7 +221,11 @@ class WalletPipeline(
                 val toned = canvas.gamma(gamma)
                 when (tone) {
                     Tone.DOCUMENT -> GreyLevels.quantise(toned)
-                    Tone.PHOTO -> GreyLevels.diffuse(toned)
+                    // A photograph goes through the white-point curve first. Without it
+                    // the diffusion is faithful to a mean of about 114 and the panel
+                    // draws 41 % light grey against 10 % paper white, which is what
+                    // "light colours came out grey" was (`Grey.PHOTO_WHITE_POINT`).
+                    Tone.PHOTO -> GreyLevels.diffuse(toned.curve(Grey.photoCurve()))
                 }
             } else null
             canvas = null

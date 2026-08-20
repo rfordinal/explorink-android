@@ -129,4 +129,48 @@ class GreyPhotoToneTest {
         val reloaded = store.load().items.first { it.id == item.id }
         assertEquals(item.tone, reloaded.tone)
     }
+
+    @Test
+    fun the_photo_curve_pins_its_whole_table() {
+        val lut = Grey.photoCurve()
+        assertEquals(256, lut.size)
+        // The three points that define it: black stays, the white point and everything
+        // above it is paper, and the range below is stretched to fill.
+        assertEquals(0, lut[0])
+        assertEquals(255, lut[Grey.PHOTO_WHITE_POINT])
+        assertEquals(255, lut[255])
+        assertEquals(253, lut[199])
+        assertEquals(127, lut[100])
+        // Monotone, or a photograph gains contours out of nowhere.
+        for (i in 1 until 256) assertTrue("not monotone at $i", lut[i] >= lut[i - 1])
+        // And nothing below the white point is already white: that would be a curve
+        // that clips more than it says.
+        for (i in 0 until Grey.PHOTO_WHITE_POINT) assertTrue("$i clipped early", lut[i] < 255)
+    }
+
+    @Test
+    fun the_curve_is_what_turns_light_grey_into_paper_white() {
+        // The measured complaint, as a check: a bright flat tone that diffusion used to
+        // render as a grey mix now lands on white.
+        val bright = flat(210)
+        val without = histogram(GreyLevels.diffuse(bright))
+        val with = histogram(GreyLevels.diffuse(bright.curve(Grey.photoCurve())))
+        assertTrue("210 without the curve is a mix: ${without.toList()}",
+            without[Grey.WHITE] < bright.pixels.size)
+        assertEquals("with the curve it is paper", bright.pixels.size, with[Grey.WHITE])
+    }
+
+    @Test
+    fun the_diffusion_runs_serpentine() {
+        // A ramp is the shape that shows it. Row 0 goes left to right and row 1 goes
+        // right to left, so their level patterns cannot be identical -- an identical
+        // pair is the signature of the one-way scan this replaced.
+        val w = 64
+        val px = ByteArray(w * 2)
+        for (y in 0 until 2) for (x in 0 until w) px[y * w + x] = (x * 255 / (w - 1)).toByte()
+        val g = GreyLevels.diffuse(GrayImage(w, 2, px))
+        val row0 = (0 until w).map { g[it, 0] }
+        val row1 = (0 until w).map { g[it, 1] }
+        assertNotEquals("the two rows must not be scanned the same way", row0, row1)
+    }
 }
