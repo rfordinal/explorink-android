@@ -133,7 +133,8 @@ class WalletSyncController(
             val wallet = store.load()
             val state = store.loadState()
             val plan = WalletSyncPlan.build(wallet, store.treeDir)
-            val queue = WalletSyncQueue(plan, state.confirmed, state.errors, state.queued)
+            val queue = WalletSyncQueue(plan, state.confirmed, state.errors, state.queued,
+                state.fullQuality)
             val kind = wallet.manifestKind
             main.post {
                 engine.localManifest = kind

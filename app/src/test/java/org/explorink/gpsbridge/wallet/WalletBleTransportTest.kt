@@ -394,7 +394,7 @@ class WalletBleTransportTest {
     fun a_whole_wallet_goes_over_the_stub_and_the_engine_confirms_every_asset() {
         val store = SyncFixtures.store()
         SyncFixtures.addItem(store, "Passport")
-        val q = SyncFixtures.queue(store)
+        val q = SyncFixtures.queue(store, full = true)
         q.queueAll()
         val (recv, _, t) = rig()
         val landed = HashMap<String, ByteArray>()

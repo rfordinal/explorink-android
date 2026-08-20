@@ -65,10 +65,20 @@ object SyncFixtures {
         return item
     }
 
-    fun queue(store: WalletStore): WalletSyncQueue {
+    /**
+     * A queue over the store's real plan.
+     *
+     * [full] asks for every item's 1:1 level, which the queue defers by default
+     * (`WalletSyncQueue.fullQuality`). A test that means "the whole document goes over"
+     * has to say so, and the default being off is exactly what most of these tests are
+     * about now.
+     */
+    fun queue(store: WalletStore, full: Boolean = false): WalletSyncQueue {
         val state = store.loadState()
-        return WalletSyncQueue(WalletSyncPlan.build(store.load(), store.treeDir),
-            state.confirmed, state.errors, state.queued)
+        val q = WalletSyncQueue(WalletSyncPlan.build(store.load(), store.treeDir),
+            state.confirmed, state.errors, state.queued, state.fullQuality)
+        if (full) for (item in store.load().items) q.requestFullQuality(item.id)
+        return q
     }
 
     fun bytesOf(store: WalletStore): WalletSyncEngine.AssetBytes =

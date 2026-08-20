@@ -21,11 +21,22 @@ class WalletSyncQueue(
     errors: Map<String, String> = emptyMap(),
     /** Item ids the rider asked to sync. Intent, not progress. */
     queued: Set<String> = emptySet(),
+    /**
+     * Item ids the rider asked for at **full resolution**.
+     *
+     * The 1:1 level is the bulk of a document (713 kB of a 2.8 MB grey A4 page) and it
+     * is only read when the rider zooms all the way in, so it is **deferred** by
+     * default: not sent, but still in the plan and still counted. That is the honest
+     * shape -- an item whose 1:1 has not gone reads `usable on device -- 12/19 assets`
+     * and can never claim `fully synced`, which is what a state is for.
+     */
+    fullQuality: Set<String> = emptySet(),
 ) {
 
     private val ledger = LinkedHashMap(confirmed)
     private val failures = LinkedHashMap(errors)
     private val wanted = LinkedHashSet(queued)
+    private val full = LinkedHashSet(fullQuality)
 
     /** Bytes of the asset currently going over, for progress only. */
     private val sent = HashMap<String, Int>()
@@ -37,6 +48,7 @@ class WalletSyncQueue(
     val confirmed: Map<String, ConfirmedAsset> get() = ledger
     val errors: Map<String, String> get() = failures
     val queuedItems: Set<String> get() = wanted
+    val fullQualityItems: Set<String> get() = full
 
     // --- what the rider asked for -----------------------------------------
 
@@ -59,8 +71,29 @@ class WalletSyncQueue(
      * (brief section 40): the manifest is a file like any other, its hash changes
      * when the title does, and every image asset's hash does not.
      */
-    private fun isWanted(a: SyncAsset): Boolean =
-        if (a.isManifest) wanted.isNotEmpty() else a.itemId in wanted
+    private fun isWanted(a: SyncAsset): Boolean {
+        if (a.isManifest) return wanted.isNotEmpty()
+        if (a.itemId !in wanted) return false
+        // Deferred, not excluded: see `fullQuality`.
+        if (a.cls == SyncClass.ONE_TO_ONE && a.itemId !in full) return false
+        return true
+    }
+
+    /** Ask for this item's 1:1 level as well. */
+    fun requestFullQuality(itemId: String) {
+        full.add(itemId)
+        wanted.add(itemId)
+    }
+
+    /** Stop offering to send this item's 1:1 level. Nothing already sent is undone. */
+    fun deferFullQuality(itemId: String) {
+        full.remove(itemId)
+    }
+
+    /** Bytes this item is holding back until the rider asks for full resolution. */
+    fun deferredBytes(itemId: String): Long =
+        plan.filter { it.itemId == itemId && it.cls == SyncClass.ONE_TO_ONE && !isConfirmed(it) }
+            .sumOf { it.bytes.toLong() }
 
     // --- the ledger --------------------------------------------------------
 

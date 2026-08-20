@@ -52,6 +52,16 @@
         android:layout_height="wrap_content"
         android:orientation="vertical" />
 
+    <!-- Full resolution on demand. The 1:1 level is most of a document's bytes and is
+         only read when the rider zooms all the way in, so it is deferred until asked
+         for (WalletSyncQueue.fullQuality). -->
+    <Button
+        android:id="@+id/btnItemFull"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="12sp"
+        android:text="full resolution" />
+
     <!-- The per-document grey toggle. Flipping it rewrites the manifest and
          nothing else, which is brief section 40's own example of a metadata change
          that must not re-upload image data. -->

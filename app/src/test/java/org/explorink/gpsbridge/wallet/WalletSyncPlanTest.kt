@@ -165,7 +165,7 @@ class WalletSyncPlanTest {
     }
 
     @Test
-    fun a_grey_document_plans_its_grey_assets_in_the_right_classes() {
+    fun a_grey_document_plans_the_planes_and_never_the_2bpp_copy() {
         val store = SyncFixtures.store()
         SyncFixtures.addItem(store, "Scan", grey = true)
         val wallet = store.load()
@@ -174,14 +174,19 @@ class WalletSyncPlanTest {
         val planes = fitLevel.greyPlanes!!.assetId
         val greyPage = fitLevel.greyPageImage!!.assetId
 
-        // Grey assets of the FIT level are what makes a grey document readable at
-        // all, so they belong to the FIT phase.
+        // The plane set is what makes a grey document readable, so it belongs to the
+        // FIT phase.
         assertEquals(SyncClass.FIT, plan.first { it.key == planes }.cls)
-        assertEquals(SyncClass.FIT, plan.first { it.key == greyPage }.cls)
-        // And the plane set -- the screen the viewer opens at -- outranks the
-        // whole-page 2bpp copy.
-        assertTrue(plan.indexOfFirst { it.key == planes } <
-            plan.indexOfFirst { it.key == greyPage })
+
+        // The 2bpp copy is **not planned at all**. The device draws grey from the
+        // planes and reads this form only so a host preview can render a PNG through
+        // the same parser (firmware WalletManifestParser.h:76), so sending it spent
+        // 1.6 MB of a 2.8 MB document on bytes nothing on the device opens.
+        assertTrue("the 2bpp grey copy must not be planned",
+            plan.none { it.key == greyPage })
+        // It is still on the phone: not planning it is a transfer decision, not a
+        // deletion.
+        assertTrue(store.assetFile(greyPage, "dat").isFile)
     }
 
     @Test

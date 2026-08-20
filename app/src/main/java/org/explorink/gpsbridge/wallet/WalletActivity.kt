@@ -142,7 +142,7 @@ class WalletActivity : Activity() {
             val wallet = store.load()
             val state = store.loadState()
             val q = WalletSyncQueue(WalletSyncPlan.build(wallet, store.treeDir),
-                state.confirmed, state.errors, state.queued)
+                state.confirmed, state.errors, state.queued, state.fullQuality)
             MainThread.post {
                 queue = q
                 render()

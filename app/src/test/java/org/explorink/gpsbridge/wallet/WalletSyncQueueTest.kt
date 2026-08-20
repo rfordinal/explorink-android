@@ -16,11 +16,16 @@ import org.junit.Test
  */
 class WalletSyncQueueTest {
 
-    private fun oneItem(codes: Boolean = false): Pair<WalletStore, WalletSyncQueue> {
+    /**
+     * [full] asks for the 1:1 level too. It defaults to **on** here because most of
+     * these tests are about the ledger and the ordering over a whole plan, and the
+     * deferral has its own tests in `WalletSyncDeferralTest`.
+     */
+    private fun oneItem(codes: Boolean = false, full: Boolean = true): Pair<WalletStore, WalletSyncQueue> {
         val store = SyncFixtures.store()
         SyncFixtures.addItem(store, "Passport", codes = if (codes)
             listOf(WalletPipeline.CodeRequest(Symbology.QR, "TEST12345")) else emptyList())
-        val q = SyncFixtures.queue(store)
+        val q = SyncFixtures.queue(store, full = full)
         q.queueAll()
         return Pair(store, q)
     }
@@ -222,7 +227,7 @@ class WalletSyncQueueTest {
 
         // A new process, a new queue, the same tree. This is the app being killed
         // and reopened, and brief section 29's "continue with tile 8".
-        val again = SyncFixtures.queue(store)
+        val again = SyncFixtures.queue(store, full = true)
         assertEquals(q.plan.size - half.size, again.pending().size)
         assertTrue(again.pending().none { a -> half.any { it.key == a.key } })
         // And it resumes in priority order, not at the front of the list.

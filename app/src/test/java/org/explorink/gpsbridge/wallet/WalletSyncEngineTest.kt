@@ -43,7 +43,7 @@ class WalletSyncEngineTest {
         val store = SyncFixtures.store()
         SyncFixtures.addItem(store, "Passport", codes = if (codes)
             listOf(WalletPipeline.CodeRequest(Symbology.QR, "TEST12345")) else emptyList())
-        val q = SyncFixtures.queue(store)
+        val q = SyncFixtures.queue(store, full = true)
         q.queueAll()
         return Triple(store, q, Recorder())
     }
@@ -315,7 +315,7 @@ class WalletSyncEngineTest {
         assertEquals(4, rec.confirmed.size)
         assertEquals(4, store.loadState().confirmed.size)
 
-        val again = SyncFixtures.queue(store)
+        val again = SyncFixtures.queue(store, full = true)
         assertEquals(q.plan.size - 4, again.pending().size)
     }
 

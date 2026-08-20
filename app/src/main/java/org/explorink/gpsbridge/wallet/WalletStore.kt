@@ -233,11 +233,20 @@ class WalletStore(
     }
 
     /** Persist the queue's ledger. Called after every device confirmation. */
+    /** Ask for (or stop asking for) this item's 1:1 level. */
+    fun setFullQuality(itemId: String, full: Boolean) {
+        val cur = loadState()
+        writeState(cur.copy(
+            queued = if (full) cur.queued + itemId else cur.queued,
+            fullQuality = if (full) cur.fullQuality + itemId else cur.fullQuality - itemId))
+    }
+
     fun saveSyncState(queue: WalletSyncQueue) {
         val cur = loadState()
         writeState(cur.copy(
             confirmed = LinkedHashMap(queue.confirmed),
             queued = LinkedHashSet(queue.queuedItems),
+            fullQuality = LinkedHashSet(queue.fullQualityItems),
             errors = LinkedHashMap(queue.errors)))
     }
 

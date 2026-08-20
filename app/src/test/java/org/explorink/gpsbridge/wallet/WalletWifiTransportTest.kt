@@ -227,7 +227,7 @@ class WalletWifiTransportTest {
         val store = SyncFixtures.store()
         SyncFixtures.addItem(store, "Passport", codes = listOf(
             WalletPipeline.CodeRequest(Symbology.QR, "TEST12345")))
-        val q = SyncFixtures.queue(store)
+        val q = SyncFixtures.queue(store, full = true)
         q.queueAll()
         val rec = ArrayList<String>()
         val engine = WalletSyncEngine(SyncFixtures.bytesOf(store),
@@ -262,7 +262,7 @@ class WalletWifiTransportTest {
     fun a_second_sync_of_an_unchanged_wallet_sends_nothing_at_all() {
         val store = SyncFixtures.store()
         SyncFixtures.addItem(store, "Passport")
-        val q = SyncFixtures.queue(store)
+        val q = SyncFixtures.queue(store, full = true)
         q.queueAll()
         val engine = WalletSyncEngine(SyncFixtures.bytesOf(store),
             object : WalletSyncEngine.Listener {}, persist = { store.saveSyncState(it) })
@@ -272,7 +272,7 @@ class WalletWifiTransportTest {
         assertTrue(q.pending().isEmpty())
 
         device.requests.clear()
-        val again = SyncFixtures.queue(store)
+        val again = SyncFixtures.queue(store, full = true)
         assertTrue(again.pending().isEmpty())
         val engine2 = WalletSyncEngine(SyncFixtures.bytesOf(store),
             object : WalletSyncEngine.Listener {})
@@ -288,7 +288,7 @@ class WalletWifiTransportTest {
     fun a_title_change_puts_one_small_file_on_the_wire() {
         val store = SyncFixtures.store()
         SyncFixtures.addItem(store, "Passport")
-        val q = SyncFixtures.queue(store)
+        val q = SyncFixtures.queue(store, full = true)
         q.queueAll()
         val e = WalletSyncEngine(SyncFixtures.bytesOf(store),
             object : WalletSyncEngine.Listener {}, persist = { store.saveSyncState(it) })
@@ -300,7 +300,7 @@ class WalletWifiTransportTest {
         store.addItem(wallet.items[0].copy(title = "Passport (renewed)"))
         device.requests.clear()
 
-        val delta = SyncFixtures.queue(store)
+        val delta = SyncFixtures.queue(store, full = true)
         val e2 = WalletSyncEngine(SyncFixtures.bytesOf(store),
             object : WalletSyncEngine.Listener {}, persist = { store.saveSyncState(it) })
         e2.setQueue(delta)

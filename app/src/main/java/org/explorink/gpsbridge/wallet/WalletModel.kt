@@ -559,6 +559,12 @@ data class ConfirmedAsset(
 data class WalletLocalState(
     val confirmed: Map<String, ConfirmedAsset> = emptyMap(),
     val queued: Set<String> = emptySet(),
+    /**
+     * Items the rider asked for at full resolution. The 1:1 level is deferred by
+     * default (`WalletSyncQueue.fullQuality`), and this is where that choice lives:
+     * an intent, like [queued], not a fact about the card.
+     */
+    val fullQuality: Set<String> = emptySet(),
     val errors: Map<String, String> = emptyMap(),
     val sourceNames: Map<String, List<String>> = emptyMap(),
 ) {
@@ -580,6 +586,7 @@ data class WalletLocalState(
             "version" to 2,
             "confirmed" to conf,
             "queued" to queued.toList(),
+            "fullQuality" to fullQuality.toList(),
             "errors" to errs,
             "sourceNames" to sources,
         )) + "\n"
@@ -611,6 +618,10 @@ data class WalletLocalState(
             return WalletLocalState(
                 confirmed = conf,
                 queued = Json.asList(o["queued"] ?: emptyList<Any?>())
+                    .map { Json.asString(it) }.toSet(),
+                // Absent on a file written before the 1:1 level became deferrable, and
+                // an empty set is the right reading: nobody had asked for it yet.
+                fullQuality = Json.asList(o["fullQuality"] ?: emptyList<Any?>())
                     .map { Json.asString(it) }.toSet(),
                 errors = errs,
                 sourceNames = sources,

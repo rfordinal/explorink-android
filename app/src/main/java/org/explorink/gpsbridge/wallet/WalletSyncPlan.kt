@@ -147,10 +147,17 @@ object WalletSyncPlan {
                         out.add(asset(item, page, itemIndex, pageIndex, cls, it.assetId,
                             treeDir, rank = -2))
                     }
-                    level.greyPageImage?.let {
-                        out.add(asset(item, page, itemIndex, pageIndex, cls, it.assetId,
-                            treeDir, rank = -1))
-                    }
+                    // The 2bpp grey form (`greyPageImage`, assetType 6) is **not sent**
+                    // and that is not an omission: the device draws grey from the baked
+                    // plane set, and its parser reads this one only so a host preview can
+                    // render a four-level PNG through the same code
+                    // (firmware `WalletManifestParser.h:76`). On a grey A4 document the
+                    // three of them are 1.6 MB of 2.8 MB, so shipping them spent 57 % of
+                    // a transfer on bytes nothing on the device would ever open. It stays
+                    // on the phone for a second renderer; the manifest still lists it, and
+                    // a listed asset the device never opens costs nothing.
+                    //
+                    // Measured 2026-08-19: a photo took half an hour over BLE.
                 }
                 for ((codeIndex, code) in page.codes.withIndex()) {
                     val cls = if (code.verified) SyncClass.CODE else SyncClass.UNVERIFIED_CODE

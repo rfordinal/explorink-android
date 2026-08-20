@@ -96,6 +96,7 @@ class WalletItemActivity : Activity() {
         // "sending, nothing through yet".
         bar.visibility = if (st.fraction > 0f) android.view.View.VISIBLE else android.view.View.GONE
         renderGrey(item)
+        renderFullQuality(item, st)
         renderCodes(item)
         btnDelete.isEnabled = true
         btnDelete.setOnClickListener {
@@ -159,7 +160,7 @@ class WalletItemActivity : Activity() {
         WalletSyncSession.queue?.let { return it.statusOf(itemId) }
         val state = store.loadState()
         val q = WalletSyncQueue(WalletSyncPlan.build(store.load(), store.treeDir),
-            state.confirmed, state.errors, state.queued)
+            state.confirmed, state.errors, state.queued, state.fullQuality)
         return q.statusOf(itemId)
     }
 
@@ -178,6 +179,42 @@ class WalletItemActivity : Activity() {
      * present-but-zero geometry and a silently declined grey path, the exact bug
      * that cost a hardware session.
      */
+    /**
+     * The full-resolution request.
+     *
+     * The 1:1 level is 713 kB of a 2.8 MB grey A4 document and it is read only when the
+     * rider zooms all the way in, so it is held back until asked for. The button says
+     * what it costs, because over Bluetooth that is two minutes and the rider is the one
+     * who waits.
+     */
+    private fun renderFullQuality(item: WalletItem, sync: WalletSyncQueue.ItemStatus) {
+        val btn = findViewById<Button>(R.id.btnItemFull)
+        val state = store.loadState()
+        val asked = item.id in state.fullQuality
+        val pending = WalletSyncSession.queue?.deferredBytes(item.id)
+            ?: WalletSyncQueue(WalletSyncPlan.build(store.load(), store.treeDir),
+                state.confirmed, state.errors, state.queued, state.fullQuality)
+                .deferredBytes(item.id)
+        btn.text = when {
+            asked && pending > 0L -> "full resolution: asked for, ${bytes(pending)} still to send"
+            asked -> "full resolution: on the device"
+            pending == 0L -> "full resolution: already on the device"
+            else -> "send full resolution too (+${bytes(pending)})"
+        }
+        btn.isEnabled = !asked && pending > 0L
+        btn.setOnClickListener {
+            store.setFullQuality(item.id, true)
+            render()
+        }
+    }
+
+    /** kB and MB, never a raw byte count: this is a line a person reads. */
+    private fun bytes(n: Long): String = when {
+        n >= 1024L * 1024 -> "%.1f MB".format(n / (1024.0 * 1024.0))
+        n >= 1024 -> "%d kB".format(n / 1024)
+        else -> "$n B"
+    }
+
     private fun renderGrey(item: WalletItem) {
         val btn = findViewById<Button>(R.id.btnItemGrey)
         val has = store.hasGreyAssets(item)
