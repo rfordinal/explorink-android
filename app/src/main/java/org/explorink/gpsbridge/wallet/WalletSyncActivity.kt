@@ -252,7 +252,14 @@ class WalletSyncActivity : Activity(), WalletSyncController.Listener {
             } ?: "")
 
         tvPending.text = "${bytes(totals.pendingBytes)} pending"
-        val eta = t?.estimateText(totals.pendingBytes) ?: ""
+        // Measured first, constant second. The constant said "roughly a minute or two"
+        // for a job the arithmetic put at forty (`WalletSyncSession.etaText`), so the
+        // constant is now only the answer before this run has measured anything, and it
+        // says so.
+        val measured = WalletSyncSession.etaText(totals.pendingBytes)
+        val eta = measured
+            ?: t?.estimateText(totals.pendingBytes)?.let { "$it (estimate, not measured yet)" }
+            ?: ""
         val byClass = q.pendingByClass().entries.joinToString(", ") {
             "${it.key.label} ${bytes(it.value)}"
         }

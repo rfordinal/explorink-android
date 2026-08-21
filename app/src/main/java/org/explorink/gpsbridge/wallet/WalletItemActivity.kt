@@ -3,6 +3,8 @@ package org.explorink.gpsbridge.wallet
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.widget.EditText
+import android.widget.Toast
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -97,6 +99,7 @@ class WalletItemActivity : Activity() {
         bar.visibility = if (st.fraction > 0f) android.view.View.VISIBLE else android.view.View.GONE
         renderGrey(item)
         renderFullQuality(item, st)
+        renderRename(item)
         renderCodes(item)
         btnDelete.isEnabled = true
         btnDelete.setOnClickListener {
@@ -187,6 +190,48 @@ class WalletItemActivity : Activity() {
      * what it costs, because over Bluetooth that is two minutes and the rider is the one
      * who waits.
      */
+    /**
+     * Rename, because the name a document was imported under is a filename, not a name.
+     *
+     * `20260819_083639` says nothing at a petrol stop; "Boarding pass" does. It costs one
+     * manifest upload and touches no image data ([WalletStore.rename]), so it is cheap
+     * enough to do on a whim -- but it does make the card stale until the next sync, and
+     * the row says so afterwards.
+     */
+    private fun renderRename(item: WalletItem) {
+        val btn = findViewById<Button>(R.id.btnItemRename)
+        btn.text = "rename this document"
+        btn.setOnClickListener {
+            val input = EditText(this).apply {
+                setText(item.title)
+                setSelection(text.length)
+            }
+            AlertDialog.Builder(this)
+                .setTitle("Rename")
+                .setMessage("Shown on the device's list. Up to " +
+                    "${WalletFormat.TITLE_MAX_BYTES} bytes; longer names are cut.")
+                .setView(input)
+                .setPositiveButton("Rename") { _, _ ->
+                    val wanted = input.text.toString()
+                    val before = item.title
+                    val after = store.rename(item.id, wanted).items
+                        .firstOrNull { it.id == item.id }?.title
+                    loadedWallet = null
+                    render()
+                    if (after == before) {
+                        Toast.makeText(this, "not renamed: blank, or the same name",
+                            Toast.LENGTH_SHORT).show()
+                    } else if (after != wanted.trim()) {
+                        // Said out loud rather than silently: the rider typed something
+                        // longer than the field holds.
+                        Toast.makeText(this, "cut to fit: $after", Toast.LENGTH_LONG).show()
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+    }
+
     private fun renderFullQuality(item: WalletItem, sync: WalletSyncQueue.ItemStatus) {
         val btn = findViewById<Button>(R.id.btnItemFull)
         val state = store.loadState()

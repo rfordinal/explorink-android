@@ -166,6 +166,15 @@ object WalletFormat {
      * file names; in the app they are the picked image's display name, which is
      * the closest equivalent a content Uri has (see `docs/android-wallet.md`).
      */
+    /**
+     * How long a document title may be, in UTF-8 bytes.
+     *
+     * 48 because the binary index stores it in a fixed 48-byte field
+     * (`docs/wallet-index-v2.md`); enforcing it here means the JSON manifest never holds
+     * a name the next format would have to truncate behind the rider's back.
+     */
+    const val TITLE_MAX_BYTES = 48
+
     fun itemIdFor(title: String, sourceNames: List<String>): String {
         val payload = (ITEM_ID_DOMAIN + title + "|" + sourceNames.joinToString("|"))
             .toByteArray(Charsets.UTF_8)

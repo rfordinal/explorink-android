@@ -68,6 +68,9 @@ class WalletSyncEngine(
         fun onQueueChanged() {}
     }
 
+    /** How fast this run is going, for the screens. Reset on every start. */
+    val rate = WalletSyncRate(clock)
+
     var queue: WalletSyncQueue = WalletSyncQueue(emptyList())
         private set
 
@@ -172,6 +175,9 @@ class WalletSyncEngine(
         confirmedThisRun = 0
         failedThisRun = 0
         pass = 1
+        // A run measures itself. Nothing carries over from the last one: the interval,
+        // the screen state and the distance may all be different.
+        rate.start()
         queue.clearErrors()
         val totals = queue.totals()
         listener.onSyncStarted(t.name, totals.pendingAssets, totals.pendingBytes)
@@ -278,6 +284,7 @@ class WalletSyncEngine(
             override fun onConfirmed(detail: String) {
                 if (gen != generation) return
                 queue.confirm(a, t.name, clock())
+                rate.confirmed(a.bytes)
                 confirmedThisRun++
                 persist(queue)
                 listener.onAssetConfirmed(a, t.name, detail)

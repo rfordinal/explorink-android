@@ -43,10 +43,16 @@ object WalletSyncSession {
     var generation: Int = 0
         private set
 
-    fun publish(queue: WalletSyncQueue?, transport: String?, running: Boolean) {
+    /** The run's own measured rate, for the ETA. Null when no sync is up. */
+    var rate: WalletSyncRate? = null
+        private set
+
+    fun publish(queue: WalletSyncQueue?, transport: String?, running: Boolean,
+                rate: WalletSyncRate? = null) {
         this.queue = queue
         this.transport = transport
         this.running = running
+        this.rate = rate
         generation++
     }
 
@@ -59,7 +65,25 @@ object WalletSyncSession {
         queue = null
         transport = null
         running = false
+        rate = null
         generation++
+    }
+
+    /**
+     * What the measured rate says about the bytes still to go, or null before there is
+     * enough of a measurement to say anything.
+     *
+     * **Measured, never assumed.** The figure this replaces came from a constant
+     * (`WalletTransport.bytesPerSecond`, 8-9 kB/s for BLE) and read "roughly a minute or
+     * two" while the real link was doing 0.33 kB/s with the phone's screen off -- the
+     * arithmetic said forty minutes and the words said two.
+     */
+    fun etaText(pendingBytes: Long): String? {
+        val r = rate ?: return null
+        if (r.stalledFor(WalletSyncRate.STALL_MS)) return "stalled, nothing confirmed lately"
+        val secs = r.secondsFor(pendingBytes) ?: return null
+        val rateNow = r.bytesPerSecond() ?: return null
+        return "${WalletSyncRate.clock(secs)} left at ${WalletSyncRate.rateText(rateNow)}"
     }
 
     /**
@@ -72,7 +96,8 @@ object WalletSyncSession {
         val pct = (t.fraction * 100).toInt()
         val where = transport ?: "?"
         return if (running) {
-            "syncing over $where: $pct%, ${t.confirmedAssets} of ${t.totalAssets} assets confirmed"
+            "syncing over $where: $pct%, ${t.confirmedAssets} of ${t.totalAssets} assets" +
+                (etaText(t.pendingBytes)?.let { ", $it" } ?: "")
         } else {
             "sync screen open over $where, not sending"
         }

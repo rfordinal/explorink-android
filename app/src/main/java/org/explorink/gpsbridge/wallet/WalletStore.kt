@@ -275,6 +275,54 @@ class WalletStore(
      * keep the originals (a share-target Uri is not persistable). The caller shows
      * that as "re-import this document as grey".
      */
+    /**
+     * Rename a document. **The manifest and nothing else.**
+     *
+     * Safe because the item id is *stored*, not derived: `WalletFormat.itemIdFor` runs
+     * once at import (`WalletImporter`), and every asset id is built from that stored id.
+     * So a rename leaves every asset and every confirmation alone, and the only file that
+     * changes is the manifest -- brief section 40's own example of a metadata change that
+     * must not re-upload image data.
+     *
+     * Returns the wallet unchanged when the id is unknown, when the name is blank, or
+     * when it is the name the document already has: a write would bump `walletVersion`
+     * and make the card stale for nothing.
+     */
+    fun rename(itemId: String, title: String): Wallet {
+        val current = load()
+        val at = current.items.indexOfFirst { it.id == itemId }
+        if (at < 0) return current
+        val clean = clampTitle(title)
+        if (clean.isEmpty() || clean == current.items[at].title) return current
+        val items = ArrayList(current.items)
+        items[at] = items[at].copy(title = clean)
+        val next = resequence(current, items)
+        write(next)
+        return next
+    }
+
+    /**
+     * Trim, and cut to [WalletFormat.TITLE_MAX_BYTES] on a codepoint boundary.
+     *
+     * The cap is not arbitrary and not about this file: the binary index that replaces
+     * the JSON manifest stores the title in a fixed 48-byte field
+     * (`docs/wallet-index-v2.md`). Capping now means a name that fits today still fits
+     * after that format lands, instead of being silently shortened then.
+     */
+    private fun clampTitle(raw: String): String {
+        val t = raw.trim()
+        var bytes = t.toByteArray(Charsets.UTF_8)
+        if (bytes.size <= WalletFormat.TITLE_MAX_BYTES) return t
+        var end = t.length
+        while (end > 0) {
+            end--
+            if (Character.isLowSurrogate(t[end])) continue
+            val cut = t.substring(0, end).trim()
+            if (cut.toByteArray(Charsets.UTF_8).size <= WalletFormat.TITLE_MAX_BYTES) return cut
+        }
+        return ""
+    }
+
     fun setGrey(itemId: String, grey: Boolean): Wallet {
         val current = load()
         val at = current.items.indexOfFirst { it.id == itemId }

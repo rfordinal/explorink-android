@@ -77,7 +77,8 @@ class WalletSyncController(
              * controller, so this is the one place that cannot be forgotten.
              */
             private fun publish() {
-                WalletSyncSession.publish(engine.queue, engine.transport?.label, engine.running)
+                WalletSyncSession.publish(engine.queue, engine.transport?.label, engine.running,
+                                          engine.rate)
             }
 
             override fun onSyncStarted(transport: String, pendingAssets: Int, pendingBytes: Long) {

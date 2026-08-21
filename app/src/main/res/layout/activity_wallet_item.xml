@@ -52,6 +52,14 @@
         android:layout_height="wrap_content"
         android:orientation="vertical" />
 
+    <!-- Rename: the manifest and nothing else (WalletStore.rename). -->
+    <Button
+        android:id="@+id/btnItemRename"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="12sp"
+        android:text="rename this document" />
+
     <!-- Full resolution on demand. The 1:1 level is most of a document's bytes and is
          only read when the rider zooms all the way in, so it is deferred until asked
          for (WalletSyncQueue.fullQuality). -->
