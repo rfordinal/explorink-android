@@ -44,6 +44,12 @@ import org.explorink.gpsbridge.R
 class WalletSyncActivity : Activity(), WalletSyncController.Listener {
 
     companion object {
+        /**
+         * Slowest useful redraw. Four a second is plenty for a person and cheap for the
+         * wire; per chunk was 253 B/s of throughput (see `loadedWallet`).
+         */
+        private const val RENDER_MIN_MS = 250L
+
         private const val TAG = "WalletSync"
         private const val PREF = "wallet_sync"
         private const val PREF_HOST = "host"
@@ -54,6 +60,8 @@ class WalletSyncActivity : Activity(), WalletSyncController.Listener {
     private lateinit var tvPending: TextView
     private lateinit var tvRemains: TextView
     private lateinit var tvProgress: TextView
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
     private lateinit var barTotal: ProgressBar
     private lateinit var barAsset: ProgressBar
     private lateinit var tvLog: TextView
@@ -206,6 +214,7 @@ class WalletSyncActivity : Activity(), WalletSyncController.Listener {
     override fun onPlanReady(queue: WalletSyncQueue) {
         // A new plan can be a different wallet, so an accepted conflict does not carry.
         conflictAccepted = false
+        loadedWallet = null
         render()
     }
 
@@ -214,7 +223,7 @@ class WalletSyncActivity : Activity(), WalletSyncController.Listener {
     }
 
     override fun onChanged() {
-        render()
+        renderThrottled()
     }
 
     override fun onLine(line: String) {
@@ -223,16 +232,57 @@ class WalletSyncActivity : Activity(), WalletSyncController.Listener {
     }
 
     override fun onFinished(confirmed: Int, failed: Int, remaining: Int, reason: String) {
+        loadedWallet = null
         render()
     }
 
     // --- drawing ------------------------------------------------------------
 
+    /**
+     * The manifest as last read, and the redraw's own clock.
+     *
+     * `render()` used to call `store.load()` every time, and `onAssetProgress` fires it
+     * **once per chunk** -- 248 bytes. On an encrypted wallet a load is a 26 kB read, an
+     * AES-GCM decrypt and a JSON parse, so the screen spent about 900 ms between chunks
+     * and the transfer ran at 253 B/s while the link itself was at a 15 ms interval.
+     * Measured 2026-08-21 from the Bluetooth stack's own log: one 253-byte write a second,
+     * every one of them GATT_SUCCESS.
+     *
+     * Same defect as the wallet list had earlier the same day, and worse here: per chunk
+     * rather than per second.
+     */
+    private var loadedWallet: Wallet? = null
+    private var lastRenderAtMs = 0L
+    private var renderQueued = false
+
+    /**
+     * Redraw at most every [RENDER_MIN_MS], and never on the chunk callback's own stack.
+     *
+     * A progress callback arrives per chunk; a screen that repaints per chunk is a tax on
+     * the wire, because both share this thread.
+     */
+    private fun renderThrottled() {
+        val now = System.currentTimeMillis()
+        val since = now - lastRenderAtMs
+        if (since >= RENDER_MIN_MS) {
+            lastRenderAtMs = now
+            render()
+            return
+        }
+        if (renderQueued) return
+        renderQueued = true
+        main.postDelayed({
+            renderQueued = false
+            lastRenderAtMs = System.currentTimeMillis()
+            render()
+        }, RENDER_MIN_MS - since)
+    }
+
     private fun render() {
         val q = controller.engine.queue
         val t = controller.engine.transport
         val totals = q.totals()
-        val wallet = store.load()
+        val wallet = loadedWallet ?: store.load().also { loadedWallet = it }
 
         // The session is published by WalletSyncController, not here: a sync started
         // from the debug activity has no instance of this screen at all.
