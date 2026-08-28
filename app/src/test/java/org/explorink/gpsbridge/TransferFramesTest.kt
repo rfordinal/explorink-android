@@ -70,9 +70,33 @@ class TransferFramesTest {
         // The default ATT MTU: 23 - 3 ATT - 5 frame = 15 bytes, the number that
         // measured 0.2 KB/s against the X4 and is why the MTU is renegotiated.
         assertEquals(15, TransferFrames.maxChunkPayload(23))
-        assertEquals(509, TransferFrames.maxChunkPayload(517))
+        // BUG-103: at MTU 517 the ATT-legal write (514 bytes) is clamped to
+        // Android's 512-byte GATT attribute cap before the header comes off,
+        // so payload is 512 - 5 = 507, not 517 - 3 - 5 = 509.
+        assertEquals(507, TransferFrames.maxChunkPayload(517))
         // A bogus reported MTU must not produce a zero or negative payload.
         assertEquals(1, TransferFrames.maxChunkPayload(0))
+    }
+
+    @Test
+    fun `chunk frame never exceeds Android's GATT attribute cap`() {
+        // BUG-103: TileFetcher.sendNextChunk() feeds maxChunkPayload() straight
+        // into chunkFrame(), which adds its own 5-byte header back on. The
+        // frame -- not just the payload -- must fit within
+        // GATT_MAX_ATTR_VALUE_BYTES for every MTU the device or the stack can
+        // report, not just the two spec bounds.
+        for (mtu in listOf(0, 23, 185, 256, 512, 517)) {
+            val payloadLen = TransferFrames.maxChunkPayload(mtu)
+            val frame = TransferFrames.chunkFrame(0, ByteArray(payloadLen))
+            assertTrue(
+                "frame size ${frame.size} exceeds ${TransferFrames.GATT_MAX_ATTR_VALUE_BYTES} at mtu $mtu",
+                frame.size <= TransferFrames.GATT_MAX_ATTR_VALUE_BYTES,
+            )
+        }
+        // At the app's requested MTU the frame should land exactly at the cap,
+        // not merely under it -- this is the byte count BUG-103 refused.
+        val frameAt517 = TransferFrames.chunkFrame(0, ByteArray(TransferFrames.maxChunkPayload(517)))
+        assertEquals(TransferFrames.GATT_MAX_ATTR_VALUE_BYTES, frameAt517.size)
     }
 
     @Test
