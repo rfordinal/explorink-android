@@ -85,12 +85,23 @@ class TransferFramesTest {
         // frame -- not just the payload -- must fit within
         // GATT_MAX_ATTR_VALUE_BYTES for every MTU the device or the stack can
         // report, not just the two spec bounds.
-        for (mtu in listOf(0, 23, 185, 256, 512, 517)) {
+        // 515/516 are where the clamp starts binding (mtu - 3 first exceeds
+        // 512), and 1024 is a bogus-large MTU no real stack reports but the
+        // formula must still not blow the cap on.
+        for (mtu in listOf(0, 23, 185, 256, 512, 515, 516, 517, 1024)) {
             val payloadLen = TransferFrames.maxChunkPayload(mtu)
             val frame = TransferFrames.chunkFrame(0, ByteArray(payloadLen))
             assertTrue(
                 "frame size ${frame.size} exceeds ${TransferFrames.GATT_MAX_ATTR_VALUE_BYTES} at mtu $mtu",
                 frame.size <= TransferFrames.GATT_MAX_ATTR_VALUE_BYTES,
+            )
+            // The other half of the contract (docs/ble-map-transfer-protocol.md,
+            // "Frames"): a frame must also never exceed what the MTU itself
+            // allows, mtu - ATT_HEADER_BYTES -- the clamp must not overshoot
+            // in the other direction at a small MTU.
+            assertTrue(
+                "frame size ${frame.size} exceeds mtu - ATT_HEADER_BYTES (${mtu - TransferFrames.ATT_HEADER_BYTES}) at mtu $mtu",
+                frame.size <= mtu - TransferFrames.ATT_HEADER_BYTES || mtu < TransferFrames.ATT_HEADER_BYTES + TransferFrames.CHUNK_HEADER_BYTES + 1,
             )
         }
         // At the app's requested MTU the frame should land exactly at the cap,
