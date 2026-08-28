@@ -31,6 +31,15 @@ object TransferFrames {
     /** Opcode plus the u32 offset a chunk frame carries. */
     const val CHUNK_HEADER_BYTES = 5
 
+    /**
+     * Android's hard cap on a GATT attribute value (`GATT_MAX_ATTR_LEN` in
+     * AOSP's bluetooth stack, `system/bt`/`packages/modules/Bluetooth`),
+     * independent of the negotiated ATT MTU (`GATT_MAX_MTU_SIZE` = 517).
+     * `BluetoothGatt.writeCharacteristic()` throws `IllegalArgumentException`
+     * rather than returning an error code past this -- BUG-103.
+     */
+    const val GATT_MAX_ATTR_VALUE_BYTES = 512
+
     /** The device's cap on the relative path (`MapTransferReceiver::kMaxRelPathBytes`). */
     const val MAX_REL_PATH_BYTES = 80
 
@@ -45,9 +54,16 @@ object TransferFrames {
      * 25 seconds. Requesting a larger MTU is what makes a real tile transfer
      * bearable, so the negotiated value has to reach this function rather than
      * being assumed.
+     *
+     * BUG-103: the frame this payload goes into, not just the payload itself,
+     * has to fit Android's [GATT_MAX_ATTR_VALUE_BYTES] cap. At MTU 517 the
+     * ATT-legal write size is 514 bytes (`mtu - ATT_HEADER_BYTES`) -- over the
+     * attribute cap -- so the payload budget must clamp to the lower of the
+     * two before `chunkFrame()` adds its own header back on.
      */
     fun maxChunkPayload(mtu: Int): Int {
-        val usable = mtu - ATT_HEADER_BYTES - CHUNK_HEADER_BYTES
+        val attWriteBytes = minOf(mtu - ATT_HEADER_BYTES, GATT_MAX_ATTR_VALUE_BYTES)
+        val usable = attWriteBytes - CHUNK_HEADER_BYTES
         // One byte is the protocol's own minimum payload; a smaller MTU than
         // that cannot happen (23 is the floor) but a bogus reported value can.
         return if (usable < 1) 1 else usable
