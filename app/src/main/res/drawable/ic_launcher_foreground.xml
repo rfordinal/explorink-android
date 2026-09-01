@@ -1,16 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The ExplorInk mark, same path as web/assets/brand/explorink-icon.svg,
-     scaled into the adaptive icon's 108x108 safe zone. -->
+     scaled into the adaptive icon's 66x66 safe zone, not the full 108x108:
+     the old 0.3157895/23.68421/18 numbers fit the mark's bounding box to
+     108x108, so its 60x71dp footprint stuck 2 to 3dp past the 66dp safe
+     zone top and bottom and got clipped by One UI's circular mask. Bbox is
+     [51.24,1965.49]x[62.40,2308.70] in path space; these numbers scale it
+     to a 51x60dp box centered at (54,54). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:scaleX="0.3157895"
-        android:scaleY="0.3157895"
-        android:translateX="23.68421"
-        android:translateY="18">
+        android:scaleX="0.2671066"
+        android:scaleY="0.2671066"
+        android:translateX="28.401404"
+        android:translateY="23.163864">
         <group
             android:scaleX="0.1"
             android:scaleY="-0.1"
