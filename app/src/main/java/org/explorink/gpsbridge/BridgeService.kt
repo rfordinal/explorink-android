@@ -401,7 +401,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private fun onWoken() {
         val hasBackground = checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
-        addEvent(if (hasBackground) "woken by the X4" else "woken by the X4 -- no background location")
+        addEvent(if (hasBackground) "woken by the device" else "woken by the device -- no background location")
         logger?.logEvent("woken", if (hasBackground) "ok" else "no_background_location")
         if (!hasBackground) {
             Log.w(TAG, "woken without ACCESS_BACKGROUND_LOCATION: the link will come up with no fixes")
@@ -835,7 +835,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         tileProgress = null
         lastProgressPostMs = 0L
         addEvent("device asked for $total tiles")
-        addTileLine("X4 asked for $total ${squares(total)} ($fetchScope)")
+        addTileLine("device asked for $total ${squares(total)} ($fetchScope)")
         logger?.logEvent("fetch_start", "$total tiles", mapOf("total" to total))
         notifyObserver()
     }
@@ -916,7 +916,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     }
 
     override fun onCheckStarted(count: Int) {
-        addTileLine("X4 asked: are my $count ${squares(count)} still current?")
+        addTileLine("device asked: are my $count ${squares(count)} still current?")
         notifyObserver()
     }
 
