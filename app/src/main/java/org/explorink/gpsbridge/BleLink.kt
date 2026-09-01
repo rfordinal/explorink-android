@@ -75,7 +75,24 @@ class BleLink(
     companion object {
         private const val TAG = "BleLink"
 
+        /** Default/legacy label -- an X4, still the most common device. */
         const val DEVICE_NAME = "XteinkX4Map"
+
+        /**
+         * Every name the firmware can advertise, one per board
+         * (`BlePositionServer.cpp`, `bleDeviceNameForActiveBoard()`). An X4, an
+         * X3 and a LilyGo T5S3 each advertise their own name instead of all
+         * claiming to be an X4, so this is an allow-list rather than one exact
+         * string -- adding a board on the firmware side means adding its name
+         * here in the same change.
+         */
+        val KNOWN_DEVICE_NAMES: Set<String> = setOf(
+            "XteinkX4Map",
+            "XteinkX3Map",
+            "XteinkX4ProMap",
+            "LilyGoT5S3Map",
+            "ExplorInkMap", // fallback name for a board the firmware doesn't recognise
+        )
         val SERVICE_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0001")
         val POSITION_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0002")
         val COMMAND_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0003")
@@ -533,10 +550,11 @@ class BleLink(
         val filters = if (pinned != null) {
             listOf(ScanFilter.Builder().setDeviceAddress(pinned).build())
         } else {
-            listOf(
-                ScanFilter.Builder().setDeviceName(DEVICE_NAME).build(),
-                ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build(),
-            )
+            // ScanFilter matches one exact name each, so every known name gets
+            // its own filter; the controller ORs the whole list, same as it
+            // already ORs name against service UUID below.
+            KNOWN_DEVICE_NAMES.map { ScanFilter.Builder().setDeviceName(it).build() } +
+                ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build()
         }
         val settings = ScanSettings.Builder()
             .setScanMode(mode)
@@ -554,7 +572,7 @@ class BleLink(
                 main.removeCallbacks(scanDownshift)
                 main.postDelayed(scanDownshift, SCAN_FAST_MS)
             }
-            setState(State.SCANNING, if (pinned != null) "looking for $pinned" else "looking for $DEVICE_NAME")
+            setState(State.SCANNING, if (pinned != null) "looking for $pinned" else "looking for map device")
             listener.onBleEvent("scan_start", if (mode == ScanSettings.SCAN_MODE_LOW_LATENCY) "fast" else "low power", null)
         } catch (t: Throwable) {
             Log.e(TAG, "startScan", t)
@@ -648,7 +666,7 @@ class BleLink(
         val pinned = pinnedAddress
         if (pinned != null && !result.device.address.equals(pinned, ignoreCase = true)) return
 
-        val byName = advName == DEVICE_NAME || gattName == DEVICE_NAME
+        val byName = advName in KNOWN_DEVICE_NAMES || gattName in KNOWN_DEVICE_NAMES
         val byUuid = rec?.serviceUuids?.any { it.uuid == SERVICE_UUID } == true
         if (pinned == null && !byName && !byUuid) return
 

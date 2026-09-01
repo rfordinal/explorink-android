@@ -1615,7 +1615,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private fun notificationContent(): NotificationContent {
         val title = when (bleState) {
             BleLink.State.CONNECTED -> "Connected to ${ble.connectedName ?: BleLink.DEVICE_NAME}"
-            BleLink.State.SCANNING -> "Scanning for ${BleLink.DEVICE_NAME}"
+            BleLink.State.SCANNING -> "Scanning for map device"
             BleLink.State.CONNECTING -> "Connecting"
             BleLink.State.DISCONNECTED -> "Disconnected, rescanning"
             BleLink.State.BLUETOOTH_OFF -> "Bluetooth off"
