@@ -26,7 +26,9 @@ phone's GPS and that device:
 0. Starts itself when the rider opens the map screen on the paired device.
    The OS watches for that device over a companion association and wakes this
    app, with the app swiped away and nothing tapped.
-1. Scans for a BLE device named `XteinkX4Map`, connects, no pairing.
+1. Scans for a BLE device advertising one of five known names (an X4, X3,
+   X4 Pro or LilyGo T5S3, or a generic fallback -- `BleLink.KNOWN_DEVICE_NAMES`),
+   connects, no pairing.
 2. Sends the phone's GPS position to the device over BLE whenever the
    position has actually moved meaningfully — a distance-driven send policy,
    not a fixed interval. See "Send policy" below.
