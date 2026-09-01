@@ -149,13 +149,13 @@
         android:paddingEnd="8dp"
         android:paddingBottom="8dp">
 
-        <!-- One button, one next step: pair the X4, then grant background
+        <!-- One button, one next step: pair the device, then grant background
              location. It hides itself once auto-start is fully set up. -->
         <Button
             android:id="@+id/btnWake"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Pair the X4"
+            android:text="Pair the device"
             android:visibility="gone" />
 
         <!-- Shown only while paired. Separate from btnWake rather than sharing it:
@@ -165,7 +165,7 @@
             android:id="@+id/btnForget"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Forget the X4"
+            android:text="Forget the device"
             android:visibility="gone" />
 
         <!-- Pins: a second window. The list, its per-row actions and the coordinate

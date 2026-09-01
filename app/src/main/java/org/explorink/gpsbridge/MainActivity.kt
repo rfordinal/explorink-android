@@ -290,7 +290,7 @@ class MainActivity : Activity(), BridgeService.Observer {
                 main.post {
                     Toast.makeText(
                         this,
-                        "pairing failed: ${error ?: "no X4 found -- open the map screen on it"}",
+                        "pairing failed: ${error ?: "no device found -- open the map screen on it"}",
                         Toast.LENGTH_LONG,
                     ).show()
                     resumeLinkOrStart()
@@ -329,7 +329,7 @@ class MainActivity : Activity(), BridgeService.Observer {
             .setTitle("Forget $addr?")
             .setMessage(
                 "The map screen will stop starting this app on its own, and the app " +
-                    "will connect to whichever X4 answers first until you pair again."
+                    "will connect to whichever device answers first until you pair again."
             )
             .setPositiveButton("Forget") { _, _ ->
                 service?.forgetPairing()
@@ -433,8 +433,8 @@ class MainActivity : Activity(), BridgeService.Observer {
         val addr = CompanionWake.pairedAddress(this)
         when {
             addr == null -> {
-                tvWake.text = "auto-start: off -- X4 not paired"
-                btnWake.text = "Pair the X4"
+                tvWake.text = "auto-start: off -- device not paired"
+                btnWake.text = "Pair the device"
                 btnWake.visibility = View.VISIBLE
             }
 
