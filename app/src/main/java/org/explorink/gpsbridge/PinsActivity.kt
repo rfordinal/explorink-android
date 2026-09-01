@@ -109,6 +109,12 @@ class PinsActivity : Activity(), BridgeService.Observer {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_pins)
+        actionBar?.apply {
+            setDisplayShowTitleEnabled(false)
+            setDisplayShowHomeEnabled(true)
+            setDisplayUseLogoEnabled(true)
+            setLogo(R.drawable.ic_logo)
+        }
 
         tvState = findViewById(R.id.tvPinsState)
         tvProblem = findViewById(R.id.tvPinsProblem)
