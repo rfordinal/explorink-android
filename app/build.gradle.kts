@@ -8,8 +8,8 @@ plugins {
 // APK came from -- a bare "0.2.0" on a sideloaded debug build tells you nothing
 // about which of six builds is actually on the phone. Same reasoning as the
 // firmware's TRAILINK_VERSION.
-val appVersion = "0.2.3"
-val appVersionCode = 5
+val appVersion = "0.2.4"
+val appVersionCode = 6
 
 fun gitDescribe(): String {
     fun run(vararg cmd: String): String = try {
