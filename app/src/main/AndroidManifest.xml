@@ -97,6 +97,29 @@
             </intent-filter>
         </activity>
 
+        <!-- The map-area window. exported=true only for the share filter, the
+             same as the pins one: a maps app hands over shared text, it lands in
+             the coordinate field, and nothing is queued until the rider has seen
+             the plan and confirmed it (TileQueueActivity.prefillFromIntent).
+
+             Two ExplorInk entries now appear in a share sheet, one per window.
+             That is deliberate, a shared place is either a pin or an area to
+             cache, and only the rider knows which, so both labels name what
+             they do rather than naming the app twice. -->
+        <activity
+            android:name=".TileQueueActivity"
+            android:exported="true"
+            android:label="ExplorInk map area"
+            android:launchMode="singleTop"
+            android:parentActivityName=".MainActivity"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".BridgeService"
             android:exported="false"

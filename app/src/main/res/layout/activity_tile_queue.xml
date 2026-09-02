@@ -1,0 +1,227 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The map-area screen. Its whole reason to exist is the ask: both existing
+     paths to the card are reactive, the device only ever asks for a square it
+     has already failed to draw, so nothing fills ground the rider has never
+     been on. Here a place found in Google Maps at home becomes a box of tiles on
+     the card before the trip (docs/send-tiles-plan.md).
+
+     The plan step above the queue is not decoration. A city is tens of megabytes
+     and twenty to forty minutes over Bluetooth, and the index's sizeBytes is
+     exact rather than an average, so the exact cost can be stated before the
+     rider commits to any of it. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical">
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:padding="16dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvQueueState"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="4dp"
+                android:text="map areas"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <!-- Red block, same as the pins screen's: a state the rider has to
+                 fix before anything here moves. The most common one by far is
+                 the device not being on its Sync map tiles screen, which is the
+                 only screen a long batch may run over. -->
+            <TextView
+                android:id="@+id/tvQueueProblem"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="8dp"
+                android:textColor="#FFB00020"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tvQueueStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:paddingBottom="12dp"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="2dp"
+                android:text="send an area"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <!-- A share from a maps app lands here, and so does a pasted link or
+                 a typed pair. PinCoordinates reads all of them and refuses a
+                 short link rather than guessing at it. -->
+            <EditText
+                android:id="@+id/etArea"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="41.3874, 2.1686  or a shared maps link"
+                android:importantForAutofill="no"
+                android:inputType="textUri"
+                android:maxLines="3"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btnUseMyPosition"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Use my position" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="8dp"
+                android:paddingBottom="2dp"
+                android:text="box size"
+                android:textSize="13sp" />
+
+            <!-- 20 km is the default because the returns fall off above it:
+                 measured against the live CDN, another 3 MB past 20 km buys
+                 outskirts (docs/send-tiles-plan.md). -->
+            <RadioGroup
+                android:id="@+id/rgSize"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <RadioButton
+                    android:id="@+id/rbSize10"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="10 km" />
+
+                <RadioButton
+                    android:id="@+id/rbSize20"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:checked="true"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="0dp"
+                    android:text="20 km" />
+
+                <RadioButton
+                    android:id="@+id/rbSize40"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="0dp"
+                    android:text="40 km" />
+            </RadioGroup>
+
+            <Button
+                android:id="@+id/btnPlan"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="What does it cost?" />
+
+            <!-- The plan, in exact numbers rather than an estimate. Nothing is
+                 queued until the rider has seen this and pressed Add. -->
+            <TextView
+                android:id="@+id/tvPlan"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:paddingTop="8dp"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/btnAddZone"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Add to the queue"
+                android:visibility="gone" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="16dp"
+                android:layout_marginBottom="12dp"
+                android:background="#33888888" />
+
+            <TextView
+                android:id="@+id/tvSummary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="4dp"
+                android:text="nothing queued"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvCurrent"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:paddingBottom="8dp"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/llZones"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:id="@+id/tvQueueEmpty"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:text="No areas queued."
+                android:textSize="13sp" />
+        </LinearLayout>
+    </ScrollView>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="8dp">
+
+        <Button
+            android:id="@+id/btnQueueContinue"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Continue" />
+
+        <Button
+            android:id="@+id/btnQueuePause"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Pause" />
+
+        <Button
+            android:id="@+id/btnQueueClear"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Clear sent" />
+
+        <Button
+            android:id="@+id/btnQueueClose"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Close" />
+    </LinearLayout>
+</LinearLayout>

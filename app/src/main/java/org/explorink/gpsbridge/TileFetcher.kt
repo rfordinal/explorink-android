@@ -139,6 +139,37 @@ class TileFetcher(
          * no-op.
          */
         fun onTileProgress(z: Int, col: Long, row: Long, sentBytes: Int, totalBytes: Int) {}
+
+        /**
+         * The begin frame for one square is going out: [bytes] long, [crc32]
+         * over exactly those bytes.
+         *
+         * Why the CRC leaves this class at all. A ledger that records "sent"
+         * from the device's `OK <bytes> <crc32hex>` alone is recording a claim
+         * it cannot check -- and the queue cannot derive the number for itself,
+         * because the index's `content_id` is a hash of the tile's *layer* CRCs
+         * (`mapbuilder/tilegen/tiles.py`, `content_id_from_layer_crcs()`), not
+         * of the file. So only the sender knows what went out, only the device
+         * knows what landed, and **a receipt nobody compared against what was
+         * sent is not a receipt** ([TileOutbox.beginSend], [TileOutbox.confirm]).
+         *
+         * Default no-op: only a caller keeping a ledger needs it.
+         */
+        fun onTileSending(z: Int, col: Long, row: Long, bytes: Int, crc32: Long) {}
+
+        /**
+         * The device's own verdict for one square, whole: it counted [bytes] and
+         * computed [crc32] by reading the file back off the card
+         * (`docs/ble-map-transfer-brief.md`).
+         *
+         * Fired alongside [onTileDone], not instead of it. That one answers
+         * "which squares did I get" for a screen; this one carries the two
+         * numbers a receipt is made of, and dropping either is what turns a
+         * ledger into a guess -- see [onTileSending].
+         *
+         * Default no-op.
+         */
+        fun onTileReceipt(z: Int, col: Long, row: Long, bytes: Int, crc32: Long) {}
     }
 
     enum class Phase { IDLE, LISTING, PUSHING }
@@ -395,7 +426,10 @@ class TileFetcher(
             is TransferFrames.Status.Ok -> {
                 sent++
                 Log.i(TAG, "landed ${describe(tile)} (${status.bytes} bytes)")
-                tile?.let { listener.onTileDone(it.z, it.col, it.row, status.bytes, true, "") }
+                tile?.let {
+                    listener.onTileReceipt(it.z, it.col, it.row, status.bytes, status.crc32)
+                    listener.onTileDone(it.z, it.col, it.row, status.bytes, true, "")
+                }
                 clearTransfer()
                 listener.onFetchProgress(sent, skipped, total)
                 nextTile()
@@ -746,7 +780,12 @@ class TileFetcher(
         // point nextTile() actually commits to sending a tile -- the boundary
         // between one tile's transfer and the next.
         transport.setFastLink(true)
-        val frame = TransferFrames.beginFrame(relPath, data.size, TransferFrames.crc32(data))
+        val crc = TransferFrames.crc32(data)
+        // Announced before the frame goes out, so a ledger records what it is
+        // about to owe rather than what it hopes happened. The device's verdict
+        // is checked against exactly these two numbers ([Listener.onTileSending]).
+        listener.onTileSending(next.z, next.col, next.row, data.size, crc)
+        val frame = TransferFrames.beginFrame(relPath, data.size, crc)
         transport.sendFrame(frame) { ok, error ->
             // Read `next`, never the current `tile`: a write failure can land
             // long after the write was issued. `BleLink`'s op queue holds an op

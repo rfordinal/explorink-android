@@ -263,8 +263,16 @@ class TileOutbox(
      * the CRC is of the bytes themselves and only the sender knows it -- the
      * index's `content_id` is a hash of layer CRCs, not of the file
      * (`mapbuilder/tilegen/tiles.py`, `content_id_from_layer_crcs()`).
+     *
+     * Also marks the tile in flight. [takeNext] is the other way in and it is
+     * for a caller that picks the order itself; a transport handed a whole list
+     * picks its own ([TileFetcher.pushTiles] reorders nothing but chooses when),
+     * and the moment it says which tile is going out is the moment that tile is
+     * in flight. Without this the screen would show every tile of a running
+     * batch as `QUEUED` and [Totals.inFlightBytes] would stay zero.
      */
     fun beginSend(key: String, bytes: Long, crc32: Long) {
+        inFlight = key
         outgoing = Outgoing(key, bytes, crc32)
     }
 

@@ -177,6 +177,16 @@
             android:layout_height="wrap_content"
             android:text="Pins" />
 
+        <!-- Map areas: the one path to the card that is not reactive. Both
+             others only ever fetch a square the device already failed to draw,
+             so nothing fills ground the rider has never been on
+             (docs/send-tiles-plan.md). -->
+        <Button
+            android:id="@+id/btnMapAreas"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Map areas" />
+
         <Button
             android:id="@+id/btnRecord"
             android:layout_width="match_parent"
