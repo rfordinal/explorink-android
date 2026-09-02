@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
@@ -81,6 +82,7 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
     private lateinit var rgSize: RadioGroup
     private lateinit var llZones: LinearLayout
     private lateinit var btnUseMyPosition: Button
+    private lateinit var btnPickOnMap: Button
     private lateinit var btnPlan: Button
     private lateinit var btnAddZone: Button
     private lateinit var btnContinue: Button
@@ -142,6 +144,7 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         rgSize = findViewById(R.id.rgSize)
         llZones = findViewById(R.id.llZones)
         btnUseMyPosition = findViewById(R.id.btnUseMyPosition)
+        btnPickOnMap = findViewById(R.id.btnPickOnMap)
         btnPlan = findViewById(R.id.btnPlan)
         btnAddZone = findViewById(R.id.btnAddZone)
         btnContinue = findViewById(R.id.btnQueueContinue)
@@ -149,6 +152,7 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         btnClear = findViewById(R.id.btnQueueClear)
 
         btnUseMyPosition.setOnClickListener { onUseMyPosition() }
+        btnPickOnMap.setOnClickListener { onPickOnMap() }
         btnPlan.setOnClickListener { onPlanPressed() }
         btnAddZone.setOnClickListener { onAddPressed() }
         btnContinue.setOnClickListener { onContinuePressed() }
@@ -271,6 +275,64 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         }
         etArea.setText(String.format(Locale.US, "%.6f, %.6f", fix.latitude, fix.longitude))
         clearPlan()
+    }
+
+    /**
+     * Opens a maps app so the rider can find the place by looking.
+     *
+     * **One way, and that is the platform's doing, not a shortcut.** Android has
+     * no place picker any more, and Google Maps returns nothing: measured on a
+     * Galaxy S24 Ultra with Maps 26.35, 2026-09-02, `ACTION_PICK` on a `geo:`
+     * URI has **zero** handlers on the phone. So the trip back is the share
+     * sheet, which this activity already accepts
+     * ([prefillFromIntent]), and the hint under the field says so -- a button
+     * that drops the rider in another app with no way back is worse than no
+     * button.
+     *
+     * The alternative is a map view inside the app, which means Play Services,
+     * an API key in the APK, billing, and this app talking to Google for the
+     * first time. That trade is written down in `docs/send-tiles-plan.md`,
+     * "Picking the area", and it was refused for choosing a centre point.
+     *
+     * Opens where the rider already is, in this order: whatever is in the field
+     * if it parses, then the phone's own last fix, then nothing. `geo:0,0` with
+     * no query would land them in the Atlantic and cost them the pan.
+     */
+    private fun onPickOnMap() {
+        val typed = PinCoordinates.parse(etArea.text.toString())
+        val lat: Double?
+        val lon: Double?
+        if (typed is PinCoordinates.Result.Parsed) {
+            lat = typed.latE7 / 1e7
+            lon = typed.lonE7 / 1e7
+        } else {
+            val fix = service?.snapshot()?.lastFix
+            lat = fix?.latitude
+            lon = fix?.longitude
+        }
+        // z=11 is about the box this screen sends, so what the rider sees framed
+        // is roughly what they would be asking for.
+        val uri = if (lat != null && lon != null) {
+            Uri.parse(String.format(Locale.US, "geo:%.6f,%.6f?z=11", lat, lon))
+        } else {
+            Uri.parse("geo:0,0?q=")
+        }
+        val intent = Intent(Intent.ACTION_VIEW, uri)
+        // Caught rather than pre-checked. `resolveActivity()` is subject to
+        // Android 11's package visibility and answers null for anything the
+        // manifest does not declare -- which is how this button spent its first
+        // run silently refusing itself on a phone with Google Maps installed
+        // (2026-09-02). The manifest declares the geo: intent now, and this
+        // still catches rather than trusts, because the failure mode of getting
+        // it wrong is a dead button.
+        try {
+            startActivity(intent)
+        } catch (t: Throwable) {
+            Log.w(TAG, "no maps app for $uri", t)
+            toast("No maps app on this phone. Paste a link or coordinates instead.")
+            return
+        }
+        toast("Hold the spot, then Share it back to ExplorInk tiles.")
     }
 
     private fun clearPlan() {

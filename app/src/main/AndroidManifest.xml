@@ -49,6 +49,19 @@
     <uses-permission
         android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
 
+    <!-- Package visibility, and it is load-bearing rather than cosmetic. Since
+         Android 11 an app sees only what it declares, so without this
+         `resolveActivity()` on a geo: URI answers null even with Google Maps
+         installed, and the map-picker button refuses itself. Measured on a
+         Galaxy S24 Ultra 2026-09-02: the button did nothing and said nothing.
+         Declaring the intent, not the package, so any maps app qualifies. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+    </queries>
+
     <uses-feature
         android:name="android.hardware.bluetooth_le"
         android:required="true" />

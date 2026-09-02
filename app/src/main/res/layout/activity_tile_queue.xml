@@ -68,15 +68,48 @@
             <!-- A share from a maps app lands here, and so does a pasted link or
                  a typed pair. PinCoordinates reads all of them and refuses a
                  short link rather than guessing at it. -->
-            <EditText
-                android:id="@+id/etArea"
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:hint="41.3874, 2.1686  or a shared maps link"
-                android:importantForAutofill="no"
-                android:inputType="textUri"
-                android:maxLines="3"
-                android:textSize="14sp" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <EditText
+                    android:id="@+id/etArea"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:hint="41.3874, 2.1686  or a shared maps link"
+                    android:importantForAutofill="no"
+                    android:inputType="textUri"
+                    android:maxLines="3"
+                    android:textSize="14sp" />
+
+                <!-- Opens a maps app at the best guess we have, so the rider can
+                     find the place by looking instead of typing numbers. It is a
+                     one-way trip: verified on a Galaxy S24 Ultra 2026-09-02,
+                     nothing on the phone answers ACTION_PICK for a geo: URI (0
+                     handlers), and Google Maps 26.35 exposes no intent that
+                     returns a coordinate. So the way back is the share sheet,
+                     which this activity already accepts, and the hint below says
+                     so rather than leaving the rider in another app wondering. -->
+                <Button
+                    android:id="@+id/btnPickOnMap"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:contentDescription="Open a map to pick the place"
+                    android:minWidth="0dp"
+                    android:text="🗺"
+                    android:textSize="20sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvPickHint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="4dp"
+                android:text="Tap the map icon, hold the spot you want, then Share it back to ExplorInk tiles."
+                android:textSize="12sp" />
 
             <Button
                 android:id="@+id/btnUseMyPosition"
