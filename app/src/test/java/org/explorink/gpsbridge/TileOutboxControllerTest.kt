@@ -21,6 +21,29 @@ import org.junit.Test
 class TileOutboxControllerTest {
 
     /**
+     * The pre-trip case is the whole reason this exists, and it does not resolve
+     * without it: the tile host builds from a 404 in its own access log and an
+     * index read never produces one, so a queue that only re-reads the index
+     * waits forever for a build nobody asked for. Found 2026-09-02 against a real
+     * box of 33 squares over ground no device had ever visited -- the screen said
+     * the server builds them on ask and nothing had ever asked.
+     */
+    @Test
+    fun a_round_asks_the_server_for_every_square_it_has_not_built() {
+        val asked = ArrayList<String>()
+        val primer = TileOutboxController.Primer { tile, _, done ->
+            asked.add(tile.key)
+            done()
+        }
+        assertNotNull(primer)
+        // The interface is what the round drives; the wiring that turns it into a
+        // real HEAD is CdnTileSource.prime, which needs the network and is not
+        // tested here.
+        primer.prime(TileRef(13, 4146, 3061), 4) {}
+        assertEquals(listOf("13/4146/3061"), asked)
+    }
+
+    /**
      * The compiled-in guess has to name the tree the firmware actually reads.
      *
      * It is not a harmless default. The pre-trip planner runs with no device in

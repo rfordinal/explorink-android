@@ -49,6 +49,28 @@ interface TileSource {
         done: (ByteArray?) -> Unit,
     )
 
+    /**
+     * Tells the source a tile is wanted, without downloading it.
+     *
+     * **This is the only way ground nobody has ridden ever gets built.** The tile
+     * host builds from one signal and one only: a 404 in its own access log
+     * (`docs/tile-autobuild.md`). Reading the freshness index does not produce
+     * one -- an index read is a byte range on a file that exists -- so a queue
+     * that only ever re-reads the index waits forever for a build nobody asked
+     * for. Found 2026-09-02, with a pre-trip queue of 33 squares that would have
+     * sat unbuilt indefinitely while the screen said the server builds them on
+     * ask.
+     *
+     * One request per tile per round, never in a loop: the ranking is by hit
+     * count over 24 h and the server takes the top ten per pass, so repetition
+     * buys priority the rider did not ask for and spends our own server.
+     *
+     * Default no-op, because a source that is not the CDN has no such channel.
+     */
+    fun prime(z: Int, col: Long, row: Long, formatVersion: Int?, done: () -> Unit) {
+        done()
+    }
+
     /** For the UI and the log: what this source is, in a few words. */
     fun describe(): String
 
@@ -208,6 +230,37 @@ class CdnTileSource(
             null
         } finally {
             conn?.disconnect()
+        }
+    }
+
+    /**
+     * `HEAD`, not `GET`: the host's log line carries the status and the URI and
+     * says nothing about the method (`docs/tile-autobuild.md`, the log format),
+     * so a HEAD 404 ranks exactly like a GET one and costs neither side a body.
+     *
+     * The answer is discarded on purpose. A 404 is the whole point of the call,
+     * a 200 means the index was behind and the next round will see it, and a
+     * failure means the rider had no network -- none of the three changes what
+     * this side does next.
+     */
+    override fun prime(z: Int, col: Long, row: Long, formatVersion: Int?, done: () -> Unit) {
+        io.execute {
+            val version = formatVersion ?: defaultFormatVersion
+            val url = "$baseUrl/v$version/${TransferFrames.tileRelPath(z, col, row)}"
+            var conn: HttpURLConnection? = null
+            try {
+                conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "HEAD"
+                    connectTimeout = CONNECT_TIMEOUT_MS
+                    readTimeout = READ_TIMEOUT_MS
+                }
+                Log.i(TAG, "asked the server for z$z $col/$row -> HTTP ${conn.responseCode}")
+            } catch (t: Throwable) {
+                Log.w(TAG, "could not ask for $url: ${t.javaClass.simpleName}")
+            } finally {
+                conn?.disconnect()
+            }
+            MainThread.post { done() }
         }
     }
 

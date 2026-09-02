@@ -64,10 +64,21 @@ class TileOutboxController(
     private val store: Store,
     private val scheduler: TileFetcher.Scheduler,
     private val gate: Gate,
+    /**
+     * Tells the CDN a square is wanted, so the tile host's own queue learns about
+     * ground nobody has ridden. See [askForWhatIsNotBuilt]. Defaults to a no-op so
+     * a test that is not about priming does not have to care.
+     */
+    private val primer: Primer = Primer { _, _, done -> done() },
     private val listener: Listener? = null,
     /** Wall clock in epoch milliseconds. Injected so the backoff is testable. */
     private val now: () -> Long = { System.currentTimeMillis() },
 ) {
+
+    /** One ask, no download. [TileSource.prime] is the real one. */
+    fun interface Primer {
+        fun prime(tile: TileRef, formatVersion: Int?, done: () -> Unit)
+    }
 
     companion object {
         private const val TAG = "TileOutbox"
@@ -513,9 +524,53 @@ class TileOutboxController(
                     outbox.fail(t.key, "no index for zoom ${t.z}", at, terminal = true)
                 }
                 save()
-                announceAndPush()
+                askForWhatIsNotBuilt(at) { announceAndPush() }
             }
         })
+    }
+
+    /**
+     * Puts the squares nobody has built into the server's own queue.
+     *
+     * **Without this the pre-trip case never resolves.** The tile host builds
+     * from one signal: a 404 in its access log. An index read produces none --
+     * it is a byte range on a file that exists -- so a queue that only re-reads
+     * the index waits forever for a build nobody asked for, while the screen
+     * says the server builds them on ask. Found 2026-09-02 against a real box of
+     * 33 squares over ground no device had ever visited.
+     *
+     * One request per square per round, sequenced. The server ranks by hit count
+     * over 24 h and builds the top ten per pass, so asking again inside a round
+     * would buy priority the rider did not ask for and spend our own server.
+     * `TileOutbox`'s backoff decides when a round happens at all.
+     *
+     * Failures are not reported anywhere: an ask that did not go out means this
+     * round did not prime, the item stays `WAITING_BUILD` and the next round
+     * asks again. Nothing about the rider's queue changes either way, which is
+     * why this cannot fail the round.
+     */
+    private fun askForWhatIsNotBuilt(at: Long, then: () -> Unit) {
+        val waiting = outbox.items
+            .asSequence()
+            .filter { outbox.stateOf(it, at) == TileState.WAITING_BUILD }
+            .map { it.tile }
+            .distinctBy { it.key }
+            .toList()
+        if (waiting.isEmpty()) {
+            then()
+            return
+        }
+        Log.i(TAG, "asking the map server for ${waiting.size} square(s) it has not built")
+        var i = 0
+        fun next() {
+            if (i >= waiting.size) {
+                then()
+                return
+            }
+            val t = waiting[i++]
+            primer.prime(t, device?.tileFormat) { next() }
+        }
+        next()
     }
 
     /**

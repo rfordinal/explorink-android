@@ -502,6 +502,8 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         btnPlan.isEnabled = !planning
     }
 
+    private fun squares(n: Int): String = if (n == 1) "square" else "squares"
+
     private fun renderPlan() {
         val p = plan
         if (p == null) {
@@ -513,10 +515,24 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         }
         tvPlan.visibility = View.VISIBLE
         tvPlan.text = planText(p)
-        // Offered even when the plan is short: what is missing today is mostly
-        // ground the server has not built yet, and the queue is built to wait
-        // for exactly that.
-        btnAddZone.visibility = if (p.summary.tiles > 0) View.VISIBLE else View.GONE
+        // Offered only once the check has answered, and labelled by the answer.
+        // "Add to the queue" over a box that is two thirds unbuilt tells the
+        // rider nothing about what they are about to wait for.
+        //
+        // Both kinds go in either way, and the label says so rather than
+        // implying the unbuilt ones are dropped: the queue exists to hold them,
+        // ask the server for them and push them when they land. Offering "add
+        // the available ones" would throw away the squares that arrive minutes
+        // later, which is the opposite of what this screen is for.
+        val s = p.summary
+        val pending = s.waitingBuild + s.unknown
+        btnAddZone.text = when {
+            s.tiles == 0 -> "Nothing to add"
+            pending == 0 -> "Add ${s.present} ${squares(s.present)} to the queue"
+            s.present == 0 -> "Queue all ${s.tiles} and wait for the server"
+            else -> "Add ${s.present} now, ${pending} when built"
+        }
+        btnAddZone.visibility = if (s.tiles > 0) View.VISIBLE else View.GONE
     }
 
     /**

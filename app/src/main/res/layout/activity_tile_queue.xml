@@ -162,7 +162,7 @@
                 android:id="@+id/btnPlan"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="What does it cost?" />
+                android:text="Check area availability" />
 
             <!-- The plan, in exact numbers rather than an estimate. Nothing is
                  queued until the rider has seen this and pressed Add. -->
