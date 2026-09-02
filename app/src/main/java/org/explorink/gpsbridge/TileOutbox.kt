@@ -521,7 +521,8 @@ class TileOutbox(
         var sentCount = 0
         var queued = 0
         var waiting = 0
-        var unavailable = 0
+        var noData = 0
+        var stuck = 0
         var bytesConfirmed = 0L
         var remaining = 0L
         for (it in items) {
@@ -534,7 +535,22 @@ class TileOutbox(
                     bytesConfirmed += ledger[it.key]?.bytes ?: 0L
                 }
                 TileState.WAITING_BUILD -> waiting++
-                TileState.ABSENT, TileState.EXPIRED, TileState.FAILED -> unavailable++
+                // Kept apart on purpose, because they are not the same news and
+                // the rider can act on one of them.
+                //
+                // ABSENT is the only honest "never": the area was built and this
+                // square still has nothing in it. Verified against the live CDN
+                // 2026-09-02 -- the three sea squares off Barcelona sit in
+                // `auto-z11-1036-765`, which the server rebuilt that morning at
+                // 07:39:46 and which wrote zero tiles. Asking again is what the
+                // server's own 24 h cooldown exists to stop ("a tile that
+                // legitimately does not exist 404s forever, stays top of the
+                // ranking forever", `tilequeue.py`, `State`).
+                //
+                // EXPIRED and FAILED are this side giving up, which is a
+                // different sentence and belongs under a different word.
+                TileState.ABSENT -> noData++
+                TileState.EXPIRED, TileState.FAILED -> stuck++
                 TileState.QUEUED, TileState.SENDING, TileState.RETRY -> {
                     queued++
                     remaining += it.sizeBytes
@@ -546,7 +562,8 @@ class TileOutbox(
             sent = sentCount,
             queued = queued,
             waitingBuild = waiting,
-            unavailable = unavailable,
+            noData = noData,
+            stuck = stuck,
             sentBytes = bytesConfirmed,
             remainingBytes = remaining,
             inFlightBytes = inFlight?.let { key ->
@@ -565,7 +582,10 @@ class TileOutbox(
         val queued: Int,
         val waitingBuild: Int,
         /** Sea, given up on, or terminally failed. Nothing further will be tried. */
-        val unavailable: Int,
+        /** Built ground with nothing on it: open sea, or no OSM data. Never retried. */
+        val noData: Int,
+        /** This side stopped trying: the 24 h wait ran out, or a terminal refusal. */
+        val stuck: Int,
         val sentBytes: Long,
         /**
          * Bytes still to move, for the squares whose size is known.
@@ -590,7 +610,7 @@ class TileOutbox(
          * can never fill reads as a stall.
          */
         val fraction: Float
-            get() = if (tiles <= 0) 0f else (sent + unavailable).toFloat() / tiles
+            get() = if (tiles <= 0) 0f else (sent + noData + stuck).toFloat() / tiles
     }
 
     // --- plumbing ------------------------------------------------------------

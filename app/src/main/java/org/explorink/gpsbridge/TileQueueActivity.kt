@@ -480,8 +480,15 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         val parts = ArrayList<String>()
         parts.add("${t.tiles} queued")
         parts.add("${t.sent} sent")
-        if (t.waitingBuild > 0) parts.add("${t.waitingBuild} waiting for a build")
-        if (t.unavailable > 0) parts.add("${t.unavailable} unavailable")
+        // "building", not "unavailable". A square the server has not made yet is
+        // the ordinary case and it resolves on its own: the phone's 404 is what
+        // puts it in the server's queue, and the area is usually built minutes
+        // later (`docs/tile-autobuild.md`). Calling that unavailable reads as a
+        // refusal and it is not one.
+        if (t.waitingBuild > 0) parts.add("${t.waitingBuild} building")
+        // The one honest never, and it is rare -- 1 of 26 squares over Barcelona.
+        if (t.noData > 0) parts.add("${t.noData} with no map data")
+        if (t.stuck > 0) parts.add("${t.stuck} gave up")
         val remaining = (t.remainingBytes - t.inFlightBytes).coerceAtLeast(0L)
         if (remaining > 0) parts.add("${TileFormat.bytes(remaining.toInt())} left")
         snap.etaSeconds?.let { parts.add("~${TileFormat.duration(it.toInt())}") }
@@ -533,8 +540,9 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
             val t = row.totals
             val detail = buildString {
                 append(t.sent).append('/').append(t.tiles).append(" sent")
-                if (t.waitingBuild > 0) append("   ").append(t.waitingBuild).append(" waiting")
-                if (t.unavailable > 0) append("   ").append(t.unavailable).append(" unavailable")
+                if (t.waitingBuild > 0) append("   ").append(t.waitingBuild).append(" building")
+                if (t.noData > 0) append("   ").append(t.noData).append(" no data")
+                if (t.stuck > 0) append("   ").append(t.stuck).append(" gave up")
                 val left = (t.remainingBytes - t.inFlightBytes).coerceAtLeast(0L)
                 if (left > 0) append("   ").append(TileFormat.bytes(left.toInt())).append(" left")
             }

@@ -202,7 +202,7 @@ class TileOutboxTest {
         // Past the server's own per cell cooldown nothing further gets built for
         // this ground, so it stops being asked about too.
         assertTrue(box.dueForIndexRead(t0 + 24 * hour).isEmpty())
-        assertEquals(1, box.totals(t0 + 24 * hour).unavailable)
+        assertEquals(1, box.totals(t0 + 24 * hour).stuck)
         // The clock runs from the ask, not from the last look.
         assertEquals(t0, box.items.first().queuedAtMs)
     }
@@ -232,7 +232,11 @@ class TileOutboxTest {
         assertEquals(TileState.ABSENT, box.stateOf(box.items.first(), t0))
         assertNull(box.next(t0 + 48 * hour))
         assertTrue(box.dueForIndexRead(t0 + 48 * hour).isEmpty())
-        assertEquals(1, box.totals(t0).unavailable)
+        // Counted apart from the ones this side gave up on: a square with no map
+        // data is the server's answer, not our failure, and the screen says so
+        // in its own words.
+        assertEquals(1, box.totals(t0).noData)
+        assertEquals(0, box.totals(t0).stuck)
         assertEquals(0L, box.totals(t0).remainingBytes)
     }
 
@@ -376,7 +380,7 @@ class TileOutboxTest {
         assertEquals(0, totals.sent)
         assertEquals(55, totals.queued)
         assertEquals(13, totals.waitingBuild)
-        assertEquals(3, totals.unavailable)
+        assertEquals(3, totals.noData)
         assertEquals(55 * 300_000L, totals.remainingBytes)
         assertEquals(1833L, totals.etaSeconds(TilePlan.START_BYTES_PER_SECOND))
 
@@ -392,7 +396,7 @@ class TileOutboxTest {
         assertEquals(31, totals.sent)
         assertEquals(24, totals.queued)
         assertEquals(13, totals.waitingBuild)
-        assertEquals(3, totals.unavailable)
+        assertEquals(3, totals.noData)
         assertEquals(31 * 300_000L, totals.sentBytes)
         assertEquals(24 * 300_000L, totals.remainingBytes)
     }
