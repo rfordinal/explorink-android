@@ -339,6 +339,10 @@ class TileOutboxController(
      */
     fun lookUpAndAsk() {
         if (askScanner.running) return
+        // Cheapest question first, so a timer can call this every minute without
+        // spending a request. `TileOutbox`'s backoff is what decides how often
+        // anything is actually due -- 5 minutes, then 15, then hourly.
+        if (outbox.dueForIndexRead(now()).isEmpty()) return
         val fmt = device?.tileFormat
         mapsetSource.read(fmt) { result ->
             val built = when (result) {

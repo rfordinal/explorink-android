@@ -76,6 +76,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         /** How often the policy is re-evaluated. Cheap; the decision is not the cost. */
         private const val TICK_MS = 1000L
 
+        /** How often the outbox looks its waiting squares up again. See [outboxRecheck]. */
+        private const val OUTBOX_RECHECK_MS = 60_000L
+
         /** Ask Android for fixes faster than we send, so a send is never stale. */
         private const val LOCATION_INTERVAL_MS = 1000L
 
@@ -407,6 +410,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         )
         createChannel()
         registerReceiver(btReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
+        // Not tied to the link: see [outboxRecheck].
+        main.postDelayed(outboxRecheck, OUTBOX_RECHECK_MS)
         addEvent("service started")
     }
 
@@ -517,6 +522,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     override fun onDestroy() {
         isRunning = false
         stopTicker()
+        main.removeCallbacks(outboxRecheck)
         cancelIdleStop()
         try {
             unregisterReceiver(btReceiver)
@@ -1666,6 +1672,30 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     }
 
     // --- sending --------------------------------------------------------
+
+    /**
+     * Looks the queue's waiting squares up again, on its own.
+     *
+     * **The rider is not the trigger.** Ground the server has not built resolves
+     * on its own -- measured 2026-09-02, five minutes from the ask to a finished
+     * z11 cell -- and until this, the only things that noticed were queueing a
+     * zone, pressing Continue and connecting a device. A rider who queued a city
+     * and put the phone down would have found the same "building" an hour later.
+     *
+     * A minute is the tick, not the rate: [TileOutbox]'s own backoff decides what
+     * is due (five minutes, then fifteen, then hourly), and [lookUpAndAsk] returns
+     * without a request when nothing is. So this costs one list walk a minute and
+     * nothing else while the queue is quiet.
+     *
+     * Runs whether or not a device is connected. The whole pre-trip case is a
+     * rider at home with the reader in a drawer.
+     */
+    private val outboxRecheck = object : Runnable {
+        override fun run() {
+            outboxController.lookUpAndAsk()
+            main.postDelayed(this, OUTBOX_RECHECK_MS)
+        }
+    }
 
     private val sender = object : Runnable {
         override fun run() {
