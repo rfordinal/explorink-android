@@ -20,6 +20,25 @@ import org.junit.Test
  */
 class TileOutboxControllerTest {
 
+    /**
+     * The compiled-in guess has to name the tree the firmware actually reads.
+     *
+     * It is not a harmless default. The pre-trip planner runs with no device in
+     * the room -- that is the point of it -- so this number is what a rider's
+     * first plan is measured against. It said 2 until 2026-09-02, and `/v2/` is
+     * an abandoned tree: every index block answers 404 and `mapset.json` lists
+     * zero areas, so a real phone reported "0 of 26 squares available" for
+     * ground where all 26 existed.
+     *
+     * **Bump it with the firmware.** `MapTileReader::kFormatVersion` is the
+     * authority; this test exists so a firmware bump cannot leave the app
+     * silently reading an empty tree.
+     */
+    @Test
+    fun the_compiled_in_format_guess_names_the_tree_the_firmware_reads() {
+        assertEquals(4, CdnTileSource.DEFAULT_FORMAT_VERSION)
+    }
+
     // Three real Barcelona squares. All in one z7 index block (7/64/47), so one
     // span answers for all three -- the 20 km box of `docs/send-tiles-plan.md`.
     private val a = TileRef(13, 4144, 3059)

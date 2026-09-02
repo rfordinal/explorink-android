@@ -667,6 +667,16 @@ class TileOutboxController(
         val complete: Boolean,
         /** Null when it could not be read; the plan is then a floor, not the answer. */
         val problem: String? = null,
+        /**
+         * The `/v<N>/` tree this plan is about.
+         *
+         * Stated rather than assumed, because planning takes no link and the
+         * number can therefore be a guess. Against the wrong tree every answer
+         * is "nothing exists here" and nothing on the screen said why -- seen on
+         * a real phone 2026-09-02, planning `/v2/` (an abandoned tree, index
+         * 404, zero areas) while the world sat under `/v4/`.
+         */
+        val formatVersion: Int = CdnTileSource.DEFAULT_FORMAT_VERSION,
     )
 
     /**
@@ -694,7 +704,14 @@ class TileOutboxController(
     ) {
         val tiles = TileBox.tilesFor(latDeg, lonDeg, sideKm)
         if (tiles.isEmpty()) {
-            done(Plan(emptyList(), TilePlan.summarize(emptyList()), complete = true))
+            done(
+                Plan(
+                    entries = emptyList(),
+                    summary = TilePlan.summarize(emptyList()),
+                    complete = true,
+                    formatVersion = formatVersion ?: CdnTileSource.DEFAULT_FORMAT_VERSION,
+                )
+            )
             return
         }
         mapsetSource.read(formatVersion) { mapset ->
@@ -719,6 +736,7 @@ class TileOutboxController(
                     }
                     done(
                         Plan(
+                            formatVersion = formatVersion ?: CdnTileSource.DEFAULT_FORMAT_VERSION,
                             entries = entries,
                             summary = TilePlan.summarize(entries),
                             complete = summary.complete && areas != null,

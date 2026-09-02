@@ -63,6 +63,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
          */
         const val ACTION_WAKE = "org.explorink.gpsbridge.WAKE"
         const val ACTION_STOP = "org.explorink.gpsbridge.STOP"
+
+        /** App-private, and it holds one number: see [deviceTileFormat]. */
+        private const val PREFS = "bridge"
+        private const val PREF_TILE_FORMAT = "device_tile_format"
         const val ACTION_START_RECORDING = "org.explorink.gpsbridge.START_REC"
         const val ACTION_STOP_RECORDING = "org.explorink.gpsbridge.STOP_REC"
 
@@ -251,6 +255,29 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
      * (found alongside the matching gap in [FreshnessChecker]).
      */
     private var deviceTileFormat: Int? = null
+        set(value) {
+            if (value == null || value == field) return
+            field = value
+            // Remembered across restarts, because the pre-trip planner runs with
+            // no device in the room at all: the rider picks a city at home and
+            // the app has to know which `/v<N>/` tree to read the index out of.
+            // Without this it fell back to the compiled-in guess every cold
+            // start and reported an empty world (measured on a real phone,
+            // 2026-09-02 -- "0 of 26 squares available" where all 26 existed).
+            //
+            // The device stays authoritative: this is only ever written from
+            // something a device said, and a fresh `info` overwrites it.
+            runCatching {
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putInt(PREF_TILE_FORMAT, value).apply()
+            }
+        }
+
+    /** What the last device to speak said it reads, or null if none ever has. */
+    private fun rememberedTileFormat(): Int? = runCatching {
+        val v = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(PREF_TILE_FORMAT, 0)
+        if (v > 0) v else null
+    }.getOrNull()
     /** Last line about a tile fetch, for the one window. Null until one happens. */
     private var tileFetchStatus: String? = null
     private var locationManager: LocationManager? = null
@@ -1178,7 +1205,16 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         lonDeg: Double,
         sideKm: Double,
         done: (TileOutboxController.Plan) -> Unit,
-    ) = outboxController.plan(latDeg, lonDeg, sideKm, deviceTileFormat, done)
+    ) = outboxController.plan(
+        latDeg,
+        lonDeg,
+        sideKm,
+        // This run's answer first, then what any earlier device said. Planning
+        // deliberately needs no link ([TileOutboxController.plan]), so on a cold
+        // start with the device in a drawer there is nothing else to go on.
+        deviceTileFormat ?: outboxController.device?.tileFormat ?: rememberedTileFormat(),
+        done,
+    )
 
     fun outboxCancelPlan() = outboxController.cancelPlan()
 
@@ -1406,6 +1442,12 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
     private val outboxListener = object : TileOutboxController.Listener {
         override fun onOutboxChanged() {
+            // `info` is the only place a device with nothing missing ever states
+            // its tile format, and the pre-trip planner needs that number with
+            // no device present at all. Copying it here puts it through
+            // [deviceTileFormat]'s setter, which is what remembers it across
+            // restarts.
+            outboxController.device?.tileFormat?.let { deviceTileFormat = it }
             notifyObserver()
         }
 

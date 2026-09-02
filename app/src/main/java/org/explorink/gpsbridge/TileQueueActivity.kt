@@ -464,6 +464,9 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         if (s.absent > 0) out.append("${s.absent} have no map data (sea, or empty)\n")
         if (s.unknown > 0) out.append("${s.unknown} could not be checked\n")
         p.problem?.let { out.append(it).append('\n') }
+        // Which tree the answer is about. Silent before 2026-09-02, and that
+        // silence is what made a wrong version look like an empty world.
+        out.append("map format v${p.formatVersion}\n")
         return out.toString().trimEnd()
     }
 
