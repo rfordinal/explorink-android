@@ -106,7 +106,10 @@ class TileOutboxControllerTest {
 
         assertEquals(0, h.pusher.batches.size)
         assertEquals(DeviceInfo.Screen.UNSTATED, h.controller.device!!.screen)
-        assertTrue(h.controller.blocker!!.contains("does not say"))
+        // The wording matters: it must not send the rider after an update that
+        // does not exist. The field lives on an unmerged branch.
+        assertTrue(h.controller.blocker!!.contains("cannot say"))
+        assertFalse(h.controller.blocker!!.contains("update"))
     }
 
     @Test

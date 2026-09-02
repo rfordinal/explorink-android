@@ -499,7 +499,12 @@ class TileOutboxController(
                 // Absent is "cannot say", never "map". Refusing here is refusing
                 // to start a half-hour batch on a build that has no way to show
                 // it is running, and no way to be checked.
-                refuse("this firmware does not say which screen it is on -- update it")
+                // Not "update it". Nothing to update to: the field only exists on
+                // an unmerged branch, so telling a rider to go and get it sends
+                // them after something that is not published. Say what is true --
+                // this build cannot answer -- and leave the fix to whoever ships
+                // the firmware.
+                refuse("this device's firmware cannot say which screen it is on, so a batch is not safe to start")
                 return
             }
 
