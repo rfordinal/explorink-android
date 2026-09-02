@@ -309,8 +309,61 @@ class TileOutboxController(
         save()
         status = "queued $label"
         listener?.onOutboxChanged()
+        // Ask the server for whatever this zone needs built, **now and without a
+        // device**. The pre-trip case is a rider at home with the reader in a
+        // drawer, and the round below needs a link and a device on its Sync map
+        // tiles screen -- so leaving the ask inside the round meant the ground
+        // nobody has ridden was never asked for at all, which is the one thing
+        // this feature exists to fix. Found while trying to prove the ask worked
+        // and finding the simulator had gone to sleep, 2026-09-02.
+        lookUpAndAsk()
         drain()
         return zoneId
+    }
+
+    private val askScanner = IndexScanner(indexSource)
+
+    /**
+     * Reads the index for whatever is due and asks the server to build what is
+     * not there. **Needs no link and no device.**
+     *
+     * The same two CDN reads the round makes, minus the device half: what the
+     * server has built ([MapsetSource]) and what the index says about each square
+     * ([IndexScanner]), then one ask per square that is missing
+     * ([askForWhatIsNotBuilt]). Everything it learns lands in the outbox, so when
+     * a device does turn up the round finds the work already sorted.
+     *
+     * Silent about failures. No network at home means the ask happens on the next
+     * round or the next Continue; nothing about the rider's queue changes.
+     */
+    fun lookUpAndAsk() {
+        if (askScanner.running) return
+        val fmt = device?.tileFormat
+        mapsetSource.read(fmt) { result ->
+            val built = when (result) {
+                is MapsetSource.Result.Areas -> TilePlan.BuiltGround(result.areas)
+                is MapsetSource.Result.NothingPublished -> TilePlan.BuiltGround()
+                // Never an empty area list: that would mark a whole city ABSENT
+                // on the strength of one flight-mode toggle.
+                is MapsetSource.Result.Unreachable -> return@read
+            }
+            val due = outbox.dueForIndexRead(now())
+            if (due.isEmpty()) return@read
+            askScanner.start(due, fmt, object : IndexScanner.Listener {
+                override fun onTilesRead(reads: List<IndexScanner.Read>) {
+                    val at = now()
+                    for (r in reads) outbox.observe(r.tile, r.reading, built.covers(r.tile), at)
+                }
+
+                override fun onScanFinished(summary: IndexScanner.Summary) {
+                    save()
+                    listener?.onOutboxChanged()
+                    askForWhatIsNotBuilt(now()) {
+                        listener?.onOutboxChanged()
+                    }
+                }
+            })
+        }
     }
 
     /** Drops a zone and its items. Receipts are kept -- see [TileOutbox.removeZone]. */

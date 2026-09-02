@@ -397,7 +397,14 @@ class TileOutboxControllerTest {
         assertEquals(1, h.outbox.zones.size)
         assertEquals(26, h.outbox.items.size)
         assertNotNull(h.store.saved)
-        assertEquals(listOf("info"), h.transport.commands)
+        // **No `info`, and that is the point.** Queueing now does its own CDN
+        // lookup first (`lookUpAndAsk`, which needs no device), so by the time
+        // the round is offered there is nothing left to look up and nothing that
+        // the index says is present to push. A round with nothing to do says
+        // nothing to the device rather than opening a conversation to announce a
+        // batch of zero. The fake index answers no block for this ground, so
+        // every square lands in the waiting-for-a-build state.
+        assertEquals(emptyList<String>(), h.transport.commands)
     }
 
     @Test
