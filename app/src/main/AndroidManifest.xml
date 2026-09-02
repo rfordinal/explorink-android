@@ -31,7 +31,11 @@
     <!-- Partial wake lock only: keeps the 5 s send timer firing in Doze. The
          screen is never held on. -->
     <!-- Tiles come from the public CDN over HTTPS (TileSource / CdnTileSource).
-         Nothing else in the app talks to the network. -->
+         One other host, and only one: a Google Maps share hands over a
+         `maps.app.goo.gl` short link with no coordinates in it, so expanding it
+         is the only way that flow can finish (MapsShortLink). One HEAD request,
+         the Location header read and the redirect not followed, and only when
+         the rider has just shared a link, never in the background. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 

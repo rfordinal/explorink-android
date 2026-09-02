@@ -347,7 +347,29 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
             toast("The bridge is not running. Open the main screen first.")
             return
         }
-        when (val parsed = PinCoordinates.parse(etArea.text.toString())) {
+        // A share from Google Maps is a short link and nothing else, so expand it
+        // before the parser gets a look. Only here, only on the rider's own press
+        // ([MapsShortLink]).
+        val typedText = etArea.text.toString()
+        if (MapsShortLink.isShortLink(typedText)) {
+            tvProblem.visibility = View.GONE
+            tvPlan.visibility = View.VISIBLE
+            tvPlan.text = "opening that link..."
+            MapsShortLink.resolve(typedText) { expanded, why ->
+                if (expanded == null) {
+                    tvPlan.visibility = View.GONE
+                    tvProblem.visibility = View.VISIBLE
+                    tvProblem.text = why ?: "that link could not be opened"
+                } else {
+                    // Written back so the rider can see what it actually was, and
+                    // so a second press costs no second request.
+                    etArea.setText(expanded)
+                    onPlanPressed()
+                }
+            }
+            return
+        }
+        when (val parsed = PinCoordinates.parse(typedText)) {
             is PinCoordinates.Result.Failure -> {
                 tvProblem.visibility = View.VISIBLE
                 tvProblem.text = parsed.reason

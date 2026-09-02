@@ -378,6 +378,20 @@ Shown small and grey at the bottom of the one window, and written into every
 recording's header as `app_version` — on a sideloaded debug build, "which of
 several builds is on the phone" is otherwise unanswerable.
 
+## The two hosts this app talks to
+
+**The tile CDN**, for everything map: tiles, the freshness index, the built-area
+list (`CdnTileSource`, `CdnIndexSource`, `CdnMapsetSource`).
+
+**A maps shortener**, once, and only when the rider has just shared a link. A
+Google Maps share hands over `https://maps.app.goo.gl/<id>` with no coordinates
+anywhere in the text, so the pre-trip area picker cannot finish without expanding
+it. `MapsShortLink` sends one HEAD request, reads the `Location` header and does
+not follow it, so no Google page is ever fetched. It never runs in the background
+and never on a schedule.
+
+Nothing else. There is no analytics, no crash reporter and no update check.
+
 ## Files
 
 ```
