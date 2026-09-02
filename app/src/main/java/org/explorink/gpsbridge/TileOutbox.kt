@@ -355,6 +355,35 @@ class TileOutbox(
      * verdict at all. It is a transient failure and nothing else, because "I
      * could not ask" must never read as "it is not there".
      */
+    /**
+     * The server answered for this square directly: it is there, whatever the
+     * index says.
+     *
+     * **The index lags the tiles it describes.** Measured 2026-09-02: the tile
+     * host built a z11 cell at 13:26, and at 13:29 three of its z13 squares
+     * answered `200` while the index block that covers them still read absent and
+     * carried a `last-modified` an hour older. The phone decides what to send from
+     * the index, so without this a rider would sit watching "building" over ground
+     * that is already on the server.
+     *
+     * Size and content id stay unknown, and that is honest rather than lazy: they
+     * come from the index and the index does not have them yet. A fetch with no
+     * expected content id skips the version check, which is the right trade for a
+     * tile that has only just appeared -- there is no older copy for it to be
+     * confused with.
+     */
+    fun markServerHasIt(tile: TileRef, nowMs: Long) {
+        updateAll(tile.key) {
+            if (it.cdn == TilePlan.State.PRESENT) it
+            else it.copy(
+                cdn = TilePlan.State.PRESENT,
+                nextTryAtMs = 0L,
+                buildChecks = 0,
+                error = null,
+            )
+        }
+    }
+
     fun observe(tile: TileRef, reading: TilePlan.Reading, groundIsBuilt: Boolean, nowMs: Long) {
         val entry = TilePlan.Entry.of(tile, reading, groundIsBuilt)
         if (entry.state == TilePlan.State.UNKNOWN) {

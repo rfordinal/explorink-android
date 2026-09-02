@@ -67,8 +67,8 @@ interface TileSource {
      *
      * Default no-op, because a source that is not the CDN has no such channel.
      */
-    fun prime(z: Int, col: Long, row: Long, formatVersion: Int?, done: () -> Unit) {
-        done()
+    fun prime(z: Int, col: Long, row: Long, formatVersion: Int?, done: (exists: Boolean) -> Unit) {
+        done(false)
     }
 
     /** For the UI and the log: what this source is, in a few words. */
@@ -238,29 +238,34 @@ class CdnTileSource(
      * says nothing about the method (`docs/tile-autobuild.md`, the log format),
      * so a HEAD 404 ranks exactly like a GET one and costs neither side a body.
      *
-     * The answer is discarded on purpose. A 404 is the whole point of the call,
-     * a 200 means the index was behind and the next round will see it, and a
-     * failure means the rider had no network -- none of the three changes what
-     * this side does next.
+     * The answer is acted on. A 404 is the whole point of the call. A **200 means
+     * the index is behind the tiles it describes**, which is a real state rather
+     * than a curiosity: measured 2026-09-02, a cell built at 13:26 was serving
+     * its squares at 13:29 while the index still read absent. The caller marks
+     * those ready rather than leaving the rider watching "building" over ground
+     * that is already there. A failure means no network, and changes nothing.
      */
-    override fun prime(z: Int, col: Long, row: Long, formatVersion: Int?, done: () -> Unit) {
+    override fun prime(z: Int, col: Long, row: Long, formatVersion: Int?, done: (exists: Boolean) -> Unit) {
         io.execute {
             val version = formatVersion ?: defaultFormatVersion
             val url = "$baseUrl/v$version/${TransferFrames.tileRelPath(z, col, row)}"
             var conn: HttpURLConnection? = null
+            var exists = false
             try {
                 conn = (URL(url).openConnection() as HttpURLConnection).apply {
                     requestMethod = "HEAD"
                     connectTimeout = CONNECT_TIMEOUT_MS
                     readTimeout = READ_TIMEOUT_MS
                 }
-                Log.i(TAG, "asked the server for z$z $col/$row -> HTTP ${conn.responseCode}")
+                val code = conn.responseCode
+                exists = code == 200
+                Log.i(TAG, "asked the server for z$z $col/$row -> HTTP $code")
             } catch (t: Throwable) {
                 Log.w(TAG, "could not ask for $url: ${t.javaClass.simpleName}")
             } finally {
                 conn?.disconnect()
             }
-            MainThread.post { done() }
+            MainThread.post { done(exists) }
         }
     }
 

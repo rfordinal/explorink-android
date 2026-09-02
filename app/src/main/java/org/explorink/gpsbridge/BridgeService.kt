@@ -401,7 +401,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             // The CDN is the only thing that can tell the tile host a square is
             // wanted, and it does it by 404ing (TileSource.prime).
             primer = TileOutboxController.Primer { tile, fmt, done ->
-                tileSource.prime(tile.z, tile.col, tile.row, fmt, done)
+                tileSource.prime(tile.z, tile.col, tile.row, fmt) { exists -> done(exists) }
             },
             listener = outboxListener,
         )

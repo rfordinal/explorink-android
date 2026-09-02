@@ -69,7 +69,7 @@ class TileOutboxController(
      * ground nobody has ridden. See [askForWhatIsNotBuilt]. Defaults to a no-op so
      * a test that is not about priming does not have to care.
      */
-    private val primer: Primer = Primer { _, _, done -> done() },
+    private val primer: Primer = Primer { _, _, done -> done(false) },
     private val listener: Listener? = null,
     /** Wall clock in epoch milliseconds. Injected so the backoff is testable. */
     private val now: () -> Long = { System.currentTimeMillis() },
@@ -77,7 +77,8 @@ class TileOutboxController(
 
     /** One ask, no download. [TileSource.prime] is the real one. */
     fun interface Primer {
-        fun prime(tile: TileRef, formatVersion: Int?, done: () -> Unit)
+        /** [done] is told whether the server already has it -- see [TileSource.prime]. */
+        fun prime(tile: TileRef, formatVersion: Int?, done: (exists: Boolean) -> Unit)
     }
 
     companion object {
@@ -425,6 +426,13 @@ class TileOutboxController(
      */
     fun startDraining(): String? {
         paused = false
+        // The CDN half first, and it needs no device. A rider pressing Continue
+        // over a queue that is entirely waiting on builds wants to know whether
+        // the server has made them yet -- and the round below cannot answer that
+        // without a link, so leaving it to the round meant Continue did nothing
+        // visible at all. Seen on the phone 2026-09-02: the server had built a
+        // cell five minutes earlier and the screen still said 33 building.
+        lookUpAndAsk()
         return drain()
     }
 
@@ -621,7 +629,12 @@ class TileOutboxController(
                 return
             }
             val t = waiting[i++]
-            primer.prime(t, device?.tileFormat) { next() }
+            primer.prime(t, device?.tileFormat) { exists ->
+                // The index said this square was not there and the server says it
+                // is. The index lags; believe the server ([TileOutbox.markServerHasIt]).
+                if (exists) outbox.markServerHasIt(t, now())
+                next()
+            }
         }
         next()
     }

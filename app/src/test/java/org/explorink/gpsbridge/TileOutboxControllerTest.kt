@@ -33,13 +33,15 @@ class TileOutboxControllerTest {
         val asked = ArrayList<String>()
         val primer = TileOutboxController.Primer { tile, _, done ->
             asked.add(tile.key)
-            done()
+            // false: the server does not have it, which is the ordinary answer
+            // and the reason the ask went out at all.
+            done(false)
         }
         assertNotNull(primer)
         // The interface is what the round drives; the wiring that turns it into a
         // real HEAD is CdnTileSource.prime, which needs the network and is not
         // tested here.
-        primer.prime(TileRef(13, 4146, 3061), 4) {}
+        primer.prime(TileRef(13, 4146, 3061), 4) { }
         assertEquals(listOf("13/4146/3061"), asked)
     }
 
@@ -124,6 +126,11 @@ class TileOutboxControllerTest {
     @Test
     fun `nothing is said on the channel while another conversation holds it`() {
         val h = Harness(a)
+        // Present on the CDN, so the round has something to push once the gate
+        // opens. Without it `startDraining` now looks the square up first, finds
+        // it waiting on a build, and correctly says nothing to the device -- true
+        // behaviour, but it would hide the thing this test is about.
+        h.index.put(a, 0xabc, 1000)
         h.gate.reason = "a pin command is running"
         h.controller.onConnected()
         h.scheduler.fire(TileOutboxController.CONNECT_SETTLE_MS)
