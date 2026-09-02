@@ -1677,8 +1677,12 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
      * Looks the queue's waiting squares up again, on its own.
      *
      * **The rider is not the trigger.** Ground the server has not built resolves
-     * on its own -- measured 2026-09-02, five minutes from the ask to a finished
-     * z11 cell -- and until this, the only things that noticed were queueing a
+     * on its own -- measured 2026-09-02, six minutes from the ask to the first
+     * finished z11 cell and thirty for all four the box fell in. **Wall clock on
+     * an afternoon when most Overpass mirrors were down**, not the queue's own
+     * cost: the generator itself is 19-24 s per cell (`docs/tile-autobuild.md`,
+     * "Deploy"). Expect minutes, and how many is Overpass's business rather than
+     * ours. Until this, the only things that noticed were queueing a
      * zone, pressing Continue and connecting a device. A rider who queued a city
      * and put the phone down would have found the same "building" an hour later.
      *

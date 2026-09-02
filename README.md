@@ -479,6 +479,15 @@ app/src/test/java/org/explorink/gpsbridge/
 
 ## Build
 
+**`org.json` cannot be used for anything a test must check.**
+`unitTests.isReturnDefaultValues = true` (`app/build.gradle.kts`) stubs it:
+`JSONObject("{\"a\":1}").getInt("a")` returns **0** in a unit test and throws
+nothing. Anything parsed with it is unverifiable off the device, which is the
+opposite of what a documented on-disk format needs. Use `Json.kt`. This has cost
+two features their afternoon now -- the wallet's `state.json` and the tile
+outbox.
+
+
 From the repo root:
 
 ```bash

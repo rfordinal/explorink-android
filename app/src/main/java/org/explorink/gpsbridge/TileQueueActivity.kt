@@ -559,7 +559,10 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         }
         out.append('\n')
         if (s.waitingBuild > 0) {
-            out.append("${s.waitingBuild} not built yet -- the map server builds them on ask, usually minutes\n")
+            // "minutes each", not "usually minutes": the server builds one z11
+            // cell at a time and a big box spans a dozen, so the total is minutes
+            // multiplied, not minutes (measured 2026-09-02, four cells in thirty).
+            out.append("${s.waitingBuild} not built yet -- the map server builds them on ask, minutes each\n")
         }
         if (s.absent > 0) out.append("${s.absent} have no map data (sea, or empty)\n")
         if (s.unknown > 0) out.append("${s.unknown} could not be checked\n")
