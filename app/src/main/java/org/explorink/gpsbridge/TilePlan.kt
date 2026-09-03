@@ -42,6 +42,13 @@ object TilePlan {
      * and 0.33 with the phone's screen off -- so [etaSeconds] takes a rate
      * rather than reading this, and the caller feeds it what the last real batch
      * actually did. This is only what to say before there has been a batch.
+     *
+     * Those three readings are all the link **before** 2026-09-03. The same
+     * link does 13.6 kB/s at MTU 517 with a 15 ms interval, once the firmware
+     * stopped offering 30 ms as an acceptable answer to the phone's own
+     * request (`docs/ble-map-transfer-protocol.md`, "Two levers"). This
+     * constant stays 9000 anyway: a device on older firmware still does 3.9,
+     * and this is the figure for before anything is known.
      */
     const val START_BYTES_PER_SECOND = 9000.0
 
