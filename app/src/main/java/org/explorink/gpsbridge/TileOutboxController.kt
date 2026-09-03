@@ -337,12 +337,12 @@ class TileOutboxController(
      * Silent about failures. No network at home means the ask happens on the next
      * round or the next Continue; nothing about the rider's queue changes.
      */
-    fun lookUpAndAsk() {
+    fun lookUpAndAsk(ignoreBackoff: Boolean = false) {
         if (askScanner.running) return
         // Cheapest question first, so a timer can call this every minute without
         // spending a request. `TileOutbox`'s backoff is what decides how often
         // anything is actually due -- 5 minutes, then 15, then hourly.
-        if (outbox.dueForIndexRead(now()).isEmpty()) return
+        if (outbox.dueForIndexRead(now(), ignoreBackoff).isEmpty()) return
         val fmt = device?.tileFormat
         mapsetSource.read(fmt) { result ->
             val built = when (result) {
@@ -352,7 +352,7 @@ class TileOutboxController(
                 // on the strength of one flight-mode toggle.
                 is MapsetSource.Result.Unreachable -> return@read
             }
-            val due = outbox.dueForIndexRead(now())
+            val due = outbox.dueForIndexRead(now(), ignoreBackoff)
             if (due.isEmpty()) return@read
             askScanner.start(due, fmt, object : IndexScanner.Listener {
                 override fun onTilesRead(reads: List<IndexScanner.Read>) {
@@ -436,7 +436,8 @@ class TileOutboxController(
         // without a link, so leaving it to the round meant Continue did nothing
         // visible at all. Seen on the phone 2026-09-02: the server had built a
         // cell five minutes earlier and the screen still said 33 building.
-        lookUpAndAsk()
+        // A press is an explicit ask and outranks the schedule.
+        lookUpAndAsk(ignoreBackoff = true)
         return drain()
     }
 
