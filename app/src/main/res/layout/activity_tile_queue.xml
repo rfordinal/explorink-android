@@ -223,6 +223,26 @@
         </LinearLayout>
     </ScrollView>
 
+    <!-- Four equal quarters of the width, and the default Button style spends
+         most of a quarter on caps and padding: "Continue" came out wrapped as
+         "CONTINU / E" on a 720 px phone. Sentence case, no default side padding
+         and one line each, so a label can never break mid-word again. This
+         screen is read, not shouted at, and the rest of it is sentence case
+         already. Seen on a Galaxy S24 Ultra, 2026-09-03. -->
+    <!-- Why Continue is greyed out, next to Continue. The state that disables it
+         is stated at the top of the screen ("map areas: sending"), which is the
+         wrong end of a scrolling page from the button the rider is pressing: a
+         disabled button with its reason off-screen reads as a broken button.
+         Reported that way on 2026-09-03. -->
+    <TextView
+        android:id="@+id/tvQueueWhy"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -234,6 +254,12 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:maxLines="1"
+            android:minWidth="0dp"
+            android:paddingStart="2dp"
+            android:paddingEnd="2dp"
+            android:textAllCaps="false"
+            android:textSize="14sp"
             android:text="Continue" />
 
         <Button
@@ -241,6 +267,12 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:maxLines="1"
+            android:minWidth="0dp"
+            android:paddingStart="2dp"
+            android:paddingEnd="2dp"
+            android:textAllCaps="false"
+            android:textSize="14sp"
             android:text="Pause" />
 
         <Button
@@ -248,6 +280,12 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:maxLines="1"
+            android:minWidth="0dp"
+            android:paddingStart="2dp"
+            android:paddingEnd="2dp"
+            android:textAllCaps="false"
+            android:textSize="14sp"
             android:text="Clear sent" />
 
         <Button
@@ -255,6 +293,12 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:maxLines="1"
+            android:minWidth="0dp"
+            android:paddingStart="2dp"
+            android:paddingEnd="2dp"
+            android:textAllCaps="false"
+            android:textSize="14sp"
             android:text="Close" />
     </LinearLayout>
 </LinearLayout>

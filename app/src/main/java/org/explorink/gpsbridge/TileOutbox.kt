@@ -440,13 +440,24 @@ class TileOutbox(
      * waiting item is fetched once per round and never in a loop
      * (`docs/tile-autobuild.md`).
      */
-    fun dueForIndexRead(nowMs: Long): List<TileRef> {
+    /**
+     * [ignoreBackoff] is for a rider pressing Continue, and nothing else.
+     *
+     * The backoff exists so the app does not sit on the tile server; it is not
+     * there to ignore the person holding the phone. Pressing Continue two
+     * minutes after the last automatic check used to do nothing at all and say
+     * nothing about it, which reads as a broken button -- reported from the
+     * device, 2026-09-03, on a queue with 105 squares waiting on builds.
+     *
+     * A press is one look-up, not a loop, so it cannot become a poll.
+     */
+    fun dueForIndexRead(nowMs: Long, ignoreBackoff: Boolean = false): List<TileRef> {
         val seen = HashSet<String>()
         val out = mutableListOf<TileRef>()
         for (it in plan) {
             if (isSent(it.key) || it.terminal) continue
             if (!seen.add(it.key)) continue
-            if (nowMs < it.nextTryAtMs) continue
+            if (!ignoreBackoff && nowMs < it.nextTryAtMs) continue
             when (it.cdn) {
                 TilePlan.State.UNKNOWN -> out.add(it.tile)
                 TilePlan.State.WAITING_BUILD ->

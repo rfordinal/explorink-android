@@ -74,6 +74,7 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
     private lateinit var tvState: TextView
     private lateinit var tvProblem: TextView
     private lateinit var tvStatus: TextView
+    private lateinit var tvWhy: TextView
     private lateinit var tvPlan: TextView
     private lateinit var tvSummary: TextView
     private lateinit var tvCurrent: TextView
@@ -136,6 +137,7 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         tvState = findViewById(R.id.tvQueueState)
         tvProblem = findViewById(R.id.tvQueueProblem)
         tvStatus = findViewById(R.id.tvQueueStatus)
+        tvWhy = findViewById(R.id.tvQueueWhy)
         tvPlan = findViewById(R.id.tvPlan)
         tvSummary = findViewById(R.id.tvSummary)
         tvCurrent = findViewById(R.id.tvCurrent)
@@ -500,6 +502,22 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         btnPause.isEnabled = !snap.paused
         btnContinue.isEnabled = snap.paused || snap.phase == TileOutboxController.Phase.IDLE
         btnPlan.isEnabled = !planning
+
+        // A disabled Continue with no reason next to it reads as a dead button,
+        // and that is exactly how it was reported. There is only one reason it
+        // can be disabled -- a round is already running -- so name that round.
+        val busy = !btnContinue.isEnabled
+        tvWhy.visibility = if (busy) View.VISIBLE else View.GONE
+        if (busy) {
+            tvWhy.text = when (snap.phase) {
+                TileOutboxController.Phase.ASKING_INFO -> "Continue is off: asking the device."
+                TileOutboxController.Phase.READING_MAPSET -> "Continue is off: reading the map server."
+                TileOutboxController.Phase.SCANNING -> "Continue is off: checking the map server."
+                TileOutboxController.Phase.ANNOUNCING -> "Continue is off: telling the device."
+                TileOutboxController.Phase.PUSHING -> "Continue is off: a batch is sending."
+                TileOutboxController.Phase.IDLE -> "Continue is off: a round is running."
+            }
+        }
     }
 
     private fun squares(n: Int): String = if (n == 1) "square" else "squares"
