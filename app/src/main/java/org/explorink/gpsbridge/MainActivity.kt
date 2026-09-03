@@ -139,6 +139,9 @@ class MainActivity : Activity(), BridgeService.Observer {
         btnWake.setOnClickListener { onWakePressed() }
         btnForget.setOnClickListener { onForgetPressed() }
         btnPins.setOnClickListener { startActivity(Intent(this, PinsActivity::class.java)) }
+        findViewById<Button>(R.id.btnMapAreas).setOnClickListener {
+            startActivity(Intent(this, TileQueueActivity::class.java))
+        }
         btnRetry.setOnClickListener { onRetryPressed() }
         btnExport.setOnClickListener { shareLog() }
         btnRecord.setOnClickListener { onRecordPressed() }

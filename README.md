@@ -378,6 +378,20 @@ Shown small and grey at the bottom of the one window, and written into every
 recording's header as `app_version` — on a sideloaded debug build, "which of
 several builds is on the phone" is otherwise unanswerable.
 
+## The two hosts this app talks to
+
+**The tile CDN**, for everything map: tiles, the freshness index, the built-area
+list (`CdnTileSource`, `CdnIndexSource`, `CdnMapsetSource`).
+
+**A maps shortener**, once, and only when the rider has just shared a link. A
+Google Maps share hands over `https://maps.app.goo.gl/<id>` with no coordinates
+anywhere in the text, so the pre-trip area picker cannot finish without expanding
+it. `MapsShortLink` sends one HEAD request, reads the `Location` header and does
+not follow it, so no Google page is ever fetched. It never runs in the background
+and never on a schedule.
+
+Nothing else. There is no analytics, no crash reporter and no update check.
+
 ## Files
 
 ```
@@ -435,6 +449,20 @@ app/src/main/java/org/explorink/gpsbridge/
                         sync screen so panel and phone cannot disagree.
   TileSource.kt        the CDN seam: tiles, with ?crc= and verification.
   IndexSource.kt       the CDN seam for index byte ranges.
+  IndexScanner.kt      a TilePlan.Reading for a whole tile list, one byte-range
+                        read per (block, zoom), sequenced and cancellable.
+  MapsetSource.kt      the CDN's built-area list, which is what tells "nobody
+                        has built this yet" from "this tile never exists".
+  TileBox.kt           centre plus a box side in km -> the tiles that cover it,
+                        coarse zoom first, centre tile first. Pure.
+  TilePlan.kt          index slots -> counts, exact bytes and an ETA, and the
+                        built-ground test behind the three outcomes. Pure.
+  TileOutbox.kt        the pre-trip queue: the receipt ledger, the three
+                        outcomes, the build backoff. Pure, no clock.
+  OutboxStore.kt       that queue on disk, versioned and written atomically.
+                        Format: docs/tile-outbox-format.md in the parent repo.
+  Json.kt              JSON both ways. org.json is a stub under
+                        unitTests.isReturnDefaultValues, so it cannot be used.
   MainThread.kt        hands async work (tile reads, HTTP) back to the main
                         thread, where BleLink and TileFetcher keep their
                         single-threaded state.
@@ -444,10 +472,21 @@ app/src/test/java/org/explorink/gpsbridge/
   TileHeaderTest, TileFormatTest, FreshnessCheckerTest, GattOpQueueTest,
   ScanRetryPolicyTest, BleLineAssemblerTest, BridgeForegroundTest,
   BridgeProgressThrottleTest, PinListTest, PinGeoTest, PinCoordinatesTest,
-  PinManagerTest — 246 tests, pure JVM, no emulator needed.
+  PinManagerTest, TileBoxTest, TilePlanTest, TileOutboxTest, MapsetTest,
+  IndexScannerTest, OutboxStoreTest, JsonTest — 348 tests, pure JVM, no
+  emulator needed.
 ```
 
 ## Build
+
+**`org.json` cannot be used for anything a test must check.**
+`unitTests.isReturnDefaultValues = true` (`app/build.gradle.kts`) stubs it:
+`JSONObject("{\"a\":1}").getInt("a")` returns **0** in a unit test and throws
+nothing. Anything parsed with it is unverifiable off the device, which is the
+opposite of what a documented on-disk format needs. Use `Json.kt`. This has cost
+two features their afternoon now -- the wallet's `state.json` and the tile
+outbox.
+
 
 From the repo root:
 

@@ -31,7 +31,11 @@
     <!-- Partial wake lock only: keeps the 5 s send timer firing in Doze. The
          screen is never held on. -->
     <!-- Tiles come from the public CDN over HTTPS (TileSource / CdnTileSource).
-         Nothing else in the app talks to the network. -->
+         One other host, and only one: a Google Maps share hands over a
+         `maps.app.goo.gl` short link with no coordinates in it, so expanding it
+         is the only way that flow can finish (MapsShortLink). One HEAD request,
+         the Location header read and the redirect not followed, and only when
+         the rider has just shared a link, never in the background. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
@@ -48,6 +52,19 @@
     <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
     <uses-permission
         android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+
+    <!-- Package visibility, and it is load-bearing rather than cosmetic. Since
+         Android 11 an app sees only what it declares, so without this
+         `resolveActivity()` on a geo: URI answers null even with Google Maps
+         installed, and the map-picker button refuses itself. Measured on a
+         Galaxy S24 Ultra 2026-09-02: the button did nothing and said nothing.
+         Declaring the intent, not the package, so any maps app qualifies. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+    </queries>
 
     <uses-feature
         android:name="android.hardware.bluetooth_le"
@@ -87,6 +104,29 @@
             android:name=".PinsActivity"
             android:exported="true"
             android:label="ExplorInk pins"
+            android:launchMode="singleTop"
+            android:parentActivityName=".MainActivity"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <!-- The map-area window. exported=true only for the share filter, the
+             same as the pins one: a maps app hands over shared text, it lands in
+             the coordinate field, and nothing is queued until the rider has seen
+             the plan and confirmed it (TileQueueActivity.prefillFromIntent).
+
+             Two ExplorInk entries now appear in a share sheet, one per window.
+             That is deliberate, a shared place is either a pin or an area to
+             cache, and only the rider knows which, so both labels name what
+             they do rather than naming the app twice. -->
+        <activity
+            android:name=".TileQueueActivity"
+            android:exported="true"
+            android:label="ExplorInk map area"
             android:launchMode="singleTop"
             android:parentActivityName=".MainActivity"
             android:screenOrientation="portrait">

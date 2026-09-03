@@ -63,6 +63,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
          */
         const val ACTION_WAKE = "org.explorink.gpsbridge.WAKE"
         const val ACTION_STOP = "org.explorink.gpsbridge.STOP"
+
+        /** App-private, and it holds one number: see [deviceTileFormat]. */
+        private const val PREFS = "bridge"
+        private const val PREF_TILE_FORMAT = "device_tile_format"
         const val ACTION_START_RECORDING = "org.explorink.gpsbridge.START_REC"
         const val ACTION_STOP_RECORDING = "org.explorink.gpsbridge.STOP_REC"
 
@@ -71,6 +75,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
         /** How often the policy is re-evaluated. Cheap; the decision is not the cost. */
         private const val TICK_MS = 1000L
+
+        /** How often the outbox looks its waiting squares up again. See [outboxRecheck]. */
+        private const val OUTBOX_RECHECK_MS = 60_000L
 
         /** Ask Android for fixes faster than we send, so a send is never stale. */
         private const val LOCATION_INTERVAL_MS = 1000L
@@ -201,6 +208,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private lateinit var indexSource: IndexSource
     private lateinit var freshness: FreshnessChecker
     private lateinit var pins: PinManager
+    private lateinit var mapsetSource: MapsetSource
+    private lateinit var outboxStore: OutboxStore
+    private lateinit var outboxController: TileOutboxController
 
     /**
      * The device's pins as it last reported them, and nothing derived from them.
@@ -248,6 +258,29 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
      * (found alongside the matching gap in [FreshnessChecker]).
      */
     private var deviceTileFormat: Int? = null
+        set(value) {
+            if (value == null || value == field) return
+            field = value
+            // Remembered across restarts, because the pre-trip planner runs with
+            // no device in the room at all: the rider picks a city at home and
+            // the app has to know which `/v<N>/` tree to read the index out of.
+            // Without this it fell back to the compiled-in guess every cold
+            // start and reported an empty world (measured on a real phone,
+            // 2026-09-02 -- "0 of 26 squares available" where all 26 existed).
+            //
+            // The device stays authoritative: this is only ever written from
+            // something a device said, and a fresh `info` overwrites it.
+            runCatching {
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putInt(PREF_TILE_FORMAT, value).apply()
+            }
+        }
+
+    /** What the last device to speak said it reads, or null if none ever has. */
+    private fun rememberedTileFormat(): Int? = runCatching {
+        val v = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(PREF_TILE_FORMAT, 0)
+        if (v > 0) v else null
+    }.getOrNull()
     /** Last line about a tile fetch, for the one window. Null until one happens. */
     private var tileFetchStatus: String? = null
     private var locationManager: LocationManager? = null
@@ -352,8 +385,33 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         tileFetcher = TileFetcher(tileSource, fetchTransport, fetchScheduler, this, expectedContentIds)
         freshness = FreshnessChecker(indexSource, expectedContentIds, fetchTransport, fetchScheduler, this)
         pins = PinManager(pinTransport, fetchScheduler, this)
+        mapsetSource = CdnMapsetSource()
+        // The rider's ask is on disk before this line: a tile item exists
+        // nowhere but that file, so it is read at service start rather than when
+        // a screen happens to open (`docs/tile-outbox-format.md`).
+        outboxStore = OutboxStore(OutboxStore.dirIn(filesDir))
+        outboxController = TileOutboxController(
+            outbox = outboxStore.load(),
+            transport = outboxTransport,
+            mapsetSource = mapsetSource,
+            indexSource = indexSource,
+            pusher = fetcherAsPusher,
+            store = object : TileOutboxController.Store {
+                override fun save(outbox: TileOutbox) = outboxStore.save(outbox)
+            },
+            scheduler = fetchScheduler,
+            gate = outboxGate,
+            // The CDN is the only thing that can tell the tile host a square is
+            // wanted, and it does it by 404ing (TileSource.prime).
+            primer = TileOutboxController.Primer { tile, fmt, done ->
+                tileSource.prime(tile.z, tile.col, tile.row, fmt) { exists -> done(exists) }
+            },
+            listener = outboxListener,
+        )
         createChannel()
         registerReceiver(btReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
+        // Not tied to the link: see [outboxRecheck].
+        main.postDelayed(outboxRecheck, OUTBOX_RECHECK_MS)
         addEvent("service started")
     }
 
@@ -464,6 +522,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     override fun onDestroy() {
         isRunning = false
         stopTicker()
+        main.removeCallbacks(outboxRecheck)
         cancelIdleStop()
         try {
             unregisterReceiver(btReceiver)
@@ -475,8 +534,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         freshness.stop()
         tileFetcher.stop()
         pins.stop()
+        outboxController.stop()
         tileSource.close()
         indexSource.close()
+        mapsetSource.close()
         ble.stop()
         stopRecording()
         releaseWakeLock()
@@ -589,6 +650,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             tileFetcher.onDisconnected()
             freshness.onDisconnected()
             pins.onDisconnected()
+            outboxController.onDisconnected()
             // What the device reported belonged to that link. Keeping it would show
             // the rider a list they could press Delete on, against a device that is
             // not there -- and after a reconnect it may not be on the map screen at
@@ -633,6 +695,11 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
                 // whole time, so their `lastFix` is fresh and this costs one 1 Hz
                 // tick for nothing. Harmless, and not worth a second code path.
                 awaitingFixSinceConnect = true
+                // The persisted queue drains itself, with the rider re-picking
+                // nothing. That is the whole point of persisting it: a city is
+                // more connections than one, and a rider who has to press
+                // Continue on each of them has a queue in name only.
+                outboxController.onConnected()
             } else {
                 armIdleStop()
             }
@@ -792,10 +859,23 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             deferredAsk = line
             return
         }
+        // The outbox's `info` and `push <n>` are conversations on this same
+        // channel and end on the same plain `OK`, so they count here exactly
+        // like the other three. It holds the channel for one command at a time,
+        // never across the whole batch: [TileOutboxController.busy] covers the
+        // scan too, but a scan is byte-range reads of the CDN and no BLE, so the
+        // deferral it causes is seconds, not the twenty minutes the transfer
+        // takes.
+        if ((needTiles || checkTiles) && outboxController.busy) {
+            addEvent("ask deferred: a map-area round is still running")
+            deferredAsk = line
+            return
+        }
 
         tileFetcher.onCommandLine(line)
         freshness.onCommandLine(line)
         pins.onCommandLine(line)
+        outboxController.onCommandLine(line)
     }
 
     /**
@@ -811,9 +891,26 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         if (tileFetcher.phase != TileFetcher.Phase.IDLE) return
         if (freshness.phase != FreshnessChecker.Phase.IDLE) return
         if (pins.busy) return
+        // The outbox counts here for the same reason it counts in
+        // [onCommandLine]: replaying the ask into a live `info` or `push`
+        // conversation is the collision, only from the other side.
+        if (outboxController.busy) return
         deferredAsk = null
         addEvent("running the deferred ask")
         onCommandLine(line)
+    }
+
+    /**
+     * The command channel just came free.
+     *
+     * Order is deliberate: the device's own deferred ask goes first, because it
+     * describes what the rider is looking at right now, and the pre-trip queue
+     * has all the time in the world. [TileOutboxController.startDraining] is a
+     * no-op when there is nothing due, so this cannot loop.
+     */
+    private fun onChannelFree() {
+        runDeferredAsk()
+        if (deferredAsk == null) outboxController.startDraining()
     }
 
     override fun onTransferStatus(line: String) {
@@ -845,7 +942,16 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         notifyObserver()
     }
 
+    override fun onTileSending(z: Int, col: Long, row: Long, bytes: Int, crc32: Long) {
+        outboxController.onTileSending(z, col, row, bytes, crc32)
+    }
+
+    override fun onTileReceipt(z: Int, col: Long, row: Long, bytes: Int, crc32: Long) {
+        outboxController.onTileReceipt(z, col, row, bytes, crc32)
+    }
+
     override fun onTileProgress(z: Int, col: Long, row: Long, sentBytes: Int, totalBytes: Int) {
+        outboxController.onTileProgress(z, col, row, sentBytes, totalBytes)
         // Timed from the start of the whole fetch, not of this square, because that
         // is what the device's own summary does -- see TileFormat.
         tileProgress = TileProgress(
@@ -875,6 +981,11 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     }
 
     override fun onTileDone(z: Int, col: Long, row: Long, bytes: Int, ok: Boolean, detail: String) {
+        // Only the failures: a success is the outbox's [onTileReceipt], which
+        // is the only thing that makes a tile sent. Routing `ok` here too would
+        // be a second, weaker path to the same state -- exactly what the receipt
+        // law forbids.
+        if (!ok) outboxController.onTileSkipped(z, col, row, detail)
         if (ok) {
             fetchDone++
             fetchCompletedBytes += bytes
@@ -894,6 +1005,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     }
 
     override fun onFetchFinished(sent: Int, skipped: Int, total: Int, reason: String) {
+        // A no-op unless this fetch was the outbox's own batch; the controller
+        // checks its own phase rather than this side guessing whose fetch it was.
+        outboxController.onPushFinished(reason)
         tileFetchStatus = "$sent/$total sent" +
             (if (skipped > 0) ", $skipped skipped" else "") +
             " ($reason)"
@@ -912,7 +1026,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             mapOf("sent" to sent, "skipped" to skipped, "total" to total),
         )
         notifyObserver()
-        runDeferredAsk()
+        onChannelFree()
     }
 
     override fun onCheckStarted(count: Int) {
@@ -951,7 +1065,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             mapOf("examined" to examined, "stale" to stale),
         )
         notifyObserver()
-        runDeferredAsk()
+        onChannelFree()
     }
 
     // --- pins -----------------------------------------------------------
@@ -995,9 +1109,134 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         tilesBusy = tileChannelBusy(),
     )
 
+    // --- the pre-trip map-area outbox -------------------------------------
+
+    /**
+     * Everything the map-area screen needs, snapshotted so the UI holds no
+     * state -- the same contract [PinsSnapshot] keeps.
+     *
+     * Every number in here is already computed by the time it is read: the
+     * screen repaints on `onTileProgress`, which fires once per acknowledged
+     * chunk, and a snapshot that did work per field would be doing it at the
+     * transfer's chunk interval.
+     */
+    class OutboxSnapshot(
+        val connected: Boolean,
+        /**
+         * What the device last said it is. Null when nothing has answered on
+         * this link -- which reads differently from "it is on the map screen",
+         * and the screen says so.
+         */
+        val deviceScreen: DeviceInfo.Screen?,
+        /** Why a batch cannot start, or null. Goes straight onto the screen. */
+        val blocker: String?,
+        val phase: TileOutboxController.Phase,
+        /** The last thing that happened, in words. Null before anything has. */
+        val status: String?,
+        val paused: Boolean,
+        val totals: TileOutbox.Totals,
+        val zones: List<ZoneRow>,
+        /** The square on the wire right now, or null. */
+        val current: TileOutboxController.InFlight?,
+        /** Measured on this run's batches. Null before a square has been confirmed. */
+        val bytesPerSecond: Double?,
+        val etaSeconds: Long?,
+        /**
+         * The queue on disk could not be read, in words. Null when it could.
+         *
+         * Said out loud because an empty queue after damage looks exactly like
+         * an empty queue after a fresh install, and only the loader knows which
+         * it was (`docs/tile-outbox-format.md`).
+         */
+        val queueLost: String?,
+    )
+
+    class ZoneRow(val zone: TileZone, val totals: TileOutbox.Totals)
+
+    fun outboxSnapshot(): OutboxSnapshot = OutboxSnapshot(
+        connected = bleState == BleLink.State.CONNECTED,
+        deviceScreen = outboxController.device?.screen,
+        blocker = outboxController.blocker ?: outboxBlocker(),
+        phase = outboxController.phase,
+        status = outboxController.status,
+        paused = outboxController.paused,
+        totals = outboxController.totals(),
+        zones = outboxController.zones.map { ZoneRow(it, outboxController.zoneTotals(it.zoneId)) },
+        current = outboxController.inFlight(),
+        bytesPerSecond = outboxController.bytesPerSecond(),
+        etaSeconds = outboxController.etaSeconds(),
+        queueLost = when (val load = outboxStore.lastLoad) {
+            is OutboxJson.Load.Damaged -> "the saved queue could not be read (${load.why})"
+            is OutboxJson.Load.UnknownVersion ->
+                "the saved queue is version ${load.version}, which this app does not read"
+            else -> null
+        },
+    )
+
+    /** What stops a batch before it has even been attempted, in the rider's words. */
+    private fun outboxBlocker(): String? = when {
+        bleState != BleLink.State.CONNECTED -> "not connected to the device"
+        outboxController.paused -> "paused"
+        freshness.phase != FreshnessChecker.Phase.IDLE -> "a freshness check is running"
+        pins.busy -> "a pin command is running"
+        tileFetcher.phase != TileFetcher.Phase.IDLE &&
+            outboxController.phase != TileOutboxController.Phase.PUSHING ->
+            "the device is fetching squares of its own"
+        else -> null
+    }
+
+    /**
+     * Queues a box around a point. Returns the new zone's id.
+     *
+     * The tile list is computed inside the controller, not here: the label, the
+     * side and the items all describe one decision, and a caller that passed its
+     * own list could store a box that is not the box the label names.
+     */
+    fun outboxQueueZone(latE7: Int, lonE7: Int, sideKm: Int, label: String): String =
+        outboxController.queueZone(latE7, lonE7, sideKm, label)
+
+    fun outboxDropZone(zoneId: String) = outboxController.dropZone(zoneId)
+
+    /** Drops every zone with nothing left to send. Receipts are kept. */
+    fun outboxClearFinished(): Int = outboxController.dropFinishedZones()
+
+    /** Starts draining now, or returns the reason it could not. */
+    fun outboxStartDraining(): String? = outboxController.startDraining()
+
+    fun outboxPause() = outboxController.pause()
+
+    /**
+     * What a box would cost, read off the CDN index. Needs no device and no link.
+     *
+     * The device's own `.tib` format is passed when it is known, because the
+     * index lives under the same `/v<N>/` prefix as the tiles it describes.
+     */
+    fun outboxPlan(
+        latDeg: Double,
+        lonDeg: Double,
+        sideKm: Double,
+        done: (TileOutboxController.Plan) -> Unit,
+    ) = outboxController.plan(
+        latDeg,
+        lonDeg,
+        sideKm,
+        // This run's answer first, then what any earlier device said. Planning
+        // deliberately needs no link ([TileOutboxController.plan]), so on a cold
+        // start with the device in a drawer there is nothing else to go on.
+        deviceTileFormat ?: outboxController.device?.tileFormat ?: rememberedTileFormat(),
+        done,
+    )
+
+    fun outboxCancelPlan() = outboxController.cancelPlan()
+
     private fun tileChannelBusy(): Boolean =
         tileFetcher.phase != TileFetcher.Phase.IDLE ||
-            freshness.phase != FreshnessChecker.Phase.IDLE
+            freshness.phase != FreshnessChecker.Phase.IDLE ||
+            // The pre-trip outbox is the fourth conversation on this channel.
+            // Named here as well as in [onCommandLine] because this is what a
+            // pin command is refused against, and a pin sent across an `info`
+            // would be answered by that reply's terminator.
+            outboxController.busy
 
     /**
      * Why a pin command cannot be sent right now, or null when it can.
@@ -1122,7 +1361,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     override fun onPinsBusyChanged() {
         notifyObserver()
         // The channel may have just come free for an ask that arrived mid-command.
-        if (!pins.busy) runDeferredAsk()
+        if (!pins.busy) onChannelFree()
     }
 
     /**
@@ -1155,6 +1394,90 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private val pinTransport = object : PinManager.Transport {
         override fun sendCommand(line: String, done: (Boolean, String?) -> Unit) {
             ble.writeCommand(line, done)
+        }
+    }
+
+    /**
+     * The command channel, for the outbox's `info` and `push <n>`. A third
+     * transport for the same reason [pinTransport] is a second one: these send
+     * console lines and nothing else, and a transport that also carried frames
+     * and the link-priority switch would let an `info` change the connection
+     * interval by accident.
+     */
+    private val outboxTransport = object : TileOutboxController.Transport {
+        override fun sendCommand(line: String, done: (Boolean, String?) -> Unit) {
+            ble.writeCommand(line, done)
+        }
+    }
+
+    /**
+     * The one pusher, named for the outbox.
+     *
+     * Deliberately the very same [tileFetcher] the device's own asks go through,
+     * not a second instance: one sender at a time on the transfer characteristic
+     * is the rule, because "a status line says nothing about which transfer it
+     * is for". Its `phase` is also what [tileChannelBusy] already reads, so a
+     * pre-trip batch blocks a pin command and a freshness check for free.
+     */
+    private val fetcherAsPusher = object : TileOutboxController.Pusher {
+        override val idle: Boolean get() = tileFetcher.phase == TileFetcher.Phase.IDLE
+
+        override fun pushTiles(tiles: List<MissingTile>, formatVersion: Int?) {
+            tileFetcher.pushTiles(tiles, formatVersion)
+        }
+    }
+
+    /**
+     * Whether the outbox may open a conversation right now.
+     *
+     * The other half of [tileChannelBusy], which reports the outbox to everybody
+     * else. Both halves are needed: `info` and `push <n>` end on the same plain
+     * `OK` as `missing`, `have` and every `pin` command, and two open
+     * conversations mean each can be ended by the other's terminator -- measured
+     * on hardware 2026-08-11 ([onCommandLine]).
+     *
+     * It deliberately does **not** consult [tileFetcher]: the outbox pushes
+     * *through* it, so a batch of its own would be blocked by itself. The
+     * controller asks its [TileOutboxController.Pusher] whether it is idle
+     * instead, which is the same question asked of the right object.
+     */
+    private val outboxGate = object : TileOutboxController.Gate {
+        override fun blocker(): String? = when {
+            bleState != BleLink.State.CONNECTED -> "not connected to the device"
+            freshness.phase != FreshnessChecker.Phase.IDLE -> "a freshness check is running"
+            pins.busy -> "a pin command is running"
+            deferredAsk != null -> "the device has an ask waiting"
+            else -> null
+        }
+    }
+
+    private val outboxListener = object : TileOutboxController.Listener {
+        override fun onOutboxChanged() {
+            // `info` is the only place a device with nothing missing ever states
+            // its tile format, and the pre-trip planner needs that number with
+            // no device present at all. Copying it here puts it through
+            // [deviceTileFormat]'s setter, which is what remembers it across
+            // restarts.
+            outboxController.device?.tileFormat?.let { deviceTileFormat = it }
+            notifyObserver()
+        }
+
+        override fun onRoundFinished(reason: String) {
+            addTileLine("map area: $reason")
+            logger?.logEvent("outbox_round", reason)
+            notifyObserver()
+            // Load-bearing, and not covered by [onFetchFinished]: a round that
+            // is refused at `info` -- the device on its map screen, which is the
+            // common case -- never reaches the pusher, so no fetch ever finishes
+            // to replay an ask that was deferred while this round held the
+            // channel. Without this the device would wait for its own
+            // NEED_TILES to be answered until something unrelated freed the
+            // channel.
+            //
+            // Deliberately [runDeferredAsk] and not [onChannelFree]: this runs
+            // from inside the round's own teardown, and starting the next round
+            // from there would re-enter the class that is still unwinding.
+            runDeferredAsk()
         }
     }
 
@@ -1349,6 +1672,34 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     }
 
     // --- sending --------------------------------------------------------
+
+    /**
+     * Looks the queue's waiting squares up again, on its own.
+     *
+     * **The rider is not the trigger.** Ground the server has not built resolves
+     * on its own -- measured 2026-09-02, six minutes from the ask to the first
+     * finished z11 cell and thirty for all four the box fell in. **Wall clock on
+     * an afternoon when most Overpass mirrors were down**, not the queue's own
+     * cost: the generator itself is 19-24 s per cell (`docs/tile-autobuild.md`,
+     * "Deploy"). Expect minutes, and how many is Overpass's business rather than
+     * ours. Until this, the only things that noticed were queueing a
+     * zone, pressing Continue and connecting a device. A rider who queued a city
+     * and put the phone down would have found the same "building" an hour later.
+     *
+     * A minute is the tick, not the rate: [TileOutbox]'s own backoff decides what
+     * is due (five minutes, then fifteen, then hourly), and [lookUpAndAsk] returns
+     * without a request when nothing is. So this costs one list walk a minute and
+     * nothing else while the queue is quiet.
+     *
+     * Runs whether or not a device is connected. The whole pre-trip case is a
+     * rider at home with the reader in a drawer.
+     */
+    private val outboxRecheck = object : Runnable {
+        override fun run() {
+            outboxController.lookUpAndAsk()
+            main.postDelayed(this, OUTBOX_RECHECK_MS)
+        }
+    }
 
     private val sender = object : Runnable {
         override fun run() {
