@@ -42,6 +42,18 @@ object HeadingTrend {
     data class Point(val latDeg: Double, val lonDeg: Double, val elapsedRealtimeNanos: Long)
 
     /**
+     * A confident heading, and how tightly the window agreed on it.
+     *
+     * [spreadDeg] is the worst leg-to-leg disagreement against the overall
+     * trend, which is the same number [heading] already tests against
+     * [MAX_BEARING_SPREAD_DEG] before it will return anything. It is reported
+     * rather than discarded because the device draws it: a tight window earns a
+     * sharp arrow, a loose one earns a wedge, and no window at all earns no
+     * heading mark. See the firmware's `docs/marker-fix-trust.md`.
+     */
+    data class Trend(val bearingDeg: Double, val spreadDeg: Double)
+
+    /**
      * @param points oldest first, most recent last; only the last [windowSize]
      *   are considered, so callers can pass more history than that
      * @return the trend heading in degrees, [0, 360), or null if the window
@@ -52,7 +64,22 @@ object HeadingTrend {
         windowSize: Int = WINDOW_SIZE,
         minSpeedMps: Double = MIN_SPEED_MPS,
         maxBearingSpreadDeg: Double = MAX_BEARING_SPREAD_DEG,
-    ): Double? {
+    ): Double? = trend(points, windowSize, minSpeedMps, maxBearingSpreadDeg)?.bearingDeg
+
+    /**
+     * The same decision as [heading], but keeping the spread the window agreed
+     * to. Every gate is identical, so a caller cannot get a [Trend] where
+     * [heading] would have returned null.
+     *
+     * @return the trend and its spread, or null if the window is not yet a
+     *   confident trend
+     */
+    fun trend(
+        points: List<Point>,
+        windowSize: Int = WINDOW_SIZE,
+        minSpeedMps: Double = MIN_SPEED_MPS,
+        maxBearingSpreadDeg: Double = MAX_BEARING_SPREAD_DEG,
+    ): Trend? {
         if (points.size < windowSize) return null
         val window = points.takeLast(windowSize)
 
@@ -65,7 +92,7 @@ object HeadingTrend {
         val spread = legBearings.maxOf { angleDiffDeg(it, trendBearing) }
         if (spread > maxBearingSpreadDeg) return null
 
-        return trendBearing
+        return Trend(trendBearing, spread)
     }
 
     /** Great-circle bearing from [from] to [to], in degrees, [0, 360). */

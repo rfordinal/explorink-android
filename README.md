@@ -78,6 +78,38 @@ one an hour, or none at all if nothing needed correcting. The heading rule
 needs real movement behind it because a stationary phone's bearing wanders
 across all 16 sectors on GPS noise alone.
 
+### Telling the device how much to trust the heading
+
+The packet's flags byte carries a two-bit heading quality
+(`PositionPacket.DirTrust`), and the device draws it: a sharp arrow, a wedge
+one heading step either side, or no heading mark at all. The firmware's
+`docs/marker-fix-trust.md` owns what each state looks like; this app only says
+which one is true.
+
+**Not `Location.getBearingAccuracyDegrees()`, on purpose.** The heading sent
+here is not the fix's own bearing — it is the trend across a window of recent
+positions (`HeadingTrend`), because the phone rides in a backpack and its own
+orientation says nothing about direction of travel. A bearing accuracy
+describes a number this app does not send.
+
+The right figure is the trend's own **spread**: the worst leg-to-leg
+disagreement against the overall trend, which `HeadingTrend` already computed
+and used to throw away. Within one 22.5 degree heading step it is `good`,
+wider it is `coarse`.
+
+Staleness is the other half. When the window stops being a confident trend the
+app keeps the last bearing rather than snapping to north — right, but it used
+to be silent, so the device redrew the same sharp arrow whether the trend was
+fresh or minutes old. It now decays: `coarse` after 10 s without a fresh
+trend, `unknown` after 45 s. **Both timers are first cuts and neither has been
+judged on a ride.** They exist to stop two failures at once — an arrow still
+pointing somewhere long after the rider stopped, and an arrow that vanishes at
+every traffic light, each change costing the device a ~500 ms panel refresh.
+
+**Zero means "said nothing", never "bad".** A build of this app from before
+these bits existed writes no bits, and the device draws exactly the marker it
+always did. That is what makes the change safe to ship on one side at a time.
+
 `DIAG_M <metres>` arrives unprompted on the same command channel as the
 tile-fetch conversation below (`MissingList.parseDiagonalM`) — the ground
 distance the device's current screen diagonal represents, sent once per

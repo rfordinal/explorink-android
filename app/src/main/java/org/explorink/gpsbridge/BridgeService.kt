@@ -24,6 +24,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import java.io.File
 import java.text.SimpleDateFormat
@@ -69,6 +70,30 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         private const val PREF_TILE_FORMAT = "device_tile_format"
         const val ACTION_START_RECORDING = "org.explorink.gpsbridge.START_REC"
         const val ACTION_STOP_RECORDING = "org.explorink.gpsbridge.STOP_REC"
+
+        /**
+         * How long a heading that is no longer a confident trend still counts
+         * as describing the present, and how long it counts as sharp.
+         *
+         * Inside [FRESH_HEADING_MS] the arrow keeps whatever the window's
+         * spread earned it; past that it drops to COARSE; past
+         * [STALE_HEADING_MS] the device is told there is no heading at all.
+         *
+         * Both are first cuts and **neither has been judged on a ride**. They
+         * exist to stop two failures at once: an arrow that keeps pointing
+         * somewhere long after the rider stopped, and an arrow that vanishes at
+         * every traffic light -- each change of state costs the device a
+         * ~500 ms panel refresh.
+         */
+        private const val FRESH_HEADING_MS = 10_000L
+        private const val STALE_HEADING_MS = 45_000L
+
+        /**
+         * The device draws 16 heading steps of 22.5 degrees and nothing finer,
+         * so a window that agreed to within one step is the only one that has
+         * earned a sharp arrow rather than a wedge.
+         */
+        private const val GOOD_HEADING_SPREAD_DEG = 22.5
 
         private const val CHANNEL_ID = "bridge"
         private const val NOTIFICATION_ID = 1
@@ -293,6 +318,17 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private var bleDetail: String? = null
     private var lastFix: Location? = null
     private var lastBearingDeg = 0f
+
+    /**
+     * How tightly the window that produced [lastBearingDeg] agreed, and when it
+     * did. Both feed the heading-quality bits the packet carries
+     * ([PositionPacket.DirTrust]); neither changes the heading itself.
+     *
+     * [lastBearingAtMs] is 0 until a trend has ever been found, which is the
+     * "never had a heading" case and reports UNKNOWN rather than a stale GOOD.
+     */
+    private var lastBearingSpreadDeg = 0.0
+    private var lastBearingAtMs = 0L
 
     /** Recent accepted fixes, oldest first, for [HeadingTrend]; capped at its window size. */
     private val headingHistory = ArrayDeque<HeadingTrend.Point>()
@@ -1650,7 +1686,16 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // Never the phone's own orientation -- it rides in a backpack or tank
         // bag. Last known bearing is kept when the window isn't a confident
         // trend yet, rather than snapping back to North.
-        HeadingTrend.heading(headingHistory)?.let { lastBearingDeg = it.toFloat() }
+        //
+        // Keeping it is right, but it used to be silent: the device redrew the
+        // same sharp arrow whether the trend was fresh or minutes old, which is
+        // a stale reading presented as a current one. The spread and the
+        // timestamp are what let dirTrust() say so (see there).
+        HeadingTrend.trend(headingHistory)?.let {
+            lastBearingDeg = it.bearingDeg.toFloat()
+            lastBearingSpreadDeg = it.spreadDeg
+            lastBearingAtMs = SystemClock.elapsedRealtime()
+        }
         notifyObserver()
     }
 
@@ -1736,6 +1781,41 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         )
     }
 
+    /**
+     * How much the device's marker may claim about the heading this packet
+     * carries.
+     *
+     * Deliberately **not** `Location.getBearingAccuracyDegrees()`: the heading
+     * sent here is not the fix's own bearing at all, it is the trend across a
+     * window of positions ([HeadingTrend]). A bearing accuracy describes a
+     * number this app does not send, so quoting it would be quoting the wrong
+     * measurement.
+     *
+     * The trend's own spread is the right figure, and staleness is the other
+     * half: when the window stops being a confident trend the last heading is
+     * kept, and after [STALE_HEADING_MS] of that it has stopped describing the
+     * present.
+     *
+     * [STALE_HEADING_MS] is a first cut, chosen so that a stop at a junction
+     * does not immediately strip the arrow (each change costs the device a
+     * ~500 ms panel refresh) while a phone parked in a pocket loses it within
+     * the minute. **Not yet judged on a ride.**
+     */
+    private fun dirTrust(): Int {
+        if (lastBearingAtMs == 0L) return PositionPacket.DirTrust.UNKNOWN
+        val ageMs = SystemClock.elapsedRealtime() - lastBearingAtMs
+        if (ageMs > STALE_HEADING_MS) return PositionPacket.DirTrust.UNKNOWN
+        if (ageMs > FRESH_HEADING_MS) return PositionPacket.DirTrust.COARSE
+        // One heading step on the device is 22.5 degrees, and that is the
+        // finest thing it can draw -- a window that agreed to within one step
+        // is the only one that earns a sharp arrow.
+        return if (lastBearingSpreadDeg <= GOOD_HEADING_SPREAD_DEG) {
+            PositionPacket.DirTrust.GOOD
+        } else {
+            PositionPacket.DirTrust.COARSE
+        }
+    }
+
     private fun trySend() {
         val fix = lastFix ?: return
         if (!ble.isConnected) return
@@ -1749,6 +1829,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         val sinceLastMs = if (lastSentAtMs == 0L) -1L else nowMs - lastSentAtMs
         val heading = PositionPacket.headingSector(lastBearingDeg)
         val accuracyM = if (fix.hasAccuracy()) fix.accuracy.toDouble() else 0.0
+        val dirTrust = dirTrust()
         val speedKmh = if (fix.hasSpeed()) fix.speed.toDouble() * 3.6 else 0.0
         val altitudeM = if (fix.hasAltitude()) fix.altitude else null
         val tzOffsetMin = TimeZone.getDefault().getOffset(nowMs) / 60000
@@ -1762,7 +1843,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             tzOffsetMinutes = tzOffsetMin,
             heading = heading,
             seq = thisSeq,
-            flags = 0, // no route in this app, so no off-route bit
+            // No route in this app, so no off-route bit; heading quality is the
+            // only thing in flags here.
+            flags = PositionPacket.withDirTrust(0, dirTrust),
             accuracyMetres = accuracyM,
             speedKmh = speedKmh,
             altitudeMetres = altitudeM,
