@@ -3,9 +3,7 @@ package org.explorink.gpsbridge
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -67,52 +65,73 @@ class DirTrustTest {
         assertEquals(PositionPacket.SIZE, bytes.size)
     }
 
-    // A straight line east, one second and about 11 m apart: a confident trend
-    // with essentially no leg-to-leg disagreement.
-    private fun straightLine(): List<HeadingTrend.Point> =
-        (0 until HeadingTrend.WINDOW_SIZE).map {
-            HeadingTrend.Point(48.0, 17.0 + it * 0.00015, it * 1_000_000_000L)
-        }
-
     @Test
-    fun aStraightRunAgreesWithItselfAndEarnsASharpArrow() {
-        val trend = HeadingTrend.trend(straightLine())
-        assertNotNull(trend)
-        assertEquals(90.0, trend!!.bearingDeg, 1.0)
-        // Well inside one 22.5 degree heading step, which is the finest thing
-        // the device can draw.
-        assertTrue("spread was ${trend.spreadDeg}", trend.spreadDeg < 22.5)
+    fun thisAppNeverSendsCoarse() {
+        // COARSE exists on the wire for the device's own receiver, where the
+        // course is an instantaneous reading. This app's heading is a
+        // conclusion HeadingTrend either reached or did not, so there is no
+        // half-believed heading for it to report.
+        assertEquals(2, PositionPacket.DirTrust.COARSE)
+        assertEquals(0x08, PositionPacket.withDirTrust(0, PositionPacket.DirTrust.COARSE))
     }
 
     @Test
-    fun aZigZagStillCountsAsATrendButAWiderOne() {
-        // Same net direction, but each leg wanders off it -- the case a wedge
-        // exists for.
-        val points = (0 until HeadingTrend.WINDOW_SIZE).map {
-            // About 3.3 m either side of a leg that runs 11 m east, which puts
-            // each leg roughly 31 degrees off the overall trend: past one
-            // heading step, still inside the window's own gate.
-            val wobble = if (it % 2 == 0) 0.00003 else -0.00003
-            HeadingTrend.Point(48.0 + wobble, 17.0 + it * 0.00015, it * 1_000_000_000L)
-        }
-        val trend = HeadingTrend.trend(points)
-        assertNotNull(trend)
-        assertTrue("spread was ${trend!!.spreadDeg}", trend.spreadDeg > 22.5)
-        assertTrue(trend.spreadDeg <= HeadingTrend.MAX_BEARING_SPREAD_DEG)
+    fun aHeadingLostSendExistsBecauseAParkedPhoneSendsNothingElse() {
+        // Parked: no movement, no turn, and the hourly keepalive is nowhere
+        // near. Without HEADING_LOST the device would keep the last arrow for
+        // up to an hour after the timer behind it expired.
+        val parked = SendPolicy.decide(
+            hasSent = true,
+            sinceLastMs = 120_000L,
+            movedM = 0.0,
+            accuracyM = 8.0,
+            headingChanged = false,
+            headingLost = true,
+        )
+        assertEquals(SendPolicy.Reason.HEADING_LOST, parked)
+
+        // Same situation without the loss stays quiet, which is the behaviour
+        // every existing caller relies on.
+        assertNull(
+            SendPolicy.decide(
+                hasSent = true,
+                sinceLastMs = 120_000L,
+                movedM = 0.0,
+                accuracyM = 8.0,
+                headingChanged = false,
+            )
+        )
     }
 
     @Test
-    fun trendAndHeadingGateIdentically() {
-        // A caller must never be able to get a Trend where heading() would have
-        // said no -- the wedge would then be drawn on a window the app itself
-        // does not believe.
-        val parked = (0 until HeadingTrend.WINDOW_SIZE).map {
-            HeadingTrend.Point(48.0, 17.0, it * 1_000_000_000L)
-        }
-        assertNull(HeadingTrend.trend(parked))
-        assertNull(HeadingTrend.heading(parked))
+    fun movementStillWinsOverHeadingLost() {
+        // A rider who is moving gets MOVED, which carries the new quality in
+        // the same packet -- HEADING_LOST must not steal that reason and make
+        // the log say the wrong thing.
+        val moving = SendPolicy.decide(
+            hasSent = true,
+            sinceLastMs = 60_000L,
+            movedM = 500.0,
+            accuracyM = 8.0,
+            headingChanged = false,
+            headingLost = true,
+        )
+        assertEquals(SendPolicy.Reason.MOVED, moving)
+    }
 
-        val moving = straightLine()
-        assertEquals(HeadingTrend.heading(moving), HeadingTrend.trend(moving)!!.bearingDeg)
+    @Test
+    fun headingLostStillWaitsOutTheSendFloor() {
+        // It is not a correction and does not bypass the floor: nothing about a
+        // lost heading is urgent enough to beat the 7 s pacing.
+        assertNull(
+            SendPolicy.decide(
+                hasSent = true,
+                sinceLastMs = 1_000L,
+                movedM = 0.0,
+                accuracyM = 8.0,
+                headingChanged = false,
+                headingLost = true,
+            )
+        )
     }
 }

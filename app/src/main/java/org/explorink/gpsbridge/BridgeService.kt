@@ -73,27 +73,20 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
         /**
          * How long a heading that is no longer a confident trend still counts
-         * as describing the present, and how long it counts as sharp.
+         * as describing the present. Past it the device is told there is no
+         * heading at all.
          *
-         * Inside [FRESH_HEADING_MS] the arrow keeps whatever the window's
-         * spread earned it; past that it drops to COARSE; past
-         * [STALE_HEADING_MS] the device is told there is no heading at all.
+         * A first cut and **not judged on a ride**. Sized against the two
+         * failures it sits between: an arrow still pointing somewhere long
+         * after the rider parked, and an arrow that vanishes at every traffic
+         * light. 90 s clears an ordinary red light, and a rider who has been
+         * standing longer than that has usually stopped rather than paused.
          *
-         * Both are first cuts and **neither has been judged on a ride**. They
-         * exist to stop two failures at once: an arrow that keeps pointing
-         * somewhere long after the rider stopped, and an arrow that vanishes at
-         * every traffic light -- each change of state costs the device a
-         * ~500 ms panel refresh.
+         * The trend itself disappears within about 5 s of stopping -- the
+         * window is 5 fixes at 1 Hz and its speed gate is 0.5 m/s -- so this
+         * timer is measured from "stopped moving", not from "stopped sending".
          */
-        private const val FRESH_HEADING_MS = 10_000L
-        private const val STALE_HEADING_MS = 45_000L
-
-        /**
-         * The device draws 16 heading steps of 22.5 degrees and nothing finer,
-         * so a window that agreed to within one step is the only one that has
-         * earned a sharp arrow rather than a wedge.
-         */
-        private const val GOOD_HEADING_SPREAD_DEG = 22.5
+        private const val STALE_HEADING_MS = 90_000L
 
         private const val CHANNEL_ID = "bridge"
         private const val NOTIFICATION_ID = 1
@@ -320,15 +313,17 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private var lastBearingDeg = 0f
 
     /**
-     * How tightly the window that produced [lastBearingDeg] agreed, and when it
-     * did. Both feed the heading-quality bits the packet carries
-     * ([PositionPacket.DirTrust]); neither changes the heading itself.
+     * When [lastBearingDeg] was last a confident trend, in elapsed-realtime
+     * millis. Feeds the heading-quality bits the packet carries
+     * ([PositionPacket.DirTrust]); does not change the heading itself.
      *
-     * [lastBearingAtMs] is 0 until a trend has ever been found, which is the
-     * "never had a heading" case and reports UNKNOWN rather than a stale GOOD.
+     * 0 until a trend has ever been found, which is the "never had a heading"
+     * case and reports UNKNOWN rather than a stale GOOD.
      */
-    private var lastBearingSpreadDeg = 0.0
     private var lastBearingAtMs = 0L
+
+    /** The quality the last packet actually carried, so a change can send. */
+    private var lastSentDirTrust = PositionPacket.DirTrust.UNSTATED
 
     /** Recent accepted fixes, oldest first, for [HeadingTrend]; capped at its window size. */
     private val headingHistory = ArrayDeque<HeadingTrend.Point>()
@@ -719,6 +714,11 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
                 lastSentAtMs = 0L
                 lastSentHeading = -1
                 lastSentAccuracyM = 0.0
+                // UNSTATED, not UNKNOWN: the FIRST packet of a link carries
+                // whatever is true then, and starting at UNKNOWN would make a
+                // reconnect while parked look like a heading that had just been
+                // lost.
+                lastSentDirTrust = PositionPacket.DirTrust.UNSTATED
                 // ...but not out of whatever `lastFix` still holds. With the link
                 // down and no recording running, GPS is off ([updatePowerState]
                 // asks for it on `CONNECTED || isRecording`), so after a break
@@ -1691,9 +1691,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // same sharp arrow whether the trend was fresh or minutes old, which is
         // a stale reading presented as a current one. The spread and the
         // timestamp are what let dirTrust() say so (see there).
-        HeadingTrend.trend(headingHistory)?.let {
-            lastBearingDeg = it.bearingDeg.toFloat()
-            lastBearingSpreadDeg = it.spreadDeg
+        HeadingTrend.heading(headingHistory)?.let {
+            lastBearingDeg = it.toFloat()
             lastBearingAtMs = SystemClock.elapsedRealtime()
         }
         notifyObserver()
@@ -1778,41 +1777,46 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             lastSentAccuracyM = lastSentAccuracyM,
             consecutivePreciseFixCount = preciseFixStreak,
             diagonalM = lastKnownDiagonalM,
+            // Only ever true once per stop: it compares against what the last
+            // packet carried, and that packet updates lastSentDirTrust.
+            headingLost = dirTrust() == PositionPacket.DirTrust.UNKNOWN &&
+                lastSentDirTrust != PositionPacket.DirTrust.UNKNOWN,
         )
     }
 
     /**
      * How much the device's marker may claim about the heading this packet
-     * carries.
+     * carries. **Two states from this app, never COARSE.**
      *
-     * Deliberately **not** `Location.getBearingAccuracyDegrees()`: the heading
-     * sent here is not the fix's own bearing at all, it is the trend across a
-     * window of positions ([HeadingTrend]). A bearing accuracy describes a
-     * number this app does not send, so quoting it would be quoting the wrong
-     * measurement.
+     * This app's heading is not a reading, it is a *conclusion*:
+     * [HeadingTrend] only returns one when a window of recent fixes covered
+     * real ground and its legs agreed with the overall trend. So a heading that
+     * exists here has already passed the app's own test and is worth a sharp
+     * arrow. There is no half-believed heading to report -- the app either
+     * concluded one or it did not, and reporting COARSE would be inventing a
+     * doubt the app does not actually hold.
      *
-     * The trend's own spread is the right figure, and staleness is the other
-     * half: when the window stops being a confident trend the last heading is
-     * kept, and after [STALE_HEADING_MS] of that it has stopped describing the
-     * present.
+     * That is also why `Location.getBearingAccuracyDegrees()` is not used here:
+     * the heading sent is not the fix's own bearing at all, so a bearing
+     * accuracy would describe a number this app does not send.
      *
-     * [STALE_HEADING_MS] is a first cut, chosen so that a stop at a junction
-     * does not immediately strip the arrow (each change costs the device a
-     * ~500 ms panel refresh) while a phone parked in a pocket loses it within
-     * the minute. **Not yet judged on a ride.**
+     * COARSE stays a real wire state for the *device's own* receiver, where the
+     * course is an instantaneous reading rather than a conclusion and can be
+     * half-trusted. See the firmware's `docs/marker-fix-trust.md`.
+     *
+     * What is left is staleness. When the window stops being a confident trend
+     * the app keeps the last bearing rather than snapping to north, which is
+     * right while the rider is briefly stopped and wrong once they have been
+     * standing a while -- at that point there is, as the maintainer put it, no
+     * heading at all. [STALE_HEADING_MS] is where one becomes the other.
      */
     private fun dirTrust(): Int {
         if (lastBearingAtMs == 0L) return PositionPacket.DirTrust.UNKNOWN
         val ageMs = SystemClock.elapsedRealtime() - lastBearingAtMs
-        if (ageMs > STALE_HEADING_MS) return PositionPacket.DirTrust.UNKNOWN
-        if (ageMs > FRESH_HEADING_MS) return PositionPacket.DirTrust.COARSE
-        // One heading step on the device is 22.5 degrees, and that is the
-        // finest thing it can draw -- a window that agreed to within one step
-        // is the only one that earns a sharp arrow.
-        return if (lastBearingSpreadDeg <= GOOD_HEADING_SPREAD_DEG) {
-            PositionPacket.DirTrust.GOOD
+        return if (ageMs > STALE_HEADING_MS) {
+            PositionPacket.DirTrust.UNKNOWN
         } else {
-            PositionPacket.DirTrust.COARSE
+            PositionPacket.DirTrust.GOOD
         }
     }
 
@@ -1861,6 +1865,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         lastSentFix = Location(fix)
         lastSentHeading = heading
         lastSentAccuracyM = accuracyM
+        lastSentDirTrust = dirTrust
         lastSendReason = reason.logName
 
         ble.write(bytes) { ok, error ->
