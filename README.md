@@ -68,6 +68,7 @@ speed the policy behaves like a plain fixed-interval timer.
 | in between, send when | the position moved **50 m** from the last sent one (no upper bound on the fix's own accuracy yet, so a very bad fix can still clear an inflated threshold) |
 | move threshold, once the device has said its screen diagonal (`DIAG_M`) | `diagonal_m * 0.008` instead of the flat 50 m — one constant cannot fit every zoom rung on the device, and the ratio itself is a starting point, not a measured one |
 | also send when | the 16-sector heading changed **and** at least 10 m was covered |
+| also send when | the heading has gone stale while parked, once per stop (`reason: heading_lost`) — see "Telling the device how much to trust the heading" |
 | also send when | parked, the last packet actually sent carried a fix worse than 20 m accuracy, and the phone has since settled on 3 fixes in a row at ≤10 m (`reason: correction`) |
 | always send once | on every new link, `reason: first` — the state above is per-link and resets when the link comes up. It waits for a fix accepted on that link, so it never sends the previous ride's position. Before 2026-08-17 the state survived the disconnect, so a parked rider opening the map screen got no packet at all and the device kept showing the fix off its own SD card until the rider covered 50 m. |
 
@@ -77,6 +78,55 @@ break-even point; 5 km/h hiking sends about one every 18 s; parked at lunch,
 one an hour, or none at all if nothing needed correcting. The heading rule
 needs real movement behind it because a stationary phone's bearing wanders
 across all 16 sectors on GPS noise alone.
+
+### Telling the device how much to trust the heading
+
+The packet's flags byte carries a two-bit heading quality
+(`PositionPacket.DirTrust`), and the device draws it: a sharp arrow, a wedge
+one heading step either side, or no heading mark at all. The firmware's
+`docs/marker-fix-trust.md` owns what each state looks like; this app only says
+which one is true.
+
+**This app sends only two of the four states: `good` and `unknown`.**
+
+The heading here is not a reading, it is a **conclusion**. `HeadingTrend` only
+returns one when a window of recent fixes covered real ground and its legs
+agreed with the overall trend; anything less returns nothing at all. So a
+heading that exists has already passed the app's own test and is worth a sharp
+arrow. There is no half-believed heading to report, and sending `coarse` would
+be inventing a doubt the app does not hold.
+
+`coarse` stays a real wire state for the **device's own receiver**, where the
+course is an instantaneous reading rather than a conclusion and can genuinely
+be half-trusted.
+
+That is also why `Location.getBearingAccuracyDegrees()` is not used: the
+heading sent is not the fix's own bearing at all — the phone rides in a
+backpack and its orientation says nothing about direction of travel — so a
+bearing accuracy would describe a number this app does not send.
+
+What is left is **staleness**. When the window stops being a confident trend
+the app keeps the last bearing rather than snapping to north. That is right
+while the rider is briefly stopped and wrong once they have been standing a
+while: at that point there is effectively no heading. `STALE_HEADING_MS` is
+where one becomes the other, currently **90 s**, a first cut that has **not
+been judged on a ride**. It sits between two failures — an arrow still pointing
+somewhere long after the rider parked, and an arrow that vanishes at every
+traffic light, each change costing the device a ~500 ms panel refresh. The
+trend itself disappears within about 5 s of stopping, so the timer measures
+from "stopped moving", not from "stopped sending".
+
+**A lost heading gets its own send reason** (`reason: heading_lost`). Every
+other trigger in the table above is driven by movement, and a parked phone
+sends nothing until the hourly keepalive — so without this the device would
+keep the last arrow on screen for up to an hour after the timer behind it
+expired, and the timer would be decorative. It fires at most once per stop,
+never bypasses the send floor, and never wins over `moved`, which carries the
+same new state anyway.
+
+**Zero means "said nothing", never "bad".** A build of this app from before
+these bits existed writes no bits, and the device draws exactly the marker it
+always did. That is what makes the change safe to ship on one side at a time.
 
 `DIAG_M <metres>` arrives unprompted on the same command channel as the
 tile-fetch conversation below (`MissingList.parseDiagonalM`) — the ground
@@ -92,7 +142,7 @@ different cadence from the raw fixes. Whether it asks at all is a separate
 question, answered under "Battery" below.
 
 Every packet line in the recording carries why it went out (`reason`:
-`first` / `moved` / `heading` / `keepalive` / `correction`), how far the phone
+`first` / `moved` / `heading` / `keepalive` / `correction` / `heading_lost`), how far the phone
 had moved (`moved_m`), and how long it had been quiet (`since_last_ms`).
 `SendPolicy` itself has no Android types in it — it is the part with the
 reasoning, so it is the part with unit tests on it.

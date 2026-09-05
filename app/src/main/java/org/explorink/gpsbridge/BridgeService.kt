@@ -24,6 +24,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import java.io.File
 import java.text.SimpleDateFormat
@@ -69,6 +70,23 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         private const val PREF_TILE_FORMAT = "device_tile_format"
         const val ACTION_START_RECORDING = "org.explorink.gpsbridge.START_REC"
         const val ACTION_STOP_RECORDING = "org.explorink.gpsbridge.STOP_REC"
+
+        /**
+         * How long a heading that is no longer a confident trend still counts
+         * as describing the present. Past it the device is told there is no
+         * heading at all.
+         *
+         * A first cut and **not judged on a ride**. Sized against the two
+         * failures it sits between: an arrow still pointing somewhere long
+         * after the rider parked, and an arrow that vanishes at every traffic
+         * light. 90 s clears an ordinary red light, and a rider who has been
+         * standing longer than that has usually stopped rather than paused.
+         *
+         * The trend itself disappears within about 5 s of stopping -- the
+         * window is 5 fixes at 1 Hz and its speed gate is 0.5 m/s -- so this
+         * timer is measured from "stopped moving", not from "stopped sending".
+         */
+        private const val STALE_HEADING_MS = 90_000L
 
         private const val CHANNEL_ID = "bridge"
         private const val NOTIFICATION_ID = 1
@@ -293,6 +311,19 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private var bleDetail: String? = null
     private var lastFix: Location? = null
     private var lastBearingDeg = 0f
+
+    /**
+     * When [lastBearingDeg] was last a confident trend, in elapsed-realtime
+     * millis. Feeds the heading-quality bits the packet carries
+     * ([PositionPacket.DirTrust]); does not change the heading itself.
+     *
+     * 0 until a trend has ever been found, which is the "never had a heading"
+     * case and reports UNKNOWN rather than a stale GOOD.
+     */
+    private var lastBearingAtMs = 0L
+
+    /** The quality the last packet actually carried, so a change can send. */
+    private var lastSentDirTrust = PositionPacket.DirTrust.UNSTATED
 
     /** Recent accepted fixes, oldest first, for [HeadingTrend]; capped at its window size. */
     private val headingHistory = ArrayDeque<HeadingTrend.Point>()
@@ -683,6 +714,11 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
                 lastSentAtMs = 0L
                 lastSentHeading = -1
                 lastSentAccuracyM = 0.0
+                // UNSTATED, not UNKNOWN: the FIRST packet of a link carries
+                // whatever is true then, and starting at UNKNOWN would make a
+                // reconnect while parked look like a heading that had just been
+                // lost.
+                lastSentDirTrust = PositionPacket.DirTrust.UNSTATED
                 // ...but not out of whatever `lastFix` still holds. With the link
                 // down and no recording running, GPS is off ([updatePowerState]
                 // asks for it on `CONNECTED || isRecording`), so after a break
@@ -1650,7 +1686,15 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // Never the phone's own orientation -- it rides in a backpack or tank
         // bag. Last known bearing is kept when the window isn't a confident
         // trend yet, rather than snapping back to North.
-        HeadingTrend.heading(headingHistory)?.let { lastBearingDeg = it.toFloat() }
+        //
+        // Keeping it is right, but it used to be silent: the device redrew the
+        // same sharp arrow whether the trend was fresh or minutes old, which is
+        // a stale reading presented as a current one. The spread and the
+        // timestamp are what let dirTrust() say so (see there).
+        HeadingTrend.heading(headingHistory)?.let {
+            lastBearingDeg = it.toFloat()
+            lastBearingAtMs = SystemClock.elapsedRealtime()
+        }
         notifyObserver()
     }
 
@@ -1733,7 +1777,47 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             lastSentAccuracyM = lastSentAccuracyM,
             consecutivePreciseFixCount = preciseFixStreak,
             diagonalM = lastKnownDiagonalM,
+            // Only ever true once per stop: it compares against what the last
+            // packet carried, and that packet updates lastSentDirTrust.
+            headingLost = dirTrust() == PositionPacket.DirTrust.UNKNOWN &&
+                lastSentDirTrust != PositionPacket.DirTrust.UNKNOWN,
         )
+    }
+
+    /**
+     * How much the device's marker may claim about the heading this packet
+     * carries. **Two states from this app, never COARSE.**
+     *
+     * This app's heading is not a reading, it is a *conclusion*:
+     * [HeadingTrend] only returns one when a window of recent fixes covered
+     * real ground and its legs agreed with the overall trend. So a heading that
+     * exists here has already passed the app's own test and is worth a sharp
+     * arrow. There is no half-believed heading to report -- the app either
+     * concluded one or it did not, and reporting COARSE would be inventing a
+     * doubt the app does not actually hold.
+     *
+     * That is also why `Location.getBearingAccuracyDegrees()` is not used here:
+     * the heading sent is not the fix's own bearing at all, so a bearing
+     * accuracy would describe a number this app does not send.
+     *
+     * COARSE stays a real wire state for the *device's own* receiver, where the
+     * course is an instantaneous reading rather than a conclusion and can be
+     * half-trusted. See the firmware's `docs/marker-fix-trust.md`.
+     *
+     * What is left is staleness. When the window stops being a confident trend
+     * the app keeps the last bearing rather than snapping to north, which is
+     * right while the rider is briefly stopped and wrong once they have been
+     * standing a while -- at that point there is, as the maintainer put it, no
+     * heading at all. [STALE_HEADING_MS] is where one becomes the other.
+     */
+    private fun dirTrust(): Int {
+        if (lastBearingAtMs == 0L) return PositionPacket.DirTrust.UNKNOWN
+        val ageMs = SystemClock.elapsedRealtime() - lastBearingAtMs
+        return if (ageMs > STALE_HEADING_MS) {
+            PositionPacket.DirTrust.UNKNOWN
+        } else {
+            PositionPacket.DirTrust.GOOD
+        }
     }
 
     private fun trySend() {
@@ -1749,6 +1833,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         val sinceLastMs = if (lastSentAtMs == 0L) -1L else nowMs - lastSentAtMs
         val heading = PositionPacket.headingSector(lastBearingDeg)
         val accuracyM = if (fix.hasAccuracy()) fix.accuracy.toDouble() else 0.0
+        val dirTrust = dirTrust()
         val speedKmh = if (fix.hasSpeed()) fix.speed.toDouble() * 3.6 else 0.0
         val altitudeM = if (fix.hasAltitude()) fix.altitude else null
         val tzOffsetMin = TimeZone.getDefault().getOffset(nowMs) / 60000
@@ -1762,7 +1847,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             tzOffsetMinutes = tzOffsetMin,
             heading = heading,
             seq = thisSeq,
-            flags = 0, // no route in this app, so no off-route bit
+            // No route in this app, so no off-route bit; heading quality is the
+            // only thing in flags here.
+            flags = PositionPacket.withDirTrust(0, dirTrust),
             accuracyMetres = accuracyM,
             speedKmh = speedKmh,
             altitudeMetres = altitudeM,
@@ -1778,6 +1865,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         lastSentFix = Location(fix)
         lastSentHeading = heading
         lastSentAccuracyM = accuracyM
+        lastSentDirTrust = dirTrust
         lastSendReason = reason.logName
 
         ble.write(bytes) { ok, error ->
