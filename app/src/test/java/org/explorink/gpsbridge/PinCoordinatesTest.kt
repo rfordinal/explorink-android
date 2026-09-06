@@ -1,6 +1,7 @@
 package org.explorink.gpsbridge
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -70,6 +71,57 @@ class PinCoordinatesTest {
     fun `a short link is refused, because the coordinates are not in it`() {
         val reason = reason("https://maps.app.goo.gl/abc123")
         assertTrue(reason, reason.contains("short"))
+    }
+
+    @Test
+    fun `a shared place link says the link has no position, not that it looks like DMS`() {
+        // The real thing, resolved from a real share on 2026-09-06. Google Maps
+        // writes a feature id for a *named* place and no coordinates at all, so
+        // there is nothing to parse -- but the text is full of hex and a UUID, and
+        // the DMS heuristic used to bite on it: `1e` in the `skid` satisfied "a
+        // hemisphere letter after a number", and the pair regex then read
+        // `809389627` out of the middle of the feature id as 809 degrees. The
+        // rider was told his link looked like degrees and minutes.
+        val reason = reason(
+            "https://www.google.com/maps/place/Barceloneta+Beach,+%C5%A0panielsko/" +
+                "data=!4m2!3m1!1s0x12a4a3a809389627:0x1e8e0ed73f4965fb!18m1!1e1" +
+                "?utm_source=mstt_1&entry=gps&coh=192189" +
+                "&skid=98a4f44f-18d1-4945-a01e-0a119355d540"
+        )
+        assertFalse(reason, reason.contains("degrees, minutes"))
+        assertTrue(reason, reason.contains("place id"))
+        // And it says what to do instead, because that is the half the rider owns.
+        assertTrue(reason, reason.contains("drop a pin"))
+    }
+
+    @Test
+    fun `a link that carries its pair plainly still parses`() {
+        // The URL branch tries the bare pair before giving up: a link is allowed
+        // to carry coordinates in a form none of the named patterns knows.
+        val p = parsed("https://example.com/x?where=48.4372000,17.0186000")
+        assertEquals(484372000, p.latE7)
+        assertEquals(170186000, p.lonE7)
+    }
+
+    @Test
+    fun `a dropped pin link still parses, which is the difference`() {
+        // Same share sheet, same day, different gesture in Google Maps. This one
+        // carries the pair, and it is what the refusal above tells the rider to do.
+        val p = parsed(
+            "https://www.google.com/maps/place/49.936764,17.902762/" +
+                "data=!4m6!3m5!1s0!7e2!8m2!3d49.9367636!4d17.9027618!18m1!1e1?entry=gps"
+        )
+        assertEquals(499367636, p.latE7)
+        assertEquals(179027618, p.lonE7)
+    }
+
+    @Test
+    fun `a geo uri is not treated as a link`() {
+        // `geo:` has no `//`, so it never takes the URL branch -- it carries its
+        // pair in the open and the bare pair reads it.
+        val p = parsed("geo:48.4372000,17.0186000")
+        assertEquals(484372000, p.latE7)
+        assertEquals(170186000, p.lonE7)
     }
 
     @Test

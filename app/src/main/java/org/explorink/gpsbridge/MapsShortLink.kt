@@ -17,12 +17,21 @@ import java.util.concurrent.Executors
  * Ultra 2026-09-02: the field filled with the short link and the screen had
  * nothing more to say.
  *
- * **One request, one header, no page.** The link answers `302` with a `Location`
- * that already carries the pair:
+ * **One request, one header, no page.** The link answers `302` with a `Location`,
+ * and for a **dropped pin** that header already carries the pair:
  *
  *     302 -> https://www.google.com/maps/place/49.936764,17.902762/data=...!3d49.9367636!4d17.9027618...
  *
- * So this reads the header and stops. `instanceFollowRedirects` is off on
+ * So this reads the header and stops.
+ *
+ * **It does not always carry one, and that is Google's doing, not a bug here.**
+ * A share of a *named place* expands to a feature id instead, measured
+ * 2026-09-06:
+ *
+ *     302 -> .../maps/place/Barceloneta+Beach,+%C5%A0panielsko/data=!4m2!3m1!1s0x12a4a3a809389627:0x1e8e0ed73f4965fb!18m1!1e1?...
+ *
+ * Expanding still has to happen -- it is the only way to find that out -- and
+ * [PinCoordinates] is what says so to the rider. `instanceFollowRedirects` is off on
  * purpose: the redirect target is a Google Maps page and there is no reason to
  * fetch it. `!3d`/`!4d` is what [PinCoordinates] prefers anyway -- it is the
  * place that was looked up, where `@` is only where the camera sat.
