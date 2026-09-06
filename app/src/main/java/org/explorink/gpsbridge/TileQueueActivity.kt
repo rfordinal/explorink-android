@@ -10,6 +10,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -103,6 +105,28 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
     private var plannedSideKm = 0
     private var planning = false
 
+    /**
+     * What the coordinate field last had to say: a parse refusal, or the reason a
+     * short link would not open.
+     *
+     * State rather than a write straight into `tvProblem`, because [render] runs
+     * every second and rebuilds that view from the outbox snapshot. A refusal
+     * written into the view was hidden on the next tick, so the rider pressed
+     * Plan, saw a flash and had nothing left to read. Cleared when the text
+     * changes, because that is when it stops being true.
+     */
+    private var pasteNote: String? = null
+
+    /**
+     * True while [MapsShortLink] has a request out.
+     *
+     * [renderPlan] reads it for the same reason it reads [planning]: with no
+     * plan yet, those two are the only states in which the progress line is not
+     * stale, and without this one the "opening that link..." it had just been
+     * given was hidden a tick later.
+     */
+    private var expanding = false
+
     /** Row text as it was last painted, keyed by zone. See the class doc's throttle. */
     private val rowText = HashMap<String, String>()
 
@@ -166,6 +190,19 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         // it, and an Add button still offering the old numbers is how a rider
         // queues a box they were never shown.
         rgSize.setOnCheckedChangeListener { _, _ -> clearPlan() }
+        // Whatever the field's message said stops being true the moment the text
+        // changes, and a stale refusal under a corrected coordinate is worse than
+        // no message at all.
+        etArea.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                if (pasteNote != null) {
+                    pasteNote = null
+                    render()
+                }
+            }
+        })
 
         intent?.let { prefillFromIntent(it) }
         render()
@@ -354,14 +391,16 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         // ([MapsShortLink]).
         val typedText = etArea.text.toString()
         if (MapsShortLink.isShortLink(typedText)) {
-            tvProblem.visibility = View.GONE
+            expanding = true
+            pasteNote = null
             tvPlan.visibility = View.VISIBLE
             tvPlan.text = "opening that link..."
+            render()
             MapsShortLink.resolve(typedText) { expanded, why ->
+                expanding = false
                 if (expanded == null) {
-                    tvPlan.visibility = View.GONE
-                    tvProblem.visibility = View.VISIBLE
-                    tvProblem.text = why ?: "that link could not be opened"
+                    pasteNote = why ?: "that link could not be opened"
+                    render()
                 } else {
                     // Written back so the rider can see what it actually was, and
                     // so a second press costs no second request.
@@ -373,8 +412,8 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         }
         when (val parsed = PinCoordinates.parse(typedText)) {
             is PinCoordinates.Result.Failure -> {
-                tvProblem.visibility = View.VISIBLE
-                tvProblem.text = parsed.reason
+                pasteNote = parsed.reason
+                render()
             }
 
             is PinCoordinates.Result.Parsed -> {
@@ -489,6 +528,7 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         } else if (snap.blocker != null) {
             problems.add(snap.blocker)
         }
+        pasteNote?.let { problems.add(it) }
         tvProblem.visibility = if (problems.isEmpty()) View.GONE else View.VISIBLE
         if (problems.isNotEmpty()) tvProblem.text = problems.joinToString("\n")
 
@@ -501,7 +541,7 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
 
         btnPause.isEnabled = !snap.paused
         btnContinue.isEnabled = snap.paused || snap.phase == TileOutboxController.Phase.IDLE
-        btnPlan.isEnabled = !planning
+        btnPlan.isEnabled = !planning && !expanding
 
         // A disabled Continue with no reason next to it reads as a dead button,
         // and that is exactly how it was reported. There is only one reason it
@@ -525,7 +565,10 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
     private fun renderPlan() {
         val p = plan
         if (p == null) {
-            if (!planning) {
+            // With no plan, the line is only worth keeping while something is
+            // actually running -- and both of those set its text themselves, so
+            // this leaves it alone rather than rewriting it every second.
+            if (!planning && !expanding) {
                 tvPlan.visibility = View.GONE
                 btnAddZone.visibility = View.GONE
             }
