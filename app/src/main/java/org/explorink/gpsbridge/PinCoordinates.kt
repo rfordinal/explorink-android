@@ -37,9 +37,12 @@ package org.explorink.gpsbridge
  * What it refuses, with a reason rather than a guess:
  *
  *  - **A short link** (`maps.app.goo.gl`, `goo.gl/maps`). The coordinates are not
- *    in the text; only a redirect would produce them, and this app makes no
- *    network request except to the tile CDN (`android/README.md`). Guessing here
- *    would mean pinning the wrong place silently.
+ *    in the text at all; only a redirect produces them. Guessing here would mean
+ *    pinning the wrong place silently. This stays a refusal even though the app
+ *    now resolves such links: [MapsShortLink] does that one HEAD request
+ *    *before* this parser is called, and only for a bare link on a screen where
+ *    the rider just pressed a button. A link buried in a pasted sentence still
+ *    arrives here, and it is still refused.
  *  - **A DMS-shaped text it cannot read whole** -- a hemisphere letter or a degree
  *    symbol with no readable degrees/minutes behind it.
  *  - Anything out of range, and anything with no pair in it at all.

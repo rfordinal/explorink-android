@@ -436,10 +436,11 @@ list (`CdnTileSource`, `CdnIndexSource`, `CdnMapsetSource`).
 
 **A maps shortener**, once, and only when the rider has just shared a link. A
 Google Maps share hands over `https://maps.app.goo.gl/<id>` with no coordinates
-anywhere in the text, so the pre-trip area picker cannot finish without expanding
-it. `MapsShortLink` sends one HEAD request, reads the `Location` header and does
-not follow it, so no Google page is ever fetched. It never runs in the background
-and never on a schedule.
+anywhere in the text, so neither the pre-trip area picker nor the pins screen can
+finish without expanding it. `MapsShortLink` sends one HEAD request, reads the
+`Location` header and does not follow it, so no Google page is ever fetched. It
+never runs in the background and never on a schedule, only on the rider's own
+press of Send or Save.
 
 Nothing else. There is no analytics, no crash reporter and no update check.
 
