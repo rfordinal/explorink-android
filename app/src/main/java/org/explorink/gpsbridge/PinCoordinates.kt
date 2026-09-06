@@ -135,8 +135,8 @@ object PinCoordinates {
             // text is *shaped* like degrees. Measured 2026-09-06 on the link a
             // Google Maps share actually produced: the `1e` in a `skid=` UUID
             // satisfied "a hemisphere letter after a number", and the pair
-            // regex then read `809389627` out of the middle of a hex feature id
-            // as 809 degrees 38 minutes. The rider was told his link looked like
+            // regex then read a run of digits out of the middle of the link as
+            // 809 degrees 38 minutes. The rider was told his link looked like
             // degrees and minutes, which is nonsense he cannot act on.
             //
             // The bare pair is still tried, because a link is allowed to carry

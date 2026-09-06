@@ -79,9 +79,10 @@ class PinCoordinatesTest {
         // writes a feature id for a *named* place and no coordinates at all, so
         // there is nothing to parse -- but the text is full of hex and a UUID, and
         // the DMS heuristic used to bite on it: `1e` in the `skid` satisfied "a
-        // hemisphere letter after a number", and the pair regex then read
-        // `809389627` out of the middle of the feature id as 809 degrees. The
-        // rider was told his link looked like degrees and minutes.
+        // hemisphere letter after a number", and the pair regex then read a run
+        // of digits out of the middle of the link as degrees and minutes. On this
+        // redacted URL the run it bites on is the `coh=` value; on the real one it
+        // was inside the feature id. Same verdict, different substring.
         val reason = reason(
             "https://www.google.com/maps/place/Example+Beach,+Testland/" +
                 "data=!4m2!3m1!1s0x12a4b1c2d3e4f506:0x1e2f3a4b5c6d7e8f!18m1!1e1" +
