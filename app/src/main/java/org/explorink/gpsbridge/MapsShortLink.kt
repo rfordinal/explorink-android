@@ -28,7 +28,10 @@ import java.util.concurrent.Executors
  * A share of a *named place* expands to a feature id instead, measured
  * 2026-09-06:
  *
- *     302 -> .../maps/place/Barceloneta+Beach,+%C5%A0panielsko/data=!4m2!3m1!1s0x12a4a3a809389627:0x1e8e0ed73f4965fb!18m1!1e1?...
+ *     302 -> .../maps/place/Example+Beach,+Testland/data=!4m2!3m1!1s0x12a4b1c2d3e4f506:0x1e2f3a4b5c6d7e8f!18m1!1e1?...
+ *
+ * (Place name and ids redacted -- this repository is public. The shape is the
+ * measured one.)
  *
  * Expanding still has to happen -- it is the only way to find that out -- and
  * [PinCoordinates] is what says so to the rider. `instanceFollowRedirects` is off on

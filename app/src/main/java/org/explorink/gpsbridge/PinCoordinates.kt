@@ -166,9 +166,12 @@ object PinCoordinates {
      * Why a link can carry no position at all, said so the rider can act on it.
      *
      * **A Google Maps share of a named place has no coordinates in it.** Measured
-     * 2026-09-06: sharing Barceloneta Beach produced
-     * `.../maps/place/Barceloneta+Beach,+%C5%A0panielsko/data=!4m2!3m1!1s0x12a4a3a809389627:0x1e8e0ed73f4965fb!18m1!1e1?...`
-     * -- a feature id and nothing else. Sharing a **dropped pin** on the same day
+     * 2026-09-06: sharing a searched-for beach produced
+     * `.../maps/place/Example+Beach,+Testland/data=!4m2!3m1!1s0x12a4b1c2d3e4f506:0x1e2f3a4b5c6d7e8f!18m1!1e1?...`
+     * -- a feature id and nothing else. **The place name and the two ids above are
+     * redacted**, because this repository is public and a real share names where
+     * its author stood; the shape, and every regex verdict below, is the measured
+     * one. Sharing a **dropped pin** on the same day
      * produced `.../maps/place/49.936764,17.902762/data=...!3d49.9367636!4d17.9027618`,
      * which parses. So the difference is what the rider did in Google Maps, not
      * anything this app can fix by parsing harder, and the message says which

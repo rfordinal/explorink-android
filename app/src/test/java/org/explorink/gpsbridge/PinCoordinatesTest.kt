@@ -83,10 +83,10 @@ class PinCoordinatesTest {
         // `809389627` out of the middle of the feature id as 809 degrees. The
         // rider was told his link looked like degrees and minutes.
         val reason = reason(
-            "https://www.google.com/maps/place/Barceloneta+Beach,+%C5%A0panielsko/" +
-                "data=!4m2!3m1!1s0x12a4a3a809389627:0x1e8e0ed73f4965fb!18m1!1e1" +
-                "?utm_source=mstt_1&entry=gps&coh=192189" +
-                "&skid=98a4f44f-18d1-4945-a01e-0a119355d540"
+            "https://www.google.com/maps/place/Example+Beach,+Testland/" +
+                "data=!4m2!3m1!1s0x12a4b1c2d3e4f506:0x1e2f3a4b5c6d7e8f!18m1!1e1" +
+                "?utm_source=mstt_1&entry=gps&coh=100000" +
+                "&skid=00000000-0000-4000-a01e-000000000000"
         )
         assertFalse(reason, reason.contains("degrees, minutes"))
         assertTrue(reason, reason.contains("place id"))
