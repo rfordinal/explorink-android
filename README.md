@@ -112,7 +112,8 @@ while: at that point there is effectively no heading. `STALE_HEADING_MS` is
 where one becomes the other, currently **90 s**, a first cut that has **not
 been judged on a ride**. It sits between two failures — an arrow still pointing
 somewhere long after the rider parked, and an arrow that vanishes at every
-traffic light, each change costing the device a ~500 ms panel refresh. The
+traffic light, each change costing the device a panel refresh it pays in full,
+~500 ms on an X4 and ~1,081 ms on a T5 S3 Pro. The
 trend itself disappears within about 5 s of stopping, so the timer measures
 from "stopped moving", not from "stopped sending".
 
