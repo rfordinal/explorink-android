@@ -37,9 +37,17 @@ package org.explorink.gpsbridge
  * What it refuses, with a reason rather than a guess:
  *
  *  - **A short link** (`maps.app.goo.gl`, `goo.gl/maps`). The coordinates are not
- *    in the text; only a redirect would produce them, and this app makes no
- *    network request except to the tile CDN (`android/README.md`). Guessing here
- *    would mean pinning the wrong place silently.
+ *    in the text at all; only a redirect produces them. Guessing here would mean
+ *    pinning the wrong place silently. This stays a refusal even though the app
+ *    now resolves such links: [MapsShortLink] does that one HEAD request
+ *    *before* this parser is called, and only for a bare link on a screen where
+ *    the rider just pressed a button. A link buried in a pasted sentence still
+ *    arrives here, and it is still refused.
+ *  - **A link with no position in it.** A Google Maps share of a *named place*
+ *    carries a feature id and nothing else; only a dropped pin carries the pair.
+ *    The message says which of the two the rider did, because that is the part
+ *    they can change. A link is also never handed to the DMS reader, whatever it
+ *    looks like -- see [linkWithNoCoordinates].
  *  - **A DMS-shaped text it cannot read whole** -- a hemisphere letter or a degree
  *    symbol with no readable degrees/minutes behind it.
  *  - Anything out of range, and anything with no pair in it at all.
@@ -66,6 +74,15 @@ object PinCoordinates {
     private val BARE_PAIR = Regex("""($NUM)\s*[,;\s]\s*($NUM)""")
 
     private val SHORT_LINK = Regex("""(maps\.app\.goo\.gl|goo\.gl/maps)""", RegexOption.IGNORE_CASE)
+
+    /**
+     * Any `scheme://` text. `geo:48.43,17.01` deliberately does not match -- it
+     * has no `//` -- because that one carries its pair in the open.
+     */
+    private val URLISH = Regex("""[a-z][a-z0-9+.-]*://""", RegexOption.IGNORE_CASE)
+
+    /** A Google Maps link naming a place, which is the one worth explaining. */
+    private val MAPS_PLACE = Regex("""google\.[a-z.]+/maps/place/""", RegexOption.IGNORE_CASE)
 
     /**
      * One DMS component: degrees, minutes, optional seconds, optional hemisphere.
@@ -112,6 +129,19 @@ object PinCoordinates {
         // a different country and no warning (measured on the phone 2026-08-19).
         val match = if (urlMatch != null) {
             urlMatch
+        } else if (URLISH.containsMatchIn(t)) {
+            // **A URL never reaches the DMS heuristic.** A link is full of hex,
+            // ids and version numbers, and that heuristic only asks whether the
+            // text is *shaped* like degrees. Measured 2026-09-06 on the link a
+            // Google Maps share actually produced: the `1e` in a `skid=` UUID
+            // satisfied "a hemisphere letter after a number", and the pair
+            // regex then read `809389627` out of the middle of a hex feature id
+            // as 809 degrees 38 minutes. The rider was told his link looked like
+            // degrees and minutes, which is nonsense he cannot act on.
+            //
+            // The bare pair is still tried, because a link is allowed to carry
+            // its coordinates plainly.
+            BARE_PAIR.find(t) ?: return linkWithNoCoordinates(t)
         } else if (DMS_SHAPED.containsMatchIn(t)) {
             return parseDms(t)
         } else {
@@ -131,6 +161,36 @@ object PinCoordinates {
         if (!PinList.isValidLonE7(lonE7)) return Result.Failure("Longitude is out of range.")
         return Result.Parsed(latE7, lonE7)
     }
+
+    /**
+     * Why a link can carry no position at all, said so the rider can act on it.
+     *
+     * **A Google Maps share of a named place has no coordinates in it.** Measured
+     * 2026-09-06: sharing a searched-for beach produced
+     * `.../maps/place/Example+Beach,+Testland/data=!4m2!3m1!1s0x12a4b1c2d3e4f506:0x1e2f3a4b5c6d7e8f!18m1!1e1?...`
+     * -- a feature id and nothing else. **The place name and the two ids above are
+     * redacted**, because this repository is public and a real share names where
+     * its author stood; the shape, and every regex verdict below, is the measured
+     * one. Sharing a **dropped pin** on the same day
+     * produced `.../maps/place/49.936764,17.902762/data=...!3d49.9367636!4d17.9027618`,
+     * which parses. So the difference is what the rider did in Google Maps, not
+     * anything this app can fix by parsing harder, and the message says which
+     * action produces a link that works.
+     *
+     * Turning that feature id into a position would mean the Places API (a key in
+     * the APK and a billing account) or fetching and scraping the Maps page, which
+     * is the one thing [MapsShortLink] deliberately does not do. Neither is taken
+     * here.
+     */
+    private fun linkWithNoCoordinates(t: String): Result = Result.Failure(
+        if (MAPS_PLACE.containsMatchIn(t)) {
+            "That link names a place but carries no position -- Google Maps puts only " +
+                "a place id in it. In Google Maps, press and hold the spot to drop a " +
+                "pin, then share that."
+        } else {
+            "No coordinates in that link."
+        }
+    )
 
     /**
      * `48°09'05.4"N 17°07'47.1"E`, and the same thing with the symbols stripped.

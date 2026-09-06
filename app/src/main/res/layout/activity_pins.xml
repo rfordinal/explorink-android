@@ -104,7 +104,7 @@
                 android:paddingBottom="12dp"
                 android:textColor="#FF777777"
                 android:textSize="11sp"
-                android:text="Decimal degrees, a geo: link, or a full Google Maps link. A short maps.app.goo.gl link has no coordinates in it: open it first." />
+                android:text="Decimal degrees, a geo: link, a Google Maps link, or a share from a maps app. A short maps.app.goo.gl link is opened for you." />
 
             <TextView
                 android:layout_width="match_parent"

@@ -12,6 +12,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -91,6 +93,21 @@ class PinsActivity : Activity(), BridgeService.Observer {
     /** True while a history page has been asked for or shown, so it survives a redraw. */
     private var historyShown = false
 
+    /**
+     * What the coordinate field last had to say: a parse refusal, or the short
+     * link being expanded.
+     *
+     * State rather than a write straight into `tvProblem`, because [render] runs
+     * once a second and rebuilds that view from the bridge snapshot. A message
+     * written into the view was gone on the next tick -- which is how the
+     * parser's refusal behaved before this existed, so the rider pressed Save,
+     * saw a flash, and had nothing left to read.
+     */
+    private var pasteNote: String? = null
+
+    /** True while [MapsShortLink] has a request out, so Save stays off. */
+    private var expanding = false
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, b: IBinder?) {
             service = (b as? BridgeService.LocalBinder)?.service ?: return
@@ -139,6 +156,19 @@ class PinsActivity : Activity(), BridgeService.Observer {
             onHistoryPressed(service?.pinsSnapshot()?.historyNext ?: 0)
         }
         btnRefresh.setOnClickListener { ask { it.pinsRefresh() } }
+        // Whatever the field's message said stops being true the moment the text
+        // changes, and a stale refusal sitting under a corrected coordinate is
+        // worse than no message at all.
+        etCoords.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                if (pasteNote != null) {
+                    pasteNote = null
+                    render()
+                }
+            }
+        })
         btnClose.setOnClickListener { finish() }
 
         // A shared position lands here: "Share to ExplorInk GPS" from a maps app
@@ -247,10 +277,38 @@ class PinsActivity : Activity(), BridgeService.Observer {
     private fun onSaveAtCoordinates() {
         val key = selectedKey() ?: return
         val label = PinKinds.labelFor(key)
-        when (val parsed = PinCoordinates.parse(etCoords.text.toString())) {
+        val typed = etCoords.text.toString()
+
+        // What Google Maps shares is a short link and nothing else, so it is
+        // expanded before the parser sees it: one HEAD request, on this press
+        // only ([MapsShortLink]). The map-area window has had this since
+        // 2026-09-02 and this one did not, so the same share landed in one screen
+        // and dead-ended in the other.
+        if (MapsShortLink.isShortLink(typed)) {
+            expanding = true
+            pasteNote = "opening that link..."
+            render()
+            MapsShortLink.resolve(typed) { expanded, why ->
+                expanding = false
+                if (expanded == null) {
+                    pasteNote = why ?: "that link could not be opened"
+                    render()
+                } else {
+                    // Written back so the rider can see where it actually pointed
+                    // -- the confirmation dialog is the only guard on a pasted
+                    // coordinate, and this is the other half of it. A second press
+                    // then costs no second request.
+                    etCoords.setText(expanded)
+                    onSaveAtCoordinates()
+                }
+            }
+            return
+        }
+
+        when (val parsed = PinCoordinates.parse(typed)) {
             is PinCoordinates.Result.Failure -> {
-                tvProblem.visibility = View.VISIBLE
-                tvProblem.text = parsed.reason
+                pasteNote = parsed.reason
+                render()
             }
 
             is PinCoordinates.Result.Parsed -> {
@@ -374,6 +432,7 @@ class PinsActivity : Activity(), BridgeService.Observer {
         if (snap.connected && snap.tilesBusy) {
             problems.add("Map squares are transferring. Pin commands wait for that to finish.")
         }
+        pasteNote?.let { problems.add(it) }
         tvProblem.visibility = if (problems.isEmpty()) View.GONE else View.VISIBLE
         if (problems.isNotEmpty()) tvProblem.text = problems.joinToString("\n")
 
@@ -392,7 +451,7 @@ class PinsActivity : Activity(), BridgeService.Observer {
         // Off rather than failing at the tap: without a fix there is nothing to
         // save, and the device refuses the same way for the same reason.
         btnSaveHere.isEnabled = snap.connected && fix != null && !snap.busy
-        btnSaveAt.isEnabled = snap.connected && !snap.busy
+        btnSaveAt.isEnabled = snap.connected && !snap.busy && !expanding
 
         renderSpinner(pins?.map { it.key }?.toSet() ?: emptySet())
         renderRows(pins, fix)
