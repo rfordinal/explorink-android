@@ -471,17 +471,94 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
     }
 
     private fun onZonePressed(row: BridgeService.ZoneRow) {
+        val zone = row.zone
+        val actions = listOf("Rename", "Check state", "Drop")
         AlertDialog.Builder(this)
-            .setTitle(row.zone.label)
+            .setTitle(zone.label)
+            .setItems(actions.toTypedArray()) { _, which ->
+                when (which) {
+                    0 -> onRenameZonePressed(zone)
+                    1 -> onCheckZoneStatePressed(zone)
+                    2 -> onDropZonePressed(zone)
+                }
+            }
+            .show()
+    }
+
+    private fun onDropZonePressed(zone: TileZone) {
+        AlertDialog.Builder(this)
+            .setTitle(zone.label)
             // True and worth saying: what is already on the card stays there.
             // A receipt is a fact about the device, not about the ask that
             // produced it (`docs/tile-outbox-format.md`).
             .setMessage("Drop this area from the queue? Squares already on the device stay on it.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Drop") { _, _ ->
-                service?.outboxDropZone(row.zone.zoneId)
+                service?.outboxDropZone(zone.zoneId)
                 render()
             }
+            .show()
+    }
+
+    private fun onRenameZonePressed(zone: TileZone) {
+        val input = EditText(this).apply {
+            setText(zone.label)
+            setSelection(text.length)
+        }
+        val padding = (16 * resources.displayMetrics.density).toInt()
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padding, padding / 2, padding, 0)
+            addView(input)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Rename area")
+            .setView(container)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Rename") { _, _ ->
+                val label = input.text.toString().trim()
+                if (label.isNotEmpty()) {
+                    service?.outboxRenameZone(zone.zoneId, label)
+                    render()
+                }
+            }
+            .show()
+    }
+
+    /**
+     * Answers "is this area actually on the device I'm connected to right
+     * now" -- what T-121 found the app could not say. The counts themselves
+     * are only as fresh as the last snapshot: [outboxSnapshot] is device-aware
+     * since T-121, so a receipt from a different device already shows up here
+     * as queued rather than sent.
+     */
+    private fun onCheckZoneStatePressed(zone: TileZone) {
+        val snap = service?.outboxSnapshot()
+        if (snap == null) {
+            toast("The bridge is not running. Open the main screen first.")
+            return
+        }
+        val t = snap.zones.firstOrNull { it.zone.zoneId == zone.zoneId }?.totals
+        if (t == null) {
+            toast("This area is gone from the queue.")
+            return
+        }
+        val lines = StringBuilder()
+        lines.append(
+            if (snap.connected) "Connected to the device.\n"
+            else "Not connected right now -- this is the last confirmed state.\n"
+        )
+        lines.append("${t.sent} of ${t.tiles} confirmed on ")
+            .append(if (snap.connected) "this device" else "the device last checked")
+            .append('\n')
+        if (t.queued > 0) lines.append("${t.queued} queued (owed to this device, or waiting resend)\n")
+        if (t.waitingBuild > 0) lines.append("${t.waitingBuild} still building on the map server\n")
+        if (t.noData > 0) lines.append("${t.noData} with no map data\n")
+        if (t.stuck > 0) lines.append("${t.stuck} gave up\n")
+        AlertDialog.Builder(this)
+            .setTitle(zone.label)
+            .setMessage(lines.toString().trimEnd())
+            .setPositiveButton("OK", null)
             .show()
     }
 

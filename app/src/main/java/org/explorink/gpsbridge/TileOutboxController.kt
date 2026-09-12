@@ -73,6 +73,14 @@ class TileOutboxController(
     private val listener: Listener? = null,
     /** Wall clock in epoch milliseconds. Injected so the backoff is testable. */
     private val now: () -> Long = { System.currentTimeMillis() },
+    /**
+     * The BLE address of whatever device is connected right now, or null.
+     * Injected the same way [now] is, and for the same reason: this class
+     * does not otherwise know a [BleLink] exists (T-121, `docs/TODO.md`) --
+     * a receipt or a sent state means nothing without knowing whose card it
+     * describes.
+     */
+    private val currentDeviceId: () -> String? = { null },
 ) {
 
     /** One ask, no download. [TileSource.prime] is the real one. */
@@ -380,6 +388,14 @@ class TileOutboxController(
         listener?.onOutboxChanged()
     }
 
+    /** Renames a zone. Nothing else about its plan or receipts moves. */
+    fun renameZone(zoneId: String, label: String) {
+        outbox.renameZone(zoneId, label)
+        save()
+        status = "renamed to $label"
+        listener?.onOutboxChanged()
+    }
+
     /**
      * Drops every zone that has nothing left to send.
      *
@@ -391,7 +407,7 @@ class TileOutboxController(
     fun dropFinishedZones(): Int {
         val at = now()
         val done = outbox.zones.filter { z ->
-            val t = outbox.zoneTotals(z.zoneId, at)
+            val t = outbox.zoneTotals(z.zoneId, at, currentDeviceId())
             t.queued == 0 && t.waitingBuild == 0
         }
         for (z in done) outbox.removeZone(z.zoneId)
@@ -458,7 +474,7 @@ class TileOutboxController(
         }
         if (!pusher.idle) return "map squares are already transferring"
         val at = now()
-        if (outbox.dueForIndexRead(at).isEmpty() && outbox.next(at) == null) {
+        if (outbox.dueForIndexRead(at).isEmpty() && outbox.next(at, currentDeviceId()) == null) {
             // Nothing to look up and nothing to push. Not a refusal: a queue of
             // tiles all waiting out a build backoff is a healthy queue, and
             // saying "cannot start" about it would be a lie.
@@ -623,7 +639,7 @@ class TileOutboxController(
     private fun askForWhatIsNotBuilt(at: Long, then: () -> Unit) {
         val waiting = outbox.items
             .asSequence()
-            .filter { outbox.stateOf(it, at) == TileState.WAITING_BUILD }
+            .filter { outbox.stateOf(it, at, currentDeviceId()) == TileState.WAITING_BUILD }
             .map { it.tile }
             .distinctBy { it.key }
             .toList()
@@ -661,7 +677,7 @@ class TileOutboxController(
         val at = now()
         batch = pendingTiles(at)
         if (batch.isEmpty()) {
-            end(if (outbox.totals(at).waitingBuild > 0) "waiting for the map server to build" else "nothing to send")
+            end(if (outbox.totals(at, currentDeviceId()).waitingBuild > 0) "waiting for the map server to build" else "nothing to send")
             return
         }
         phase = Phase.ANNOUNCING
@@ -694,13 +710,21 @@ class TileOutboxController(
         pusher.pushTiles(batch.map { MissingTile(it.z, it.col, it.row, 0) }, device?.tileFormat)
     }
 
-    /** Distinct keys the CDN is known to have, not sent, not given up on, in queue order. */
+    /**
+     * Distinct keys the CDN is known to have, not already confirmed by the
+     * device connected right now, not given up on, in queue order.
+     *
+     * `isSentToDevice`, not `isSent` -- T-121. A receipt earned against a
+     * different device (or the simulator) does not skip a tile here; it
+     * queues the resend that device is actually owed.
+     */
     private fun pendingTiles(at: Long): List<TileRef> {
+        val deviceId = currentDeviceId()
         val seen = HashSet<String>()
         val out = ArrayList<TileRef>()
         for (item in outbox.items) {
             if (item.cdn != TilePlan.State.PRESENT) continue
-            if (outbox.isSent(item.key) || item.terminal) continue
+            if (outbox.isSentToDevice(item.key, deviceId) || item.terminal) continue
             if (at < item.nextTryAtMs) continue
             if (!seen.add(item.key)) continue
             out.add(item.tile)
@@ -739,7 +763,7 @@ class TileOutboxController(
         val key = TileRef(z, col, row).key
         if (!mine(key)) return
         val at = now()
-        if (outbox.confirm(key, bytes.toLong(), crc32, TRANSPORT_NAME, at)) {
+        if (outbox.confirm(key, bytes.toLong(), crc32, TRANSPORT_NAME, at, currentDeviceId())) {
             rate.confirmed(bytes.toLong(), at)
         } else {
             // Recorded by confirm() as a transient failure already. Worth a log
@@ -891,9 +915,9 @@ class TileOutboxController(
 
     // --- numbers for the screen -------------------------------------------------
 
-    fun totals(): TileOutbox.Totals = outbox.totals(now())
+    fun totals(): TileOutbox.Totals = outbox.totals(now(), currentDeviceId())
 
-    fun zoneTotals(zoneId: String): TileOutbox.Totals = outbox.zoneTotals(zoneId, now())
+    fun zoneTotals(zoneId: String): TileOutbox.Totals = outbox.zoneTotals(zoneId, now(), currentDeviceId())
 
     val zones: List<TileZone> get() = outbox.zones
 

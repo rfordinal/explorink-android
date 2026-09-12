@@ -402,6 +402,41 @@ class OutboxStoreTest {
         assertEquals("/data/x/files/tiles", OutboxStore.dirIn(File("/data/x/files")).path)
     }
 
+    // --- T-121: a receipt's device id -----------------------------------------
+
+    @Test
+    fun `a receipt's device id round-trips`() {
+        val out = TileOutbox()
+        out.addZone(barcelona, listOf(a))
+        out.takeNextForTest(a)
+        out.beginSend(a.key, 966_878L, 0xDEADBEEFL)
+        assertTrue(out.confirm(a.key, 966_878L, 0xDEADBEEFL, "ble", 1_000L, "AA:BB:CC:DD:EE:FF"))
+
+        val s = store()
+        s.save(out)
+        val back = s.load()
+
+        assertEquals("AA:BB:CC:DD:EE:FF", back.receipts.getValue(a.key).deviceId)
+    }
+
+    @Test
+    fun `a receipt written before this field existed reads back with no device id`() {
+        // Every outbox.json on a phone at the moment this shipped looks
+        // exactly like this -- no deviceId key at all, not a null one.
+        val text = """
+            {"version": 1, "zones": [], "items": [],
+             "receipts": {"13/4144/3059": {"bytes": 966878, "crc32": 1, "transport": "ble", "atMs": 5}}}
+        """.trimIndent()
+        val load = OutboxJson.read(text) as OutboxJson.Load.Restored
+        val r = load.outbox.receipts.getValue(a.key)
+        assertNull(r.deviceId)
+        // Any-device bookkeeping is unaffected by the missing field.
+        assertTrue(load.outbox.isSent(a.key))
+        // But it is not trusted as sent to a device that is actually connected
+        // -- that ambiguity is exactly what T-121 found.
+        assertFalse(load.outbox.isSentToDevice(a.key, "device-A"))
+    }
+
     // --- helpers --------------------------------------------------------------
 
     private fun slot(present: Boolean, size: Long, id: Long) = TileIndex.Slot(
