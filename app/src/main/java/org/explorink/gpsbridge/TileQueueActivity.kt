@@ -789,9 +789,13 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
             }
             // Compared before it is set: setText invalidates and relayouts even
             // when the string is identical, and this runs while chunks are
-            // moving.
-            if (rowText[row.zone.zoneId] != detail) {
-                rowText[row.zone.zoneId] = detail
+            // moving. The label is folded into the cache key too -- a rename
+            // does not change `detail` at all, and a cache keyed on `detail`
+            // alone left a renamed row showing its old label until something
+            // else about it changed.
+            val cacheKey = "${row.zone.label} $detail"
+            if (rowText[row.zone.zoneId] != cacheKey) {
+                rowText[row.zone.zoneId] = cacheKey
                 v.findViewById<TextView>(R.id.tvZoneLabel).text =
                     "${row.zone.label}   ${dayFmt.format(Date(row.zone.createdAtMs))}"
                 v.findViewById<TextView>(R.id.tvZoneDetail).text = detail
