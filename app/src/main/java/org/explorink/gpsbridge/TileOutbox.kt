@@ -70,6 +70,19 @@ data class TileReceipt(
     /** `ble` today. Wi-Fi later, behind the same seam. */
     val transport: String,
     val atMs: Long,
+    /**
+     * The connected device's BLE address at the moment this receipt was
+     * earned, or null for a receipt written before this field existed.
+     *
+     * **T-121, 2026-09-05.** Several ExplorInk devices exist (and the
+     * simulator), and a receipt says nothing about which one confirmed it
+     * unless this is recorded: a receipt earned against one device silently
+     * blocked a resend to another, both keyed by the same tile
+     * (`docs/TODO.md`, T-121). [TileOutbox.isSentToDevice] is what reads this
+     * back; [isSent] stays device-agnostic on purpose, for the CDN-index
+     * bookkeeping that does not care which device asked.
+     */
+    val deviceId: String? = null,
 )
 
 /**
@@ -144,7 +157,7 @@ enum class TileState {
  *   "zones":    [ {zoneId,label,latE7,lonE7,sideKm,createdAtMs}, ... ],
  *   "items":    [ {zoneId,z,col,row,queuedAtMs,cdn,sizeBytes,contentId,
  *                  buildChecks,nextTryAtMs,attempts,error,terminal}, ... ],
- *   "receipts": { "13/4144/3059": {bytes,crc32,transport,atMs}, ... } }
+ *   "receipts": { "13/4144/3059": {bytes,crc32,transport,atMs,deviceId}, ... } }
  * ```
  *
  * `cdn` is [TilePlan.State] by name, so an unknown word from a newer build reads
@@ -251,9 +264,44 @@ class TileOutbox(
 
     fun zone(zoneId: String): TileZone? = zoneList.firstOrNull { it.zoneId == zoneId }
 
+    /**
+     * Renames a zone in place. Silently a no-op for an id that is not there --
+     * the row that asked for it is gone from the screen already.
+     */
+    fun renameZone(zoneId: String, label: String) {
+        val i = zoneList.indexOfFirst { it.zoneId == zoneId }
+        if (i >= 0) zoneList[i] = zoneList[i].copy(label = label)
+    }
+
     // --- the ledger ---------------------------------------------------------
 
+    /**
+     * Any device's word, ever, that this tile is on its card.
+     *
+     * Deliberately device-agnostic: this only gates whether the CDN's index is
+     * worth reading again ([dueForIndexRead]) and whether a build check is
+     * worth repeating, neither of which depends on which device asked. Whether
+     * a tile counts as sent *to the device connected right now* is
+     * [isSentToDevice] -- see [TileReceipt.deviceId] for why the two differ.
+     */
     fun isSent(key: String): Boolean = ledger.containsKey(key)
+
+    /**
+     * Sent, and confirmed by **this** device -- the check [pendingTiles] and
+     * the sync screen actually need (T-121).
+     *
+     * A receipt with no [TileReceipt.deviceId] (written before this field
+     * existed) does not count as sent to a specific device: it is exactly the
+     * ambiguous case T-121 found, and guessing "probably this one" is the
+     * mistake being fixed, not a cheaper version of the check. It falls back
+     * to "sent" only when [deviceId] is null, i.e. nothing is connected right
+     * now to disagree with it -- there is no resend decision to get wrong
+     * while offline, and the row should still show what was last confirmed.
+     */
+    fun isSentToDevice(key: String, deviceId: String?): Boolean {
+        val r = ledger[key] ?: return false
+        return deviceId == null || r.deviceId == deviceId
+    }
 
     /**
      * The transport has the bytes and is about to push them.
@@ -290,14 +338,24 @@ class TileOutbox(
      * quietly marked done.
      *
      * A receipt with no [beginSend] behind it is refused for the same reason.
+     *
+     * [deviceId] is the connected device's BLE address at this moment -- see
+     * [TileReceipt.deviceId] and T-121.
      */
-    fun confirm(key: String, bytes: Long, crc32: Long, transport: String, atMs: Long): Boolean {
+    fun confirm(
+        key: String,
+        bytes: Long,
+        crc32: Long,
+        transport: String,
+        atMs: Long,
+        deviceId: String? = null,
+    ): Boolean {
         val out = outgoing
         if (out == null || out.key != key || out.bytes != bytes || out.crc32 != crc32) {
             fail(key, "receipt mismatch", atMs)
             return false
         }
-        ledger[key] = TileReceipt(bytes, crc32, transport, atMs)
+        ledger[key] = TileReceipt(bytes, crc32, transport, atMs, deviceId)
         outgoing = null
         sent.remove(key)
         updateAll(key) { it.copy(attempts = 0, error = null, terminal = false, nextTryAtMs = 0L) }
@@ -477,31 +535,32 @@ class TileOutbox(
      * Recomputed rather than cached, same as the wallet's: a cached queue is a
      * second source of truth about the same ledger.
      */
-    fun pending(nowMs: Long): List<TileItem> = plan.filter {
-        when (stateOf(it, nowMs)) {
+    fun pending(nowMs: Long, deviceId: String? = null): List<TileItem> = plan.filter {
+        when (stateOf(it, nowMs, deviceId)) {
             TileState.QUEUED, TileState.SENDING, TileState.RETRY, TileState.WAITING_BUILD -> true
             else -> false
         }
     }
 
     /**
-     * The next tile to push: the first one the CDN is known to have, not sent,
-     * not in flight, and past any backoff.
+     * The next tile to push: the first one the CDN is known to have, not
+     * already confirmed by [deviceId] (the currently connected device), not
+     * in flight, and past any backoff.
      *
      * A tile the index has not answered for is **not** offered. Its size is
      * unknown, so it cannot be counted; and whether it exists at all is exactly
      * what has not been established. [dueForIndexRead] comes first.
      */
-    fun next(nowMs: Long): TileItem? = plan.firstOrNull {
+    fun next(nowMs: Long, deviceId: String? = null): TileItem? = plan.firstOrNull {
         it.cdn == TilePlan.State.PRESENT &&
-            !isSent(it.key) &&
+            !isSentToDevice(it.key, deviceId) &&
             !it.terminal &&
             it.key != inFlight &&
             nowMs >= it.nextTryAtMs
     }
 
-    fun takeNext(nowMs: Long): TileItem? {
-        val item = next(nowMs) ?: return null
+    fun takeNext(nowMs: Long, deviceId: String? = null): TileItem? {
+        val item = next(nowMs, deviceId) ?: return null
         inFlight = item.key
         return item
     }
@@ -531,9 +590,13 @@ class TileOutbox(
      * An item nothing has managed to look up yet is not given up on at 24 h: it
      * would be giving up because **this phone's** network failed, which says
      * nothing about the ground.
+     *
+     * [deviceId] is the currently connected device's identity, or null when
+     * nothing is connected or the caller does not care to distinguish
+     * ([isSentToDevice]). Left null it reads exactly as it always has.
      */
-    fun stateOf(item: TileItem, nowMs: Long): TileState = when {
-        isSent(item.key) -> TileState.SENT
+    fun stateOf(item: TileItem, nowMs: Long, deviceId: String? = null): TileState = when {
+        isSentToDevice(item.key, deviceId) -> TileState.SENT
         inFlight == item.key -> TileState.SENDING
         item.terminal -> TileState.FAILED
         item.cdn == TilePlan.State.ABSENT -> TileState.ABSENT
@@ -544,11 +607,11 @@ class TileOutbox(
     }
 
     /** Whole-outbox numbers for the screen's summary line. */
-    fun totals(nowMs: Long): Totals = totalsOf(plan, nowMs)
+    fun totals(nowMs: Long, deviceId: String? = null): Totals = totalsOf(plan, nowMs, deviceId)
 
     /** The same numbers for one zone, so a row can say what that pick still owes. */
-    fun zoneTotals(zoneId: String, nowMs: Long): Totals =
-        totalsOf(plan.filter { it.zoneId == zoneId }, nowMs)
+    fun zoneTotals(zoneId: String, nowMs: Long, deviceId: String? = null): Totals =
+        totalsOf(plan.filter { it.zoneId == zoneId }, nowMs, deviceId)
 
     /**
      * [items] deduplicated by tile, because two zones round the same city share
@@ -556,7 +619,7 @@ class TileOutbox(
      * counted them twice would promise twice the transfer that is going to
      * happen.
      */
-    private fun totalsOf(items: List<TileItem>, nowMs: Long): Totals {
+    private fun totalsOf(items: List<TileItem>, nowMs: Long, deviceId: String? = null): Totals {
         val seen = HashSet<String>()
         var sentCount = 0
         var queued = 0
@@ -567,7 +630,7 @@ class TileOutbox(
         var remaining = 0L
         for (it in items) {
             if (!seen.add(it.key)) continue
-            when (stateOf(it, nowMs)) {
+            when (stateOf(it, nowMs, deviceId)) {
                 TileState.SENT -> {
                     sentCount++
                     // The device's own count, not the index's: what it says it

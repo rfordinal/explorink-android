@@ -22,7 +22,7 @@ import java.io.IOException
  *   "zones":    [ {zoneId,label,latE7,lonE7,sideKm,createdAtMs}, ... ],
  *   "items":    [ {zoneId,z,col,row,queuedAtMs,cdn,sizeBytes,contentId,
  *                  buildChecks,nextTryAtMs,attempts,error,terminal}, ... ],
- *   "receipts": { "13/4144/3059": {bytes,crc32,transport,atMs}, ... } }
+ *   "receipts": { "13/4144/3059": {bytes,crc32,transport,atMs,deviceId}, ... } }
  * ```
  *
  * Four things that doc left open, settled here and written into the format doc:
@@ -202,6 +202,7 @@ object OutboxJson {
         "crc32" to r.crc32,
         "transport" to r.transport,
         "atMs" to r.atMs,
+        "deviceId" to r.deviceId,
     )
 
     /**
@@ -209,12 +210,17 @@ object OutboxJson {
      * what is on its card, and one missing either number is not a weaker
      * receipt -- it is a claim with nothing behind it, which is what
      * [TileOutbox.confirm] exists to refuse.
+     *
+     * `deviceId` is optional and defaults to null -- every receipt written
+     * before T-121's fix has none, and [TileOutbox.isSentToDevice] treats that
+     * as "not verified for the device connected now" rather than guessing.
      */
     private fun receipt(o: Map<String, Any?>) = TileReceipt(
         bytes = Json.asLong(o["bytes"]),
         crc32 = Json.asLong(o["crc32"]),
         transport = Json.optString(o, "transport") ?: "",
         atMs = Json.optLong(o, "atMs"),
+        deviceId = Json.optString(o, "deviceId"),
     )
 }
 

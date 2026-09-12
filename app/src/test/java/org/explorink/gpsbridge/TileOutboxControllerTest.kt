@@ -217,6 +217,30 @@ class TileOutboxControllerTest {
         assertEquals(TileOutboxController.TRANSPORT_NAME, h.outbox.receipts[a.key]!!.transport)
     }
 
+    /**
+     * T-121, `docs/TODO.md`: a receipt from one device must not silently block
+     * a resend to another. Confirmed with the simulator's real bytes and a
+     * real T5 S3 Pro's real SD listing, 2026-09-05.
+     */
+    @Test
+    fun `a receipt confirmed by one device does not count as sent to another`() {
+        val h = Harness(a, deviceId = "device-A")
+        h.index.put(a, contentId = 1L, sizeBytes = 966_878L)
+        h.runToPush()
+
+        h.controller.onTileSending(a.z, a.col, a.row, 966_878, 0xdeadbeefL)
+        h.controller.onTileReceipt(a.z, a.col, a.row, 966_878, 0xdeadbeefL)
+        assertEquals("device-A", h.outbox.receipts[a.key]?.deviceId)
+        assertTrue(h.outbox.isSentToDevice(a.key, "device-A"))
+
+        // A second device connects to the same phone -- an X4, the T5 S3 Pro,
+        // or the simulator, in any order. Its own card does not have this
+        // tile, so the ledger must not tell it otherwise.
+        h.deviceId = "device-B"
+        assertFalse(h.outbox.isSentToDevice(a.key, h.deviceId))
+        assertEquals(a, h.outbox.next(t0, h.deviceId)?.tile)
+    }
+
     @Test
     fun `every chunk acknowledged is still not a sent tile`() {
         val h = Harness(a)
@@ -458,6 +482,8 @@ class TileOutboxControllerTest {
     private inner class Harness(
         vararg tiles: TileRef,
         val outbox: TileOutbox = TileOutbox(),
+        /** T-121: whichever device the fake link says is connected right now. */
+        var deviceId: String? = null,
     ) {
         val transport = FakeTransport()
         val mapset = FakeMapset()
@@ -479,6 +505,7 @@ class TileOutboxControllerTest {
             gate = gate,
             listener = null,
             now = { now },
+            currentDeviceId = { deviceId },
         )
 
         init {

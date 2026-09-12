@@ -447,4 +447,65 @@ class TileOutboxTest {
         assertEquals(1, box.zones.size)
         assertEquals(2, box.items.size)
     }
+
+    // --- T-121: a receipt is a fact about one device, not any device ----------
+
+    @Test
+    fun `a receipt from a different device does not count as sent to this one`() {
+        val box = readyOutbox()
+        box.takeNext(t0)
+        box.beginSend(a.key, 966_878L, 0xdeadbeefL)
+        assertTrue(box.confirm(a.key, 966_878L, 0xdeadbeefL, "ble", t0, "device-A"))
+
+        // Any-device bookkeeping still sees it -- the CDN index does not need
+        // re-reading just because a different device is connected now.
+        assertTrue(box.isSent(a.key))
+
+        // But the device actually connected right now never confirmed it.
+        assertFalse(box.isSentToDevice(a.key, "device-B"))
+        assertEquals(TileState.QUEUED, box.stateOf(box.items.first(), t0, "device-B"))
+        assertEquals(a, box.next(t0, "device-B")?.tile)
+        assertEquals(0, box.zoneTotals("z1", t0, "device-B").sent)
+
+        // The same device that sent it still sees it as sent -- b is next in
+        // plan order because it, unlike a, was never sent to anyone.
+        assertTrue(box.isSentToDevice(a.key, "device-A"))
+        assertEquals(TileState.SENT, box.stateOf(box.items.first(), t0, "device-A"))
+        assertEquals(b, box.next(t0, "device-A")?.tile)
+    }
+
+    @Test
+    fun `a legacy receipt with no device id is not trusted for a connected device`() {
+        val box = readyOutbox()
+        box.takeNext(t0)
+        box.beginSend(a.key, 966_878L, 0xdeadbeefL)
+        // No deviceId given -- exactly what every receipt looked like before
+        // T-121's fix shipped.
+        assertTrue(box.confirm(a.key, 966_878L, 0xdeadbeefL, "ble", t0))
+
+        // Nothing connected: no resend decision to get wrong, so the row still
+        // shows the last confirmed state.
+        assertTrue(box.isSentToDevice(a.key, null))
+        assertEquals(TileState.SENT, box.stateOf(box.items.first(), t0, null))
+
+        // A specific device connected: an unverified legacy receipt does not
+        // silently block its resend.
+        assertFalse(box.isSentToDevice(a.key, "device-A"))
+        assertEquals(TileState.QUEUED, box.stateOf(box.items.first(), t0, "device-A"))
+        assertEquals(a, box.next(t0, "device-A")?.tile)
+    }
+
+    @Test
+    fun `renaming a zone changes only its label`() {
+        val box = TileOutbox()
+        box.addZone(zone("bcn", t0), listOf(a, b))
+        box.renameZone("bcn", "Home turf")
+        assertEquals("Home turf", box.zone("bcn")?.label)
+        assertEquals(413_874_000, box.zone("bcn")?.latE7)
+        assertEquals(2, box.items.size)
+
+        // An id that is not there is a silent no-op, not a crash.
+        box.renameZone("does-not-exist", "x")
+        assertEquals(1, box.zones.size)
+    }
 }

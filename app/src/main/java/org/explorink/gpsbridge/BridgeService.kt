@@ -438,6 +438,12 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
                 tileSource.prime(tile.z, tile.col, tile.row, fmt) { exists -> done(exists) }
             },
             listener = outboxListener,
+            // T-121: a receipt means nothing without knowing whose card it
+            // describes. `connectedAddress` is only meaningful once the link
+            // reaches CONNECTED (`BleLink`, "the confirm path cannot be
+            // reached otherwise"), which is exactly when the controller ever
+            // reads it.
+            currentDeviceId = { ble.connectedAddress },
         )
         createChannel()
         registerReceiver(btReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
@@ -1232,6 +1238,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         outboxController.queueZone(latE7, lonE7, sideKm, label)
 
     fun outboxDropZone(zoneId: String) = outboxController.dropZone(zoneId)
+
+    fun outboxRenameZone(zoneId: String, label: String) = outboxController.renameZone(zoneId, label)
 
     /** Drops every zone with nothing left to send. Receipts are kept. */
     fun outboxClearFinished(): Int = outboxController.dropFinishedZones()
