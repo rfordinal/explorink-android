@@ -124,6 +124,11 @@ class TransferFramesTest {
     }
 
     @Test
+    fun `point shard path swaps base for points`() {
+        assertEquals("points/10/562/354.tip", TransferFrames.pointShardRelPath(10, 562, 354))
+    }
+
+    @Test
     fun `path rules mirror the device's guard`() {
         assertTrue(TransferFrames.isSafeRelPath("base/13/4482/2789.tib"))
         assertTrue(TransferFrames.isSafeRelPath("a..b.tib"))  // not a `..` component
