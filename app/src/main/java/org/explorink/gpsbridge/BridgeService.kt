@@ -1241,6 +1241,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
     fun outboxRenameZone(zoneId: String, label: String) = outboxController.renameZone(zoneId, label)
 
+    fun outboxRetryGaveUp(zoneId: String): Int = outboxController.retryGaveUp(zoneId)
+
     /** Drops every zone with nothing left to send. Receipts are kept. */
     fun outboxClearFinished(): Int = outboxController.dropFinishedZones()
 

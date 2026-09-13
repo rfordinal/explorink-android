@@ -208,6 +208,41 @@ class TileOutboxTest {
     }
 
     @Test
+    fun `retrying gave-up ground resets its clock and only its clock`() {
+        val box = TileOutbox()
+        box.addZone(zone(), listOf(a, b))
+        box.observe(a, emptySlot, false, t0)
+        box.observe(b, present(500L), true, t0)
+
+        assertEquals(TileState.EXPIRED, box.stateOf(box.items.first { it.key == a.key }, t0 + 24 * hour))
+        assertEquals(1, box.retryGaveUp("z1", t0 + 24 * hour))
+
+        val retried = box.items.first { it.key == a.key }
+        assertEquals(t0 + 24 * hour, retried.queuedAtMs)
+        assertEquals(0, retried.buildChecks)
+        assertEquals(TileState.WAITING_BUILD, box.stateOf(retried, t0 + 24 * hour))
+        assertEquals(listOf(a), box.dueForIndexRead(t0 + 24 * hour))
+
+        // A tile that was never stuck is untouched by the same call.
+        assertEquals(t0, box.items.first { it.key == b.key }.queuedAtMs)
+
+        // Nothing left to retry the second time.
+        assertEquals(0, box.retryGaveUp("z1", t0 + 24 * hour))
+    }
+
+    @Test
+    fun `retrying gave-up ground never touches a terminal failure`() {
+        val box = TileOutbox()
+        box.addZone(zone(), listOf(a))
+        box.observe(a, present(100L), true, t0)
+        box.fail(a.key, "format the device cannot read", t0, terminal = true)
+
+        assertEquals(TileState.FAILED, box.stateOf(box.items.first(), t0 + 48 * hour))
+        assertEquals(0, box.retryGaveUp("z1", t0 + 48 * hour))
+        assertTrue(box.items.first().terminal)
+    }
+
+    @Test
     fun `an unreachable cdn never expires a tile it could not look at`() {
         val box = TileOutbox()
         box.addZone(zone(), listOf(a))
