@@ -77,6 +77,16 @@ object TransferFrames {
     fun tileRelPath(z: Int, col: Long, row: Long): String = "base/$z/$col/$row.tib"
 
     /**
+     * `points/<z>/<col>/<row>.tip` -- same shape as [tileRelPath] with
+     * `points/` in place of `base/` (`MapPointShards::buildPath()`). One file
+     * carries both safety points and landmarks, which is why the directory is
+     * `points/` and not `safety/` (`docs/point-file-spec.md`, "Where it
+     * lives"). `z` is always `MapPointShards::kShardZoom` (10) -- points have
+     * exactly one shard zoom, unlike tiles.
+     */
+    fun pointShardRelPath(z: Int, col: Long, row: Long): String = "points/$z/$col/$row.tip"
+
+    /**
      * The device's own path rules, checked here so a doomed transfer is never
      * started: no leading or trailing slash, no `..` component, no empty
      * component, printable ASCII only, and inside the length cap.

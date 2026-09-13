@@ -587,6 +587,10 @@ class MainActivity : Activity(), BridgeService.Observer {
             // device's own menu, so an idle line here would be noise on every
             // ride that never asks for tiles.
             snap.tileFetchStatus?.let { append("\ntiles: ").append(it) }
+            // Same reasoning as tileFetchStatus above -- only once a point
+            // sync has happened. Was written by BridgeService and never read
+            // anywhere until now (code review, 2026-09-13).
+            snap.pointSyncStatus?.let { append("\npoints: ").append(it) }
         }
 
         val f = snap.logFile
