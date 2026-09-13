@@ -45,7 +45,7 @@ class CdnPointSource(
         }
     }
 
-    fun readBlocking(col: Long, row: Long): PointSync.ReadResult {
+    private fun readBlocking(col: Long, row: Long): PointSync.ReadResult {
         val version = tileFormatVersion() ?: CdnTileSource.DEFAULT_FORMAT_VERSION
         val path = TransferFrames.pointShardRelPath(PointSync.SHARD_ZOOM, col, row)
         val url = "$baseUrl/v$version/$path"
@@ -85,8 +85,6 @@ class CdnPointSource(
             conn?.disconnect()
         }
     }
-
-    fun describe(): String = "CDN $baseUrl (points)"
 
     fun close() {
         io.shutdown()

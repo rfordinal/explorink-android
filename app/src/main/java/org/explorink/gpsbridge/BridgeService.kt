@@ -725,10 +725,12 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             devicePins = null
             pinsUnavailable = false
             // A deferred ask belonged to this connection's conversation. A
-            // reconnected device re-asks (NEED_TILES/CHECK_TILES fire again on
-            // resubscribe), so replaying a stale one later would answer a
-            // question nobody is asking anymore.
-            deferredAsk = null
+            // reconnected device re-asks (NEED_TILES/CHECK_TILES/NEED_POINTS
+            // fire again on resubscribe), so replaying a stale one later
+            // would answer a question nobody is asking anymore.
+            deferredNeedTiles = null
+            deferredCheckTiles = null
+            deferredNeedPoints = null
         }
         if (isConnected != wasConnected) {
             updatePowerState()
@@ -925,17 +927,17 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         val needPoints = PointList.parseNeedPoints(line) != null
         if (needTiles && (freshness.phase != FreshnessChecker.Phase.IDLE || pointSync.phase != PointSync.Phase.IDLE)) {
             addEvent("ask deferred: a freshness check or a point sync is still running")
-            deferredAsk = line
+            deferredNeedTiles = line
             return
         }
         if (checkTiles && (tileFetcher.phase != TileFetcher.Phase.IDLE || pointSync.phase != PointSync.Phase.IDLE)) {
             addEvent("ask deferred: a fetch or a point sync is still running")
-            deferredAsk = line
+            deferredCheckTiles = line
             return
         }
         if (needPoints && (tileFetcher.phase != TileFetcher.Phase.IDLE || freshness.phase != FreshnessChecker.Phase.IDLE)) {
             addEvent("ask deferred: a fetch or a freshness check is still running")
-            deferredAsk = line
+            deferredNeedPoints = line
             return
         }
         // A pin command is a conversation on this same channel and ends on the
@@ -944,7 +946,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // while the rider is on it, so the deferral it causes is short.
         if ((needTiles || checkTiles || needPoints) && pins.busy) {
             addEvent("ask deferred: a pin command is still running")
-            deferredAsk = line
+            deferAsk(needTiles, checkTiles, line)
             return
         }
         // The outbox's `info` and `push <n>` are conversations on this same
@@ -956,7 +958,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // takes.
         if ((needTiles || checkTiles || needPoints) && outboxController.busy) {
             addEvent("ask deferred: a map-area round is still running")
-            deferredAsk = line
+            deferAsk(needTiles, checkTiles, line)
             return
         }
 
@@ -968,26 +970,48 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     }
 
     /**
-     * An ask that arrived while another conversation held the channel.
+     * One slot per ask kind, not one slot total.
      *
-     * At most one slot. Sound for the common case -- each settle point sends at
-     * most two of the device's asks back to back (`askAboutFreshness()` then
-     * `askAboutPoints()` in the firmware's `TileSyncActivity`), and the first
-     * one dispatches immediately (nothing was busy yet), leaving only the
-     * second to occupy this slot. **Not proven for every interleaving**: the
-     * map screen's Live rung fires `CHECK_TILES` and `NEED_POINTS` from two
-     * independently-cooldown-gated functions
-     * (`maybeCheckTileFreshness`/`maybeSyncPointsLive`), and two asks that were
-     * both already blocked arriving in the same tick would overwrite this slot
-     * exactly the way the 2026-08-11 collision did for the first two kinds --
-     * unmeasured, not yet seen, and the fix if it is would be a small queue
-     * here rather than a redesign.
+     * Was a single `String?` until code review, 2026-09-13 found it reachable:
+     * each settle point normally sends at most two of the device's asks back
+     * to back (`askAboutFreshness()` then `askAboutPoints()` in the firmware's
+     * `TileSyncActivity`), and the common case has the first dispatch
+     * immediately (nothing was busy yet) -- but the map screen's Live rung
+     * fires `CHECK_TILES` and `NEED_POINTS` from two independently-cooldown-
+     * gated functions (`maybeCheckTileFreshness`/`maybeSyncPointsLive`), and
+     * two asks that are *both* already blocked (a pin command running, an
+     * outbox round in flight) arrive in the same tick and would overwrite a
+     * single slot -- exactly the 2026-08-11 collision, moved from the
+     * conversation gate into the queue meant to prevent it. A kind can only
+     * ever have one pending line (a second `NEED_TILES` while one is deferred
+     * describes the same want more recently), so three slots is enough; nothing
+     * needs a general queue.
      */
-    private var deferredAsk: String? = null
+    private var deferredNeedTiles: String? = null
+    private var deferredCheckTiles: String? = null
+    private var deferredNeedPoints: String? = null
 
-    /** Runs a deferred ask once every state machine is idle again. */
+    private fun deferAsk(needTiles: Boolean, checkTiles: Boolean, line: String) {
+        when {
+            needTiles -> deferredNeedTiles = line
+            checkTiles -> deferredCheckTiles = line
+            else -> deferredNeedPoints = line
+        }
+    }
+
+    private fun anyAskDeferred(): Boolean =
+        deferredNeedTiles != null || deferredCheckTiles != null || deferredNeedPoints != null
+
+    /**
+     * Runs every deferred ask once every state machine is idle again.
+     *
+     * Cleared before replay, not after: `onCommandLine()` re-evaluates its own
+     * gates fresh for each one, and a kind that is still blocked (replaying
+     * `NEED_TILES` can itself put `tileFetcher` back in a phase that blocks a
+     * still-pending `CHECK_TILES`) simply re-populates its own slot instead of
+     * being silently dropped.
+     */
     private fun runDeferredAsk() {
-        val line = deferredAsk ?: return
         if (tileFetcher.phase != TileFetcher.Phase.IDLE) return
         if (freshness.phase != FreshnessChecker.Phase.IDLE) return
         if (pointSync.phase != PointSync.Phase.IDLE) return
@@ -996,9 +1020,16 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // [onCommandLine]: replaying the ask into a live `info` or `push`
         // conversation is the collision, only from the other side.
         if (outboxController.busy) return
-        deferredAsk = null
-        addEvent("running the deferred ask")
-        onCommandLine(line)
+
+        val pending = listOfNotNull(deferredNeedTiles, deferredCheckTiles, deferredNeedPoints)
+        if (pending.isEmpty()) return
+        deferredNeedTiles = null
+        deferredCheckTiles = null
+        deferredNeedPoints = null
+        pending.forEach {
+            addEvent("running the deferred ask")
+            onCommandLine(it)
+        }
     }
 
     /**
@@ -1011,7 +1042,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
      */
     private fun onChannelFree() {
         runDeferredAsk()
-        if (deferredAsk == null) outboxController.startDraining()
+        if (!anyAskDeferred()) outboxController.startDraining()
     }
 
     override fun onTransferStatus(line: String) {
@@ -1641,7 +1672,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             // phase blocks the outbox's own conversations same as freshness/pins.
             pointSync.phase != PointSync.Phase.IDLE -> "a point sync is running"
             pins.busy -> "a pin command is running"
-            deferredAsk != null -> "the device has an ask waiting"
+            anyAskDeferred() -> "the device has an ask waiting"
             else -> null
         }
     }

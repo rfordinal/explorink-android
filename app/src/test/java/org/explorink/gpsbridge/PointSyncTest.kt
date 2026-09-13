@@ -357,6 +357,49 @@ class PointSyncTest {
         assertEquals(1, h.recorder.started)
     }
 
+    // Regression for the code review finding, 2026-09-13: MapCommandConsole's
+    // Points case replies `OK` unconditionally, even after
+    // `INFO points=unavailable`/`points=no_position` -- so finish()ing on
+    // either without owing that OK left it to land in whatever conversation
+    // started next and be read as *that* one's own terminator. Same fault
+    // class as 2026-08-11's NEED_TILES/CHECK_TILES collision.
+    @Test
+    fun `points=unavailable still owes its trailing OK to the next conversation`() {
+        val h = Harness()
+        h.sync.onCommandLine("NEED_POINTS 1 fmt 1")
+        h.sync.onCommandLine("INFO points=unavailable")
+        assertEquals("device has no point-shard source wired", h.recorder.finished)
+        assertEquals(PointSync.Phase.IDLE, h.sync.phase)
+
+        // A second, unrelated ask starts a fresh listing.
+        h.sync.onCommandLine("NEED_POINTS 1 fmt 1")
+        assertEquals(listOf("points", "points"), h.transport.commands)
+
+        // The first conversation's own trailing OK arrives late and must not
+        // be read as the second listing's terminator -- nothing has fed the
+        // second listing a single line yet.
+        h.sync.onCommandLine("OK")
+        assertEquals(PointSync.Phase.LISTING, h.sync.phase)
+
+        h.list(PointList.ShardStatus(562, 354, have = false))
+        assertEquals(1, h.recorder.started)
+    }
+
+    @Test
+    fun `points=no_position also owes its trailing OK`() {
+        val h = Harness()
+        h.sync.onCommandLine("NEED_POINTS 1 fmt 1")
+        h.sync.onCommandLine("INFO points=no_position")
+        assertEquals("device has no fix to centre a shard range on", h.recorder.finished)
+
+        h.sync.onCommandLine("NEED_POINTS 1 fmt 1")
+        h.sync.onCommandLine("OK")  // the first conversation's dangling OK
+        assertEquals(PointSync.Phase.LISTING, h.sync.phase)
+
+        h.list(PointList.ShardStatus(562, 354, have = false))
+        assertEquals(1, h.recorder.started)
+    }
+
     @Test
     fun `disconnecting mid-transfer ends the sync`() {
         val h = Harness()

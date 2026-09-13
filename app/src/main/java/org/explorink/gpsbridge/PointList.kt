@@ -57,6 +57,23 @@ object PointList {
         var total: Int? = null
             private set
 
+        /**
+         * `OK` arrived but fewer `point_<col>_<row>` lines landed than
+         * `point_total` declared -- an indication lost on the link. Same
+         * guard [MissingList.HaveReader.truncated] has for `have`, and for
+         * the same measured reason (2026-08-13, cited there): a listing that
+         * lost a line describes a different set of shards than the device
+         * actually holds, and answering as if nothing had been missed is
+         * worse than refusing the whole listing. Added in code review,
+         * 2026-09-13 -- `total` was parsed and never checked against
+         * anything.
+         */
+        val truncated: Boolean
+            get() {
+                val n = total ?: return false
+                return complete && shards.size != n
+            }
+
         /** Feeds one reply line. Returns true if the line belonged to this listing. */
         fun feed(line: String): Boolean {
             val t = line.trim()

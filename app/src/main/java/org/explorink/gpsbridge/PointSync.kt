@@ -343,18 +343,43 @@ class PointSync(
         val reader = list ?: return
         if (!reader.feed(line)) return
         if (reader.unavailable) {
+            // The device still sends a terminating `OK` after `INFO
+            // points=unavailable` (MapCommandConsole.cpp's Points case
+            // replies it unconditionally) -- own up to owing it before
+            // going IDLE, or it lands in whatever conversation runs next
+            // and is read as that one's own terminator. Same fault class as
+            // 2026-08-11's NEED_TILES/CHECK_TILES collision, found in code
+            // review 2026-09-13 before it ever reached a device.
+            owedListingReplies++
             finish("device has no point-shard source wired")
             return
         }
         if (reader.noPosition) {
+            owedListingReplies++
             finish("device has no fix to centre a shard range on")
             return
         }
         if (!reader.complete) return
+        if (reader.truncated) {
+            // A dropped indication, not a device that wants nothing --
+            // treated as a failure of the whole listing, same as
+            // TileFetcher.feedPage()'s reconciliation against
+            // missing_total. No owed OK here: `complete` is only true once
+            // the `OK` itself has already been consumed.
+            Log.w(TAG, "points listing truncated: ${reader.shards.size} of ${reader.total} line(s) arrived")
+            finish("listing truncated on the link")
+            return
+        }
 
         cancelTimeout()
         val have = reader.shards.count { it.have }
-        queue.addAll(reader.shards.filterNot { it.have })
+        // distinctBy guards against a malformed reply naming the same shard
+        // twice -- not a case the firmware produces (its range loop visits
+        // each col/row once), but two reads of one 404 would otherwise look
+        // like the two separate sync sessions decision 3's gone rule
+        // actually requires (code review, 2026-09-13, low impact but a real
+        // spec violation).
+        queue.addAll(reader.shards.filterNot { it.have }.distinctBy { it.col to it.row })
         total = queue.size
         Log.i(TAG, "list complete: ${reader.shards.size} shard(s) in range, $have already held, ${queue.size} to push")
         phase = Phase.PUSHING
@@ -405,13 +430,28 @@ class PointSync(
             }
 
             is ReadResult.Bytes -> {
-                notFound.recordFound(next.col, next.row)
                 val found = pointShardFormatVersion(result.bytes)
-                if (wantedFormat != null && found != wantedFormat) {
-                    Log.w(TAG, "$relPath is format ${found ?: "unreadable"}, device reads $wantedFormat")
-                    skip(next, "$SKIP_WRONG_FORMAT${found ?: 0}")
+                if (found == null) {
+                    // Bad magic or truncated -- refused regardless of
+                    // wantedFormat, same as TileHeader.isAcceptable() does
+                    // for tiles, and for the same reason: a captive portal or
+                    // a transparent proxy can answer 200 with an HTML body,
+                    // and against a firmware build that sends `NEED_POINTS`
+                    // with no `fmt` the old check (wantedFormat != null &&
+                    // found != wantedFormat) let that body through whole --
+                    // it would pass its own CRC (computed over what was
+                    // sent, not over a valid file), land on the card, and
+                    // answer `have` forever after (code review, 2026-09-13).
+                    Log.w(TAG, "$relPath is not a valid point shard (bad magic or truncated)")
+                    skip(next, "${SKIP_WRONG_FORMAT}0")
                     return
                 }
+                if (wantedFormat != null && found != wantedFormat) {
+                    Log.w(TAG, "$relPath is format $found, device reads $wantedFormat")
+                    skip(next, "$SKIP_WRONG_FORMAT$found")
+                    return
+                }
+                notFound.recordFound(next.col, next.row)
                 beginTransfer(next, relPath, result.bytes)
             }
         }
@@ -468,25 +508,31 @@ class PointSync(
         }
     }
 
-    private fun skip(shard: PointList.ShardStatus, reason: String) {
+    // Named `target`, not `shard`: the latter shadows the [shard] field
+    // above, and every call site here already has it null or clears it via
+    // clearTransfer() first -- but a future caller that skipped that step
+    // would silently keep going against the shadowed parameter with no
+    // compiler complaint (code review, 2026-09-13; TileFetcher.skip() avoids
+    // the same trap by naming its parameter `missing`).
+    private fun skip(target: PointList.ShardStatus, reason: String) {
         skipped++
-        listener.onShardDone(shard.col, shard.row, 0, false, reason)
+        listener.onShardDone(target.col, target.row, 0, false, reason)
         listener.onSyncProgress(pushed, skipped, gone, total)
         val gen = syncGen
-        transport.sendCommand("skip $SHARD_ZOOM ${shard.col} ${shard.row} $reason") { ok, error ->
+        transport.sendCommand("skip $SHARD_ZOOM ${target.col} ${target.row} $reason") { ok, error ->
             if (gen != syncGen) return@sendCommand
             if (!ok) Log.w(TAG, "skip write failed: $error")
         }
         nextShard()
     }
 
-    private fun sendGone(shard: PointList.ShardStatus) {
+    private fun sendGone(target: PointList.ShardStatus) {
         gone++
-        Log.i(TAG, "second 404 for ${describe(shard)}; telling the device it is gone")
-        listener.onShardDone(shard.col, shard.row, 0, false, "gone")
+        Log.i(TAG, "second 404 for ${describe(target)}; telling the device it is gone")
+        listener.onShardDone(target.col, target.row, 0, false, "gone")
         listener.onSyncProgress(pushed, skipped, gone, total)
         val gen = syncGen
-        transport.sendCommand("gone ${shard.col} ${shard.row}") { ok, error ->
+        transport.sendCommand("gone ${target.col} ${target.row}") { ok, error ->
             if (gen != syncGen) return@sendCommand
             if (!ok) Log.w(TAG, "gone write failed: $error")
         }
@@ -561,6 +607,10 @@ class PointSync(
         bytes = null
         offset = 0
         awaitingReady = false
+        // A sync that ended right after an abort would otherwise leave a
+        // debt behind for the next one to pay with its first shard's real
+        // verdict (same reasoning as TileFetcher.reset(), which this line
+        // mirrors).
         owedVerdicts = 0
         liveStatusGen = statusGen
     }
@@ -574,6 +624,17 @@ class PointSync(
      */
     private fun pointShardFormatVersion(data: ByteArray): Int? {
         if (data.size < 6) return null
+        // "TIP1" magic at offset 0 (point-file-spec.md, "Layout"). Checked
+        // deliberately, the same way TileHeader.formatVersion() refuses a
+        // bad magic for tiles: without it, any 200 response with a body
+        // (an HTML error page, a captive portal) reads a version out of
+        // whatever bytes happen to sit at offset 4-5 and is treated as a
+        // real shard (code review, 2026-09-13).
+        if (data[0] != 'T'.code.toByte() || data[1] != 'I'.code.toByte() ||
+            data[2] != 'P'.code.toByte() || data[3] != '1'.code.toByte()
+        ) {
+            return null
+        }
         return (data[4].toInt() and 0xff) or ((data[5].toInt() and 0xff) shl 8)
     }
 }
