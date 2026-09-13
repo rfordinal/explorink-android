@@ -50,7 +50,7 @@ import android.util.Log
  *    a fraction of a second against a real maintenance cost. Fetch-then-push,
  *    one shard at a time.
  *  - No paging state. [MissingList.PageReader] exists because `missing` can
- *    be 200 entries; `points` never is (see point 2 above), so [ListReader]
+ *    be 200 entries; `points` never is (see point 2 above), so [PointList.ListReader]
  *    is shaped like [MissingList.ViewportReader] instead -- one reply, no
  *    `nextOffset`.
  *
@@ -150,7 +150,7 @@ class PointSync(
     }
 
     interface Listener {
-        /** A sync started; [total] shards need pushing (the `absent` ones only -- see [ListReader]). */
+        /** A sync started; [total] shards need pushing (the `absent` ones only -- see [PointList.ListReader]). */
         fun onSyncStarted(total: Int)
 
         /** Progress changed: [pushed] landed, [skipped] given up on, [gone] deleted, of [total]. */
@@ -172,101 +172,13 @@ class PointSync(
         fun onShardProgress(col: Long, row: Long, sentBytes: Int, totalBytes: Int) {}
     }
 
-    /** `NEED_POINTS <count> fmt <version>`, or null if the line is something else. */
-    data class NeedPoints(val count: Int, val formatVersion: Int?)
-
-    /** `NEED_POINTS ...`, or null if the line is something else. */
-    fun parseNeedPoints(line: String): NeedPoints? {
-        val t = line.trim()
-        if (!t.startsWith("NEED_POINTS")) return null
-        val tokens = t.removePrefix("NEED_POINTS").trim().split(' ').filter { it.isNotEmpty() }
-        val count = tokens.getOrNull(0)?.toIntOrNull() ?: return null
-        val fmtAt = tokens.indexOf("fmt")
-        val version = if (fmtAt >= 0) tokens.getOrNull(fmtAt + 1)?.toIntOrNull() else null
-        return NeedPoints(count, version)
-    }
-
-    /** One shard's status from the `points` reply. */
-    data class ShardStatus(val col: Long, val row: Long, val have: Boolean)
-
-    /**
-     * Reads the reply to `points`:
-     *
-     *     INFO point_total=4
-     *     INFO point_562_354=have
-     *     INFO point_562_355=absent
-     *     ...
-     *     OK
-     *
-     * Never paged -- bounded at 9 shards worst case
-     * (`MapPointShards::rangeForRadius`'s 3x3 bbox), same reasoning
-     * [MissingList.ViewportReader] gives for `tiles`. Two refusals distinct
-     * from a real answer, mirroring `have`/`missing`'s own "cannot answer
-     * must never read as a real zero": `points=unavailable` (no source wired
-     * on the device) and `points=no_position` (no fix to centre a range on).
-     */
-    class ListReader {
-        private val entries = mutableListOf<ShardStatus>()
-        val shards: List<ShardStatus> get() = entries
-
-        var complete: Boolean = false
-            private set
-        var unavailable: Boolean = false
-            private set
-        var noPosition: Boolean = false
-            private set
-        var total: Int? = null
-            private set
-
-        /** Feeds one reply line. Returns true if the line belonged to this listing. */
-        fun feed(line: String): Boolean {
-            val t = line.trim()
-            if (t == "OK") {
-                complete = true
-                return true
-            }
-            if (!t.startsWith("INFO ")) return false
-            val body = t.removePrefix("INFO ").trim()
-
-            if (body == "points=unavailable") {
-                unavailable = true
-                return true
-            }
-            if (body == "points=no_position") {
-                noPosition = true
-                return true
-            }
-            val eq = body.indexOf('=')
-            if (eq <= 0) return false
-            val key = body.substring(0, eq)
-            val value = body.substring(eq + 1)
-
-            if (key == "point_total") {
-                total = value.toIntOrNull()
-                return true
-            }
-            if (!key.startsWith("point_")) return false
-            val parts = key.removePrefix("point_").split('_')
-            if (parts.size != 2) return false
-            val col = parts[0].toLongOrNull() ?: return false
-            val row = parts[1].toLongOrNull() ?: return false
-            val have = when (value) {
-                "have" -> true
-                "absent" -> false
-                else -> return false
-            }
-            entries.add(ShardStatus(col, row, have))
-            return true
-        }
-    }
-
     enum class Phase { IDLE, LISTING, PUSHING }
 
     var phase: Phase = Phase.IDLE
         private set
 
-    private var list: ListReader? = null
-    private val queue = ArrayDeque<ShardStatus>()
+    private var list: PointList.ListReader? = null
+    private val queue = ArrayDeque<PointList.ShardStatus>()
     private var total = 0
     private var pushed = 0
     private var skipped = 0
@@ -276,7 +188,7 @@ class PointSync(
     private var wantedFormat: Int? = null
 
     // The transfer in flight, if any.
-    private var shard: ShardStatus? = null
+    private var shard: PointList.ShardStatus? = null
     private var bytes: ByteArray? = null
     private var offset = 0
     private var awaitingReady = false
@@ -319,7 +231,7 @@ class PointSync(
 
     /** One line off the command characteristic. */
     fun onCommandLine(line: String) {
-        val need = parseNeedPoints(line)
+        val need = PointList.parseNeedPoints(line)
         if (need != null) {
             startListing(need)
             return
@@ -394,7 +306,7 @@ class PointSync(
 
     // --- listing --------------------------------------------------------
 
-    private fun startListing(need: NeedPoints) {
+    private fun startListing(need: PointList.NeedPoints) {
         if (phase != Phase.IDLE) {
             Log.i(TAG, "restarting points sync on a second NEED_POINTS")
             if (list?.complete == false) owedListingReplies++
@@ -406,7 +318,7 @@ class PointSync(
         phase = Phase.LISTING
         wantedFormat = need.formatVersion
         transport.setFastLink(true)
-        list = ListReader()
+        list = PointList.ListReader()
         val gen = syncGen
         armTimeout()
         transport.sendCommand("points") { ok, error ->
@@ -470,7 +382,7 @@ class PointSync(
         source.read(next.col, next.row) { result -> onShardRead(next, relPath, result, gen) }
     }
 
-    private fun onShardRead(next: ShardStatus, relPath: String, result: ReadResult, gen: Int) {
+    private fun onShardRead(next: PointList.ShardStatus, relPath: String, result: ReadResult, gen: Int) {
         if (gen != syncGen) {
             Log.i(TAG, "dropping a late read for ${describe(next)}; its sync has moved on")
             return
@@ -505,7 +417,7 @@ class PointSync(
         }
     }
 
-    private fun beginTransfer(next: ShardStatus, relPath: String, data: ByteArray) {
+    private fun beginTransfer(next: PointList.ShardStatus, relPath: String, data: ByteArray) {
         shard = next
         bytes = data
         offset = 0
@@ -556,7 +468,7 @@ class PointSync(
         }
     }
 
-    private fun skip(shard: ShardStatus, reason: String) {
+    private fun skip(shard: PointList.ShardStatus, reason: String) {
         skipped++
         listener.onShardDone(shard.col, shard.row, 0, false, reason)
         listener.onSyncProgress(pushed, skipped, gone, total)
@@ -568,7 +480,7 @@ class PointSync(
         nextShard()
     }
 
-    private fun sendGone(shard: ShardStatus) {
+    private fun sendGone(shard: PointList.ShardStatus) {
         gone++
         Log.i(TAG, "second 404 for ${describe(shard)}; telling the device it is gone")
         listener.onShardDone(shard.col, shard.row, 0, false, "gone")
@@ -653,7 +565,7 @@ class PointSync(
         liveStatusGen = statusGen
     }
 
-    private fun describe(s: ShardStatus?): String = if (s == null) "no shard" else "${s.col}/${s.row}"
+    private fun describe(s: PointList.ShardStatus?): String = if (s == null) "no shard" else "${s.col}/${s.row}"
 
     /**
      * `version` u16 LE at offset 4 (`point-file-spec.md`, "Layout";

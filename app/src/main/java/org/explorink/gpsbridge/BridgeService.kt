@@ -49,7 +49,7 @@ import kotlin.math.roundToInt
  * timer still fires in Doze.
  */
 class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher.Listener,
-    FreshnessChecker.Listener, PinManager.Listener {
+    FreshnessChecker.Listener, PinManager.Listener, PointSync.Listener {
 
     companion object {
         private const val TAG = "BridgeService"
@@ -175,6 +175,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         val lastSendReason: String?,
         /** One line about the last or current tile fetch, or null if there has been none. */
         val tileFetchStatus: String?,
+        /** One line about the last or current point-shard sync (T-561), or null if there has been none. */
+        val pointSyncStatus: String?,
         /** The map-square story in plain words, oldest first. Empty until the device asks. */
         val tileLog: List<String>,
         /** The transfer happening right now, or null when nothing is in flight. */
@@ -226,6 +228,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private lateinit var indexSource: IndexSource
     private lateinit var freshness: FreshnessChecker
     private lateinit var pins: PinManager
+    private lateinit var pointSource: CdnPointSource
+    private lateinit var pointSync: PointSync
     private lateinit var mapsetSource: MapsetSource
     private lateinit var outboxStore: OutboxStore
     private lateinit var outboxController: TileOutboxController
@@ -301,6 +305,15 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     }.getOrNull()
     /** Last line about a tile fetch, for the one window. Null until one happens. */
     private var tileFetchStatus: String? = null
+
+    /**
+     * Last line about a point-shard sync (T-561), same shape as
+     * [tileFetchStatus]. Reuses [tileLog] rather than a log of its own: both
+     * describe "what the device asked for and what came of it", and a rider
+     * scrolling that window should see the whole story in one place, not
+     * guess which of two windows to check.
+     */
+    private var pointSyncStatus: String? = null
     private var locationManager: LocationManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -416,6 +429,19 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         tileFetcher = TileFetcher(tileSource, fetchTransport, fetchScheduler, this, expectedContentIds)
         freshness = FreshnessChecker(indexSource, expectedContentIds, fetchTransport, fetchScheduler, this)
         pins = PinManager(pinTransport, fetchScheduler, this)
+        // T-561. Versioned by the *tile* format, not NEED_POINTS's own `fmt` --
+        // points/ lives under the same /v<N>/ tree as base/ (see CdnPointSource's
+        // doc). deviceTileFormat is set from whichever of NEED_TILES/CHECK_TILES
+        // the device last sent; rememberedTileFormat() covers a link that has
+        // sent neither yet this connection.
+        pointSource = CdnPointSource(tileFormatVersion = { deviceTileFormat ?: rememberedTileFormat() })
+        pointSync = PointSync(
+            pointSource,
+            pointTransport,
+            pointScheduler,
+            this,
+            PointNotFoundStore(getSharedPreferences(PREFS, MODE_PRIVATE)),
+        )
         mapsetSource = CdnMapsetSource()
         // The rider's ask is on disk before this line: a tile item exists
         // nowhere but that file, so it is read at service start rather than when
@@ -570,9 +596,11 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // Before ble.stop(): the abort frame it may send needs a live link.
         freshness.stop()
         tileFetcher.stop()
+        pointSync.stop()
         pins.stop()
         outboxController.stop()
         tileSource.close()
+        pointSource.close()
         indexSource.close()
         mapsetSource.close()
         ble.stop()
@@ -621,6 +649,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         moveThresholdM = moveThreshold(),
         lastSendReason = lastSendReason,
         tileFetchStatus = tileFetchStatus,
+        pointSyncStatus = pointSyncStatus,
         tileLog = tileLog.toList(),
         tileProgress = tileProgress,
     )
@@ -685,6 +714,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // offsets and the device's own .part file went with it.
         if (wasConnected && !isConnected) {
             tileFetcher.onDisconnected()
+            pointSync.onDisconnected()
             freshness.onDisconnected()
             pins.onDisconnected()
             outboxController.onDisconnected()
@@ -861,6 +891,11 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         logger?.logEvent("cmd_in", line, null)
         MissingList.parseNeedTiles(line)?.formatVersion?.let { deviceTileFormat = it }
         MissingList.parseCheckTiles(line)?.formatVersion?.let { deviceTileFormat = it }
+        // NEED_POINTS's `fmt` is deliberately not captured here: it names the
+        // `.tip` *point-file* format (MapPointReader::kFormatVersion, still 1),
+        // a different axis from deviceTileFormat, which is the `.tib` format
+        // that picks the CDN's `/v<N>/` tree both base/ and points/ live under
+        // (CdnPointSource's own doc).
         // A one-shot value, not a listing -- captured here, ahead of the
         // conversation gate below, so it is never deferred alongside a
         // NEED_TILES/CHECK_TILES ask.
@@ -882,21 +917,32 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // free (onFetchFinished / onCheckFinished).
         val needTiles = MissingList.parseNeedTiles(line) != null
         val checkTiles = MissingList.parseCheckTiles(line) != null
-        if (needTiles && freshness.phase != FreshnessChecker.Phase.IDLE) {
-            addEvent("ask deferred: a freshness check is still running")
+        // T-561's fourth conversation on this channel, same rule as the first
+        // three: a listing ends on a plain `OK`, so two open ones can end each
+        // other. `points` deliberately does not defer against itself here --
+        // a second NEED_POINTS restarts PointSync's own listing, the same way
+        // a second NEED_TILES restarts TileFetcher's (PointSync.startListing()).
+        val needPoints = PointList.parseNeedPoints(line) != null
+        if (needTiles && (freshness.phase != FreshnessChecker.Phase.IDLE || pointSync.phase != PointSync.Phase.IDLE)) {
+            addEvent("ask deferred: a freshness check or a point sync is still running")
             deferredAsk = line
             return
         }
-        if (checkTiles && tileFetcher.phase != TileFetcher.Phase.IDLE) {
-            addEvent("ask deferred: a fetch is still running")
+        if (checkTiles && (tileFetcher.phase != TileFetcher.Phase.IDLE || pointSync.phase != PointSync.Phase.IDLE)) {
+            addEvent("ask deferred: a fetch or a point sync is still running")
+            deferredAsk = line
+            return
+        }
+        if (needPoints && (tileFetcher.phase != TileFetcher.Phase.IDLE || freshness.phase != FreshnessChecker.Phase.IDLE)) {
+            addEvent("ask deferred: a fetch or a freshness check is still running")
             deferredAsk = line
             return
         }
         // A pin command is a conversation on this same channel and ends on the
-        // same plain `OK`, so it counts here exactly like the other two. The pins
+        // same plain `OK`, so it counts here exactly like the other three. The pins
         // screen holds the channel for at most one command at a time and only
         // while the rider is on it, so the deferral it causes is short.
-        if ((needTiles || checkTiles) && pins.busy) {
+        if ((needTiles || checkTiles || needPoints) && pins.busy) {
             addEvent("ask deferred: a pin command is still running")
             deferredAsk = line
             return
@@ -908,7 +954,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // scan too, but a scan is byte-range reads of the CDN and no BLE, so the
         // deferral it causes is seconds, not the twenty minutes the transfer
         // takes.
-        if ((needTiles || checkTiles) && outboxController.busy) {
+        if ((needTiles || checkTiles || needPoints) && outboxController.busy) {
             addEvent("ask deferred: a map-area round is still running")
             deferredAsk = line
             return
@@ -918,20 +964,33 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         freshness.onCommandLine(line)
         pins.onCommandLine(line)
         outboxController.onCommandLine(line)
+        pointSync.onCommandLine(line)
     }
 
     /**
-     * An ask that arrived while the other conversation held the channel. At most
-     * one: the device only has two kinds of ask, so a second deferral would mean
-     * the same kind twice, and the newer one describes the device's state better.
+     * An ask that arrived while another conversation held the channel.
+     *
+     * At most one slot. Sound for the common case -- each settle point sends at
+     * most two of the device's asks back to back (`askAboutFreshness()` then
+     * `askAboutPoints()` in the firmware's `TileSyncActivity`), and the first
+     * one dispatches immediately (nothing was busy yet), leaving only the
+     * second to occupy this slot. **Not proven for every interleaving**: the
+     * map screen's Live rung fires `CHECK_TILES` and `NEED_POINTS` from two
+     * independently-cooldown-gated functions
+     * (`maybeCheckTileFreshness`/`maybeSyncPointsLive`), and two asks that were
+     * both already blocked arriving in the same tick would overwrite this slot
+     * exactly the way the 2026-08-11 collision did for the first two kinds --
+     * unmeasured, not yet seen, and the fix if it is would be a small queue
+     * here rather than a redesign.
      */
     private var deferredAsk: String? = null
 
-    /** Runs a deferred ask once both state machines are idle again. */
+    /** Runs a deferred ask once every state machine is idle again. */
     private fun runDeferredAsk() {
         val line = deferredAsk ?: return
         if (tileFetcher.phase != TileFetcher.Phase.IDLE) return
         if (freshness.phase != FreshnessChecker.Phase.IDLE) return
+        if (pointSync.phase != PointSync.Phase.IDLE) return
         if (pins.busy) return
         // The outbox counts here for the same reason it counts in
         // [onCommandLine]: replaying the ask into a live `info` or `push`
@@ -958,6 +1017,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     override fun onTransferStatus(line: String) {
         logger?.logEvent("xfer_in", line, null)
         tileFetcher.onStatusLine(line)
+        pointSync.onStatusLine(line)
     }
 
     override fun onFetchScope(viewportOnly: Boolean) {
@@ -1110,6 +1170,52 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         onChannelFree()
     }
 
+    // --- point sync (T-561) ----------------------------------------------
+
+    override fun onSyncStarted(total: Int) {
+        pointSyncStatus = "syncing 0/$total point shard(s)"
+        addEvent("device asked for point shards, $total to push")
+        addTileLine("device asked for point shards: $total to push")
+        logger?.logEvent("point_sync_start", "$total shards", mapOf("total" to total))
+        notifyObserver()
+    }
+
+    override fun onSyncProgress(pushed: Int, skipped: Int, gone: Int, total: Int) {
+        pointSyncStatus = "$pushed/$total point shard(s) pushed" +
+            (if (skipped > 0) ", $skipped skipped" else "") +
+            (if (gone > 0) ", $gone gone" else "")
+        notifyObserver()
+    }
+
+    override fun onSyncFinished(pushed: Int, skipped: Int, gone: Int, total: Int, reason: String) {
+        pointSyncStatus = "$pushed/$total point shard(s) pushed" +
+            (if (skipped > 0) ", $skipped skipped" else "") +
+            (if (gone > 0) ", $gone gone" else "") +
+            " ($reason)"
+        addEvent("point sync $reason: $pushed pushed, $skipped skipped, $gone gone")
+        addTileLine(
+            "point shards: $pushed pushed" +
+                (if (skipped > 0) ", $skipped not available" else "") +
+                (if (gone > 0) ", $gone deleted" else "") +
+                (if (reason != "done") " -- $reason" else "")
+        )
+        logger?.logEvent(
+            "point_sync_end",
+            reason,
+            mapOf("pushed" to pushed, "skipped" to skipped, "gone" to gone, "total" to total),
+        )
+        notifyObserver()
+        onChannelFree()
+    }
+
+    override fun onShardDone(col: Long, row: Long, bytes: Int, ok: Boolean, detail: String) {
+        logger?.logEvent(
+            "point_shard",
+            "$col/$row ${if (ok) "landed" else detail.ifEmpty { "skipped" }}",
+            mapOf("bytes" to bytes),
+        )
+    }
+
     // --- pins -----------------------------------------------------------
 
     /** Everything the pins screen needs, snapshotted so it holds no state. */
@@ -1221,6 +1327,11 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         outboxController.paused -> "paused"
         freshness.phase != FreshnessChecker.Phase.IDLE -> "a freshness check is running"
         pins.busy -> "a pin command is running"
+        // A point sync always blocks the outbox, unlike tileFetcher below: the
+        // outbox never pushes through pointSync, only through tileFetcher
+        // ([fetcherAsPusher]), so there is no "it's actually me" case to carve
+        // out for it the way there is for tileFetcher/outboxController.phase.
+        pointSync.phase != PointSync.Phase.IDLE -> "a point shard is transferring"
         tileFetcher.phase != TileFetcher.Phase.IDLE &&
             outboxController.phase != TileOutboxController.Phase.PUSHING ->
             "the device is fetching squares of its own"
@@ -1278,6 +1389,11 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private fun tileChannelBusy(): Boolean =
         tileFetcher.phase != TileFetcher.Phase.IDLE ||
             freshness.phase != FreshnessChecker.Phase.IDLE ||
+            // T-561's fifth conversation, same reasoning as the outbox line
+            // below: named here as well as in [onCommandLine] for the same
+            // pin-command refusal, and its transfer rides the exact channel a
+            // pin command must not be sent across.
+            pointSync.phase != PointSync.Phase.IDLE ||
             // The pre-trip outbox is the fourth conversation on this channel.
             // Named here as well as in [onCommandLine] because this is what a
             // pin command is refused against, and a pin sent across an `info`
@@ -1432,6 +1548,31 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     }
 
     /**
+     * Same bodies as [fetchTransport], for [PointSync]. A distinct object
+     * because [PointSync.Transport] is a different Kotlin type even though
+     * the shape is identical -- not because either side treats the link any
+     * differently. The exclusivity that matters (one sender at a time on the
+     * transfer characteristic) is enforced above `ble`, not by this adapter,
+     * the same way [fetchTransport] and [pointTransport] both write to the
+     * same [BleLink] without knowing about each other.
+     */
+    private val pointTransport = object : PointSync.Transport {
+        override fun sendCommand(line: String, done: (Boolean, String?) -> Unit) {
+            ble.writeCommand(line, done)
+        }
+
+        override fun sendFrame(frame: ByteArray, done: (Boolean, String?) -> Unit) {
+            ble.writeTransferFrame(frame, done)
+        }
+
+        override fun maxChunkPayload(): Int = ble.maxChunkPayload()
+
+        override fun setFastLink(fast: Boolean) {
+            ble.requestHighPriority(fast)
+        }
+    }
+
+    /**
      * The command channel, for pins. Separate from [fetchTransport] rather than
      * reusing it: pins send console lines and nothing else, and a transport that
      * also carried frames and the link-priority switch would let a pin command
@@ -1466,7 +1607,11 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
      * pre-trip batch blocks a pin command and a freshness check for free.
      */
     private val fetcherAsPusher = object : TileOutboxController.Pusher {
-        override val idle: Boolean get() = tileFetcher.phase == TileFetcher.Phase.IDLE
+        // Both halves of "the transfer characteristic is free": tileFetcher is
+        // the one this actually pushes through, and pointSync is the other
+        // possible sender on the exact same physical channel.
+        override val idle: Boolean
+            get() = tileFetcher.phase == TileFetcher.Phase.IDLE && pointSync.phase == PointSync.Phase.IDLE
 
         override fun pushTiles(tiles: List<MissingTile>, formatVersion: Int?) {
             tileFetcher.pushTiles(tiles, formatVersion)
@@ -1491,6 +1636,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         override fun blocker(): String? = when {
             bleState != BleLink.State.CONNECTED -> "not connected to the device"
             freshness.phase != FreshnessChecker.Phase.IDLE -> "a freshness check is running"
+            // Unlike [fetcherAsPusher]'s idle check, this one really is "someone
+            // else": the outbox never pushes through pointSync, so its listing
+            // phase blocks the outbox's own conversations same as freshness/pins.
+            pointSync.phase != PointSync.Phase.IDLE -> "a point sync is running"
             pins.busy -> "a pin command is running"
             deferredAsk != null -> "the device has an ask waiting"
             else -> null
@@ -1532,6 +1681,17 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             val r = Runnable { action() }
             main.postDelayed(r, delayMs)
             return object : TileFetcher.Scheduler.Cancellable {
+                override fun cancel() = main.removeCallbacks(r)
+            }
+        }
+    }
+
+    /** Same body as [fetchScheduler], for [PointSync] -- a different Kotlin type, same [main] behind it. */
+    private val pointScheduler = object : PointSync.Scheduler {
+        override fun postDelayed(delayMs: Long, action: () -> Unit): PointSync.Scheduler.Cancellable {
+            val r = Runnable { action() }
+            main.postDelayed(r, delayMs)
+            return object : PointSync.Scheduler.Cancellable {
                 override fun cancel() = main.removeCallbacks(r)
             }
         }
