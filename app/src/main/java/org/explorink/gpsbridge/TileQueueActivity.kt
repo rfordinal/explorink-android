@@ -472,17 +472,33 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
 
     private fun onZonePressed(row: BridgeService.ZoneRow) {
         val zone = row.zone
-        val actions = listOf("Rename", "Check state", "Drop")
+        val actions = listOf("Rename", "Check state", "Retry gave up", "Drop")
         AlertDialog.Builder(this)
             .setTitle(zone.label)
             .setItems(actions.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> onRenameZonePressed(zone)
                     1 -> onCheckZoneStatePressed(zone)
-                    2 -> onDropZonePressed(zone)
+                    2 -> onRetryGaveUpPressed(zone)
+                    3 -> onDropZonePressed(zone)
                 }
             }
             .show()
+    }
+
+    /**
+     * Only ground the server had not built within its own 24 h cooldown --
+     * see [TileOutbox.retryGaveUp]. A tile stuck on a wrong format version
+     * never lands here and this button does nothing for it: retrying that
+     * one is spending data on a certainty, not a fresh chance.
+     */
+    private fun onRetryGaveUpPressed(zone: TileZone) {
+        val n = service?.outboxRetryGaveUp(zone.zoneId) ?: 0
+        toast(
+            if (n == 0) "Nothing to retry -- ground that gave up here needs a different fix."
+            else "Retrying $n ${if (n == 1) "square" else "squares"} within a minute."
+        )
+        render()
     }
 
     private fun onDropZonePressed(zone: TileZone) {

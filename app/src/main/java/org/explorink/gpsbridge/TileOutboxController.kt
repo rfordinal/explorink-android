@@ -397,6 +397,25 @@ class TileOutboxController(
     }
 
     /**
+     * Gives up-on ground in one zone another 24 h. Returns how many squares
+     * that was -- see [TileOutbox.retryGaveUp] for which "gave up" this
+     * touches and which it deliberately does not.
+     *
+     * No explicit kick to look them up now: [outboxRecheck]'s own minute-tick
+     * (`BridgeService`) reaches them the same way it reaches everything else,
+     * and a retry someone taps once is not worth a second code path.
+     */
+    fun retryGaveUp(zoneId: String): Int {
+        val n = outbox.retryGaveUp(zoneId, now())
+        if (n > 0) {
+            save()
+            status = "retrying $n ${squares(n)} the server had not built"
+            listener?.onOutboxChanged()
+        }
+        return n
+    }
+
+    /**
      * Drops every zone that has nothing left to send.
      *
      * "Clear what is sent" on the screen. Receipts survive it: a receipt is a

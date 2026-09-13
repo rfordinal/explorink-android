@@ -273,6 +273,31 @@ class TileOutbox(
         if (i >= 0) zoneList[i] = zoneList[i].copy(label = label)
     }
 
+    /**
+     * Gives ground the server never built within [GIVE_UP_MS] another 24 h,
+     * for one zone. Returns how many items this touched.
+     *
+     * **Only [TileState.EXPIRED], never [TileState.FAILED].** The rider's
+     * "gave up" is really two different sentences: ground the server has not
+     * made yet (worth asking again -- the server's own cooldown has run out
+     * too, so this is not hammering it) and a tile whose bytes are wrong on
+     * every attempt, like the wrong format version ([TileFetcher.SKIP_WRONG_FORMAT]).
+     * Retrying the second kind spends the rider's data on a certainty; this
+     * resets only the first kind, by moving [TileItem.queuedAtMs] to now so
+     * [dueForIndexRead] and [stateOf] both see fresh ground.
+     */
+    fun retryGaveUp(zoneId: String, nowMs: Long): Int {
+        var n = 0
+        for (i in plan.indices) {
+            val it = plan[i]
+            if (it.zoneId != zoneId) continue
+            if (stateOf(it, nowMs) != TileState.EXPIRED) continue
+            plan[i] = it.copy(queuedAtMs = nowMs, buildChecks = 0, nextTryAtMs = 0L, error = null)
+            n++
+        }
+        return n
+    }
+
     // --- the ledger ---------------------------------------------------------
 
     /**
