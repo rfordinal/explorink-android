@@ -446,8 +446,17 @@ class PointSync(
                     skip(next, "${SKIP_WRONG_FORMAT}0")
                     return
                 }
-                if (wantedFormat != null && found != wantedFormat) {
-                    Log.w(TAG, "$relPath is format $found, device reads $wantedFormat")
+                // Newer than the device, not merely different. The device
+                // reads every version up to the one it names -- `.tip` v2 kept
+                // the v1 record layout readable on purpose, because every
+                // published shard was v1 on the day v2 shipped and an equality
+                // test would have blanked the point layer for the whole walk
+                // from the flash to the CDN rebuild (point-file-spec.md,
+                // "Version policy stays as it is"). A shard from the future is
+                // still refused: the device cannot size its records.
+                val readsUpTo = wantedFormat
+                if (readsUpTo != null && found > readsUpTo) {
+                    Log.w(TAG, "$relPath is format $found, device reads up to $readsUpTo")
                     skip(next, "$SKIP_WRONG_FORMAT$found")
                     return
                 }
