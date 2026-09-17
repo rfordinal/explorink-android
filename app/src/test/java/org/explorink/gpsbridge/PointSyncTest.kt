@@ -259,16 +259,33 @@ class PointSyncTest {
     }
 
     @Test
-    fun `a wrong format version is skipped, never pushed`() {
+    fun `a format newer than the device is skipped, never pushed`() {
         val h = Harness()
-        h.source.shards["562/354"] = shardBytes(120, version = 2)
+        h.source.shards["562/354"] = shardBytes(120, version = 3)
 
-        h.sync.onCommandLine("NEED_POINTS 1 fmt 1")
+        h.sync.onCommandLine("NEED_POINTS 1 fmt 2")
         h.list(PointList.ShardStatus(562, 354, have = false))
 
-        assertEquals(listOf("points", "skip 10 562 354 fmt2"), h.transport.commands)
+        assertEquals(listOf("points", "skip 10 562 354 fmt3"), h.transport.commands)
         assertEquals(0, h.transport.beginFrames().size)
         assertEquals("done", h.recorder.finished)
+    }
+
+    @Test
+    fun `a format older than the device is pushed, not skipped`() {
+        // The device reads every version up to the one it names. On the day
+        // `.tip` v2 shipped every published shard was still v1, so an equality
+        // test here would have blanked the point layer on every card between
+        // the flash and the CDN rebuild -- which is the one thing the point
+        // layer exists to prevent (docs/BUGS.md, BUG-203).
+        val h = Harness()
+        h.source.shards["562/354"] = shardBytes(120, version = 1)
+
+        h.sync.onCommandLine("NEED_POINTS 1 fmt 2")
+        h.list(PointList.ShardStatus(562, 354, have = false))
+
+        assertEquals(1, h.transport.beginFrames().size)
+        assertFalse(h.transport.commands.any { it.startsWith("skip") })
     }
 
     @Test
