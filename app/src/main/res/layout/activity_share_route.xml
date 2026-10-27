@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The shared-route screen. A route typed in Google Maps arrives here as a
+     link, and what the link carries is stops: no polyline exists in it at any
+     point, so the line the device draws comes from our router and differs from
+     what the rider saw on the Google screen (docs/route-share-plan.md).
+
+     The stop list is not decoration either. A middle stop read wrong bends the
+     whole route and nothing downstream can notice: the .tir is valid, both
+     CRCs match, the device draws it. The rider confirming this list is the only
+     check that exists. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical">
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:padding="16dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvRouteState"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="4dp"
+                android:text="shared route"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <!-- Red block, same as the pins and map-area screens use: a state
+                 the rider has to act on before anything here moves. -->
+            <TextView
+                android:id="@+id/tvRouteProblem"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="8dp"
+                android:textColor="#FFB00020"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
+            <!-- What was parsed, counted out loud. Silence looks identical to
+                 success: "5 stops, 0 shaping points" against what the rider
+                 remembers building is how a lossy parse gets caught. -->
+            <TextView
+                android:id="@+id/tvRouteCounts"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="8dp"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/tvRouteStops"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:paddingBottom="12dp"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/tvRouteNote"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="12dp"
+                android:textSize="12sp" />
+
+        </LinearLayout>
+    </ScrollView>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="16dp">
+
+        <Button
+            android:id="@+id/btnRouteSend"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Send to device" />
+
+        <Button
+            android:id="@+id/btnRouteCancel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Cancel" />
+
+    </LinearLayout>
+
+</LinearLayout>

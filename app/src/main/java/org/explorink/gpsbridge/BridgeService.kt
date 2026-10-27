@@ -232,6 +232,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private lateinit var pointSync: PointSync
     private lateinit var mapsetSource: MapsetSource
     private lateinit var outboxStore: OutboxStore
+    private lateinit var routeOutbox: RouteOutbox
     private lateinit var outboxController: TileOutboxController
 
     /**
@@ -447,6 +448,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // nowhere but that file, so it is read at service start rather than when
         // a screen happens to open (`docs/tile-outbox-format.md`).
         outboxStore = OutboxStore(OutboxStore.dirIn(filesDir))
+        // Read off disk at service start, not when a screen opens: a route the
+        // rider shared exists nowhere else, and the share screen is long gone
+        // by the time the device next advertises (RouteOutbox).
+        routeOutbox = RouteOutbox(java.io.File(filesDir, "routes"))
         outboxController = TileOutboxController(
             outbox = outboxStore.load(),
             transport = outboxTransport,
@@ -774,6 +779,10 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
                 // more connections than one, and a rider who has to press
                 // Continue on each of them has a queue in name only.
                 outboxController.onConnected()
+                // Same reason as the line above: a route shared while the
+                // device was in a drawer goes out now, with the rider pressing
+                // nothing.
+                pushNextRoute()
             } else {
                 armIdleStop()
             }
@@ -1043,10 +1052,22 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private fun onChannelFree() {
         runDeferredAsk()
         if (!anyAskDeferred()) outboxController.startDraining()
+        // A route queued while a fetch was running goes out now. One file, a
+        // few seconds; it does not wait for the outbox to finish draining.
+        pushNextRoute()
     }
 
     override fun onTransferStatus(line: String) {
         logger?.logEvent("xfer_in", line, null)
+        // One transfer is live at a time -- [tileChannelBusy] is what enforces
+        // it -- so the line belongs to whoever is sending. Routed rather than
+        // broadcast: a status line handed to two senders is how one of them
+        // ends up crediting itself with the other's verdict
+        // (`docs/ble-review-2026-08.md`, "Stability -- app", item 1).
+        if (routeInFlight != null) {
+            routePusher.onStatusLine(line)
+            return
+        }
         tileFetcher.onStatusLine(line)
         pointSync.onStatusLine(line)
     }
@@ -1419,6 +1440,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
     private fun tileChannelBusy(): Boolean =
         tileFetcher.phase != TileFetcher.Phase.IDLE ||
+            // A shared route rides the same transfer characteristic, so it is
+            // one of the conversations a pin command has to wait behind.
+            routeInFlight != null ||
             freshness.phase != FreshnessChecker.Phase.IDLE ||
             // T-561's fifth conversation, same reasoning as the outbox line
             // below: named here as well as in [onCommandLine] for the same
@@ -1577,6 +1601,79 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             ble.requestHighPriority(fast)
         }
     }
+
+    /**
+     * Carries a shared route to the card, on the same transport as the tiles.
+     *
+     * A route is one small file and the device asks for nothing: the rider
+     * shared it, so the phone is the one that decides to send
+     * (`docs/route-share-plan.md`). Exclusivity with the tile conversations is
+     * [tileChannelBusy]'s job, the same as for every other sender on this
+     * characteristic.
+     */
+    private val routePusher: FilePusher by lazy {
+        FilePusher(fetchTransport, fetchScheduler, routePushListener, TileFetcher.REPLY_TIMEOUT_MS)
+    }
+
+    /** The queued route now going out, or null. Its name is the queue's key. */
+    private var routeInFlight: String? = null
+
+    private val routePushListener = object : FilePusher.Listener {
+        override fun onPushDone(tag: Any?, bytes: Int, crc32: Long) {
+            val name = tag as? String
+            Log.i(TAG, "route $name landed ($bytes bytes)")
+            routeInFlight = null
+            // Removed only on the device's own verdict: anything earlier and a
+            // route the card never got is gone from the queue too.
+            if (name != null) routeOutbox.remove(name)
+            notifyObserver()
+            pushNextRoute()
+        }
+
+        override fun onPushFailed(tag: Any?, reason: String) {
+            Log.w(TAG, "route ${tag as? String} failed: $reason")
+            // Stays in the queue. The next connection tries again -- a refusal
+            // here is usually the link, not the file.
+            routeInFlight = null
+            // Nothing will be listening on this pusher until the next route, so
+            // a verdict the device still owes must not be carried into it.
+            routePusher.reset()
+            notifyObserver()
+        }
+    }
+
+    /**
+     * Sends the oldest queued route, if there is one and the channel is free.
+     *
+     * Called at every point the answer can change: a new route queued, a
+     * connection coming up, and the previous route landing.
+     */
+    private fun pushNextRoute() {
+        if (routeInFlight != null) return
+        if (bleState != BleLink.State.CONNECTED) return
+        if (tileChannelBusy()) return
+        val entry = routeOutbox.next() ?: return
+        routeInFlight = entry.fileName
+        Log.i(TAG, "pushing route ${entry.relPath} (${entry.bytes.size} bytes)")
+        routePusher.start(entry.fileName, entry.relPath, entry.bytes)
+    }
+
+    /**
+     * Queues a built route and sends it when it can. Returns null when it is
+     * queued, or the reason it could not be.
+     *
+     * Deliberately never refuses for a missing link: the device being absent is
+     * the normal case for this feature ([RouteOutbox]).
+     */
+    fun routeQueue(fileName: String, bytes: ByteArray): String? {
+        if (!routeOutbox.add(fileName, bytes)) return "could not save the route on the phone"
+        notifyObserver()
+        pushNextRoute()
+        return null
+    }
+
+    /** How many routes are waiting, for the status window. */
+    fun routesWaiting(): Int = routeOutbox.count()
 
     /**
      * Same bodies as [fetchTransport], for [PointSync]. A distinct object
