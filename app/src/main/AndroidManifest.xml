@@ -96,37 +96,48 @@
             </intent-filter>
         </activity>
 
-        <!-- The pins window. exported=true only for the share filter below: a
-             maps app hands over shared text, which lands in the coordinate field
-             and is never saved without the rider choosing a type and confirming
-             (PinsActivity.prefillFromIntent). -->
+        <!-- The pins window. No share filter of its own any more: shared text
+             lands in ShareRouteActivity below, which forwards it here with the
+             same ACTION_SEND and EXTRA_TEXT this screen already reads
+             (PinsActivity.prefillFromIntent), so nothing in it changed. Still
+             never a silent save: the rider picks a type and confirms. -->
         <activity
             android:name=".PinsActivity"
-            android:exported="true"
+            android:exported="false"
             android:label="ExplorInk pins"
             android:launchMode="singleTop"
             android:parentActivityName=".MainActivity"
-            android:screenOrientation="portrait">
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="text/plain" />
-            </intent-filter>
-        </activity>
+            android:screenOrientation="portrait" />
 
-        <!-- The map-area window. exported=true only for the share filter, the
-             same as the pins one: a maps app hands over shared text, it lands in
-             the coordinate field, and nothing is queued until the rider has seen
-             the plan and confirmed it (TileQueueActivity.prefillFromIntent).
-
-             Two ExplorInk entries now appear in a share sheet, one per window.
-             That is deliberate, a shared place is either a pin or an area to
-             cache, and only the rider knows which, so both labels name what
-             they do rather than naming the app twice. -->
+        <!-- The map-area window. Its share filter moved to
+             ShareRouteActivity for the same reason the pins one did; it is
+             started with the same action and extra it always read
+             (TileQueueActivity.prefillFromIntent), and nothing is queued until
+             the rider has seen the plan and confirmed it. -->
         <activity
             android:name=".TileQueueActivity"
-            android:exported="true"
+            android:exported="false"
             android:label="ExplorInk map area"
+            android:launchMode="singleTop"
+            android:parentActivityName=".MainActivity"
+            android:screenOrientation="portrait" />
+
+        <!-- The one share entry, and the reason it is one.
+             There used to be two, one per destination, because a shared *place*
+             is either a pin or an area to cache and only the rider knows which.
+             That choice is still theirs: this screen asks it, with both options
+             named and explained, instead of the share sheet asking it with two
+             labels. What the share sheet could never do is tell a route from a
+             place, and a route is the third destination (docs/route-share-plan.md),
+             so a third row would have made the sheet a list to read every time.
+
+             exported=true is what a share filter requires. Nothing here acts on
+             the shared text on its own: a route is built only after the rider
+             has seen its stops and pressed Send. -->
+        <activity
+            android:name=".ShareRouteActivity"
+            android:exported="true"
+            android:label="ExplorInk"
             android:launchMode="singleTop"
             android:parentActivityName=".MainActivity"
             android:screenOrientation="portrait">

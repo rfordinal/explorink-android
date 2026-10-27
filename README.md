@@ -237,9 +237,20 @@ What is here today, host tested and **never yet run against a device**:
   with no behaviour change — the 35 race tests in `TileFetcherTest` are what
   says so.
 
-What is missing: the share receiver, the `dir`-link parser, the confirm screen,
-the routing call, and a device screen that can receive a route while the map is
-closed.
+The whole chain is built as of 2026-10-27 and **has never run end to end**: a
+share resolves, parses, shows its stops, routes through BRouter, builds the file
+and queues it, and the queue drains at the next connection. What it needs is a
+real share on a real phone against a real device.
+
+Two things are still true after it:
+
+- **The device must be on its map or sync screen** for a route to land. The
+  transfer receiver lives on those two screens only, so a share from the sofa
+  waits in the queue, which is what the queue is for (`T-2033` in the xteink
+  repo gives the route picker its own receiver).
+- **The router is a public BRouter instance**, whose usage terms are not stated
+  anywhere, and it learns the rider's stops. Our own instance is the shipped
+  answer (`T-325`).
 
 ## Checking freshness: is what the device already has still current?
 
@@ -517,6 +528,20 @@ app/src/main/java/org/explorink/gpsbridge/
                         Peucker, both CRC32s. A port of the laptop's
                         `mapbuilder/route_file.py`, asserted byte-for-byte
                         equal to it. Pure.
+  RouteLink.kt         the stops out of a shared Google Maps directions link:
+                        path segments walked in order, each named one taking
+                        the next coordinate group from the `data=` blob. Pure.
+  ShareRouting.kt      which of the three destinations a piece of shared text
+                        belongs to: a route, a place, or resolve-it-first. Pure.
+  ShareRouteActivity.kt the share window. Resolves, parses, geocodes what has
+                        to be, shows the stops for confirmation, routes, builds
+                        the file and queues it.
+  RouteService.kt      the routing interface. A shared link carries stops and
+                        no line, so the line is ours.
+  BRouterService.kt    one implementation, a BRouter HTTP server. Longitude
+                        first, which is the opposite of everywhere else here.
+  RouteOutbox.kt       routes built but not yet on the device, on disk. The
+                        device is usually absent when one is shared.
   FreshnessChecker.kt  the CHECK_TILES conversation as a state machine, and
                         the offline backoff. Same no-BLE-no-Android contract
                         as TileFetcher, unit-tested too.
