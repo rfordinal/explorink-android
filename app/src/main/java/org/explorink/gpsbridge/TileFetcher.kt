@@ -196,55 +196,21 @@ class TileFetcher(
      */
     private var wantedFormat: Int? = null
 
-    // The transfer in flight, if any.
+    /**
+     * The tile whose bytes [pusher] is carrying, or null when nothing is in
+     * flight. The pusher hands this object straight back in every callback, so
+     * identity (`===`) is what decides whether a late callback is about the
+     * tile that is live now.
+     */
     private var tile: MissingTile? = null
-    private var bytes: ByteArray? = null
-    private var offset = 0
-    private var awaitingReady = false
 
     /**
-     * Which transfer the status channel is talking about.
-     *
-     * A status line is `RDY`/`OK`/`ERR` and nothing else -- no path, no tile,
-     * no sequence number (`docs/ble-map-transfer-protocol.md`, "Status lines").
-     * So identity has to come from what this side sent last. [statusGen] counts
-     * transfer generations: a begin frame starts one, an abort ends one.
-     * [liveStatusGen] is the generation whose lines may touch state, so
-     * `statusGen != liveStatusGen` means the last thing this side did to the
-     * channel was kill a transfer -- nothing arriving in that window belongs to
-     * anything live.
-     *
-     * An int and not a flag on purpose: two aborts can be outstanding at once
-     * (abort A, begin B, B stalls, abort B) and a flag cannot count that.
-     *
-     * The alternative -- hold the next begin until the aborted transfer's
-     * `ERR aborted` has been seen -- was rejected deliberately: it serializes
-     * the whole fetch on a dead tile's 15 s timeout, and every remaining tile
-     * pays for it. Skipping generations costs nothing.
+     * The transfer loop itself: begin, chunks, verdict, timeout, and every
+     * guard that keeps one transfer's late reply off the next one. It knows
+     * nothing about tiles -- a route file goes out the same way
+     * (`docs/route-share-plan.md`, Phase 1).
      */
-    private var statusGen = 0
-    private var liveStatusGen = 0
-
-    /**
-     * Verdicts (`OK`/`ERR`) still owed by transfers this side walked away from.
-     *
-     * The generation window above closes the moment the next begin goes out,
-     * and a dead transfer's verdict can arrive after that -- so the window
-     * alone would still credit it to the new tile, which is the whole defect
-     * (`docs/ble-review-2026-08.md`, "Stability -- app", item 1). Each abort of
-     * a live transfer earns exactly one dead verdict, so counting them and
-     * consuming them is exact: the device sends `ERR aborted` when a transfer
-     * is active (`MapTransferReceiver.cpp:119-124`, `:330-352`), and when it is
-     * not -- because it already sent an `OK` that is still in flight -- the
-     * abort is silent and that `OK` is the dead verdict instead.
-     *
-     * An accepted `RDY` clears the debt: the device emits status lines strictly
-     * in order and blocks the host task until each goes out
-     * (`BlePositionServer.cpp:593-617`), so a dead verdict always arrives
-     * before the next begin's `RDY` -- and that same send gives up after 8
-     * attempts, so a debt that never arrives must not eat a real verdict.
-     */
-    private var owedVerdicts = 0
+    private val pusher = FilePusher(transport, scheduler, PushListener(), REPLY_TIMEOUT_MS)
 
     /**
      * Which fetch this is -- bumped once at every point a fetch starts or ends
@@ -267,8 +233,9 @@ class TileFetcher(
      * means, so unguarded it tears down whatever fetch is live now
      * (`docs/ble-review-2026-08.md`, "Stability -- app", item 3).
      *
-     * Distinct from [statusGen]/[liveStatusGen] above, and not to be merged
-     * with them: those count *transfer* (begin/abort) generations for
+     * Distinct from [FilePusher]'s `statusGen`/`liveStatusGen` one level
+     * down, and not to be merged with them: those count *transfer*
+     * (begin/abort) generations for
      * status-line attribution, bumped once per tile. This one counts *fetch*
      * (one whole listing-then-push conversation) generations, bumped only at
      * the three points a fetch starts or ends -- many transfers happen inside
@@ -299,7 +266,7 @@ class TileFetcher(
      * "paging offsets desync").
      *
      * So identity again has to come from what this side did, the same idea
-     * as [owedVerdicts] one level down: [startListing] owns up to owing a
+     * as [FilePusher]'s verdict debt one level down: [startListing] owns up to owing a
      * reply the moment it restarts on top of an incomplete [page], and
      * [requestPage]'s callback retracts that debt if the write it was
      * counting on turns out to have failed. [feedPage] discards every line
@@ -307,7 +274,8 @@ class TileFetcher(
      * terminating `OK` -- exactly the boundary firmware guarantees, one
      * reply fully drained before the next line of anything else is sent.
      *
-     * Unlike [owedVerdicts], **not** cleared by [reset]: a transfer's debt is
+     * Unlike the pusher's verdict debt, **not** cleared by [reset]: a
+     * transfer's debt is
      * capped at one and safe to drop, because the alternative -- a fresh
      * fetch's real verdict wrongly eaten -- is worse than the rare case of
      * dropping it. A listing's debt can stack across more than one restart
@@ -369,83 +337,56 @@ class TileFetcher(
 
     /** One line off the transfer status characteristic (`...0005`). */
     fun onStatusLine(line: String) {
+        // Outside a push there is no transfer of ours on this channel, and
+        // anything arriving is an ended fetch's tail.
         if (phase != Phase.PUSHING) return
-        val status = TransferFrames.parseStatus(line)
-        val verdict = status is TransferFrames.Status.Ok || status is TransferFrames.Status.Err
+        pusher.onStatusLine(line)
+    }
 
-        // Three gates, all of them the same question: does this line belong to
-        // the transfer currently in flight? Nothing in the line itself says.
+    /**
+     * What [pusher] reports back. Everything tile-shaped lives here: the
+     * pusher hands back the [MissingTile] it was given and knows nothing else.
+     */
+    private inner class PushListener : FilePusher.Listener {
 
-        // 1. Between a local abort and the next begin frame there is no live
-        //    transfer at all -- everything on this channel is the dead one's
-        //    tail. `RDY` for the next begin is the first line accepted again.
-        if (statusGen != liveStatusGen) {
-            Log.i(TAG, "ignoring '$line': gen $liveStatusGen was aborted, gen is now $statusGen")
-            if (verdict && owedVerdicts > 0) owedVerdicts--
-            return
+        override fun onPushStarting(tag: Any?, path: String, totalBytes: Int, crc32: Long) {
+            val t = tag as? MissingTile ?: return
+            // Announced before the frame goes out, so a ledger records what it
+            // is about to owe rather than what it hopes happened. The device's
+            // verdict is checked against exactly these two numbers
+            // ([Listener.onTileSending]).
+            listener.onTileSending(t.z, t.col, t.row, totalBytes, crc32)
         }
 
-        // 2. The dead transfer's verdict can also land after the next begin has
-        //    gone out, and then gate 1 cannot see it. Consume it against the
-        //    debt instead of crediting it: this is the case that produced a
-        //    false `onTileDone` (plus a `clearTransfer()` that killed the new
-        //    tile's live state) or a false SKIP_REFUSED.
-        if (verdict && owedVerdicts > 0) {
-            owedVerdicts--
-            Log.i(TAG, "ignoring '$line': an aborted transfer still owed a verdict")
-            return
+        override fun onPushReady(tag: Any?) {
+            // The device has the file open and this tile is committed, so the
+            // tile after it is now the one worth spending the phone's data on.
+            // Started before the first chunk goes out, not after the last: the
+            // point is to overlap the GET with the whole transfer.
+            maybePrefetch()
         }
 
-        // 3. A verdict with nothing in flight has nothing to be about. Without
-        //    this it would count a tile and call nextTile() a second time, and
-        //    with an asynchronous source (the CDN) that window is a whole HTTP
-        //    GET wide -- two transfers interleaved on one channel.
-        if (verdict && tile == null) {
-            Log.w(TAG, "ignoring '$line': no transfer in flight")
-            return
+        override fun onPushProgress(tag: Any?, sentBytes: Int, totalBytes: Int) {
+            val t = tag as? MissingTile ?: return
+            listener.onTileProgress(t.z, t.col, t.row, sentBytes, totalBytes)
         }
 
-        when (status) {
-            is TransferFrames.Status.Ready -> {
-                if (!awaitingReady) return
-                // Ordered channel: anything an aborted transfer still owed
-                // arrived before this line, or was dropped by the device and is
-                // never coming.
-                owedVerdicts = 0
-                awaitingReady = false
-                armTimeout()
-                // The device has the file open and this tile is committed, so
-                // the tile after it is now the one worth spending the phone's
-                // data on. Started before the first chunk goes out, not after
-                // the last: the point is to overlap the GET with the whole
-                // transfer, and nothing below this line needs the network.
-                maybePrefetch()
-                sendNextChunk()
+        override fun onPushDone(tag: Any?, bytes: Int, crc32: Long) {
+            val t = tag as? MissingTile
+            sent++
+            tile = null
+            if (t != null) {
+                listener.onTileReceipt(t.z, t.col, t.row, bytes, crc32)
+                listener.onTileDone(t.z, t.col, t.row, bytes, true, "")
             }
+            listener.onFetchProgress(sent, skipped, total)
+            nextTile()
+        }
 
-            is TransferFrames.Status.Ok -> {
-                sent++
-                Log.i(TAG, "landed ${describe(tile)} (${status.bytes} bytes)")
-                tile?.let {
-                    listener.onTileReceipt(it.z, it.col, it.row, status.bytes, status.crc32)
-                    listener.onTileDone(it.z, it.col, it.row, status.bytes, true, "")
-                }
-                clearTransfer()
-                listener.onFetchProgress(sent, skipped, total)
-                nextTile()
-            }
-
-            is TransferFrames.Status.Err -> {
-                // Terminal for this tile by contract: the device has already
-                // closed and deleted the partial file, and further chunks would
-                // each earn another `ERR no transfer`.
-                Log.w(TAG, "device refused ${describe(tile)}: ${status.reason}")
-                val failed = tile
-                clearTransfer()
-                if (failed != null) skip(failed, SKIP_REFUSED) else nextTile()
-            }
-
-            is TransferFrames.Status.Unknown -> Log.w(TAG, "unknown status: ${status.line}")
+        override fun onPushFailed(tag: Any?, reason: String) {
+            val failed = tag as? MissingTile
+            tile = null
+            if (failed != null) skip(failed, SKIP_REFUSED) else nextTile()
         }
     }
 
@@ -764,14 +705,9 @@ class TileFetcher(
         }
 
         tile = next
-        bytes = data
-        offset = 0
-        awaitingReady = true
-        // A begin frame starts a new generation of status lines and makes it the
-        // live one. Bumped before the frame goes out, not in its callback: the
-        // `RDY` can arrive before the write response does.
-        liveStatusGen = ++statusGen
-        armTimeout()
+        // The listing timer is this class's own; from here the pusher owns the
+        // clock until the transfer ends one way or another.
+        cancelTimeout()
 
         // Re-assert per tile, not just once at fetch start: nothing here
         // proves the stack actually honoured the earlier ask (Android may
@@ -780,73 +716,7 @@ class TileFetcher(
         // point nextTile() actually commits to sending a tile -- the boundary
         // between one tile's transfer and the next.
         transport.setFastLink(true)
-        val crc = TransferFrames.crc32(data)
-        // Announced before the frame goes out, so a ledger records what it is
-        // about to owe rather than what it hopes happened. The device's verdict
-        // is checked against exactly these two numbers ([Listener.onTileSending]).
-        listener.onTileSending(next.z, next.col, next.row, data.size, crc)
-        val frame = TransferFrames.beginFrame(relPath, data.size, crc)
-        transport.sendFrame(frame) { ok, error ->
-            // Read `next`, never the current `tile`: a write failure can land
-            // long after the write was issued. `BleLink`'s op queue holds an op
-            // behind one that timed out, and its own transfer-write timeout is
-            // 10 s against this fetcher's 15 s reply timeout, so by the time a
-            // begin failure arrives this side may have given up on `next` and
-            // moved to another tile. Crediting it to whatever is live now skips
-            // a tile that is fine, kills its transfer state and pushes the fetch
-            // on -- a second punishment for a tile that did nothing, while
-            // `next` was already dealt with by its own timeout. Same shape as
-            // the chunk callback's `tile !== current` guard below.
-            if (!ok) {
-                if (tile !== next) {
-                    Log.i(TAG, "dropping a late begin failure for $relPath: $error")
-                    return@sendFrame
-                }
-                Log.w(TAG, "begin write failed for $relPath: $error")
-                clearTransfer()
-                skip(next, SKIP_REFUSED)
-            }
-        }
-    }
-
-    /**
-     * Sends one chunk and, on its write callback, the next.
-     *
-     * The callback *is* the flow control. The transfer characteristic is a plain
-     * WRITE, so the ATT write response arrives only once the device has the
-     * bytes on the SD card -- driving the loop off it means the sender
-     * physically cannot outrun the card. Sending without waiting loses chunks
-     * silently and the transfer dies on an offset check.
-     */
-    private fun sendNextChunk() {
-        val data = bytes ?: return
-        val current = tile ?: return
-        if (offset >= data.size) return  // waiting for OK
-
-        val remaining = data.size - offset
-        val take = minOf(remaining, transport.maxChunkPayload())
-        val payload = data.copyOfRange(offset, offset + take)
-        val frame = TransferFrames.chunkFrame(offset, payload)
-        val chunkOffset = offset
-
-        transport.sendFrame(frame) { ok, error ->
-            // A late callback from a transfer that has already been abandoned
-            // must not drive the next one's chunk pointer.
-            if (tile !== current) return@sendFrame
-            if (!ok) {
-                Log.w(TAG, "chunk at $chunkOffset failed: $error")
-                abortInFlight()
-                clearTransfer()
-                skip(current, SKIP_REFUSED)
-                return@sendFrame
-            }
-            offset = chunkOffset + take
-            armTimeout()
-            listener.onTileProgress(current.z, current.col, current.row, offset, data.size)
-            if (offset < data.size) sendNextChunk()
-            // Else: every byte is on the card and the device is computing the
-            // CRC. The `OK` (or `ERR crc mismatch`) is what moves this on.
-        }
+        pusher.start(next, relPath, data)
     }
 
     private fun skip(missing: MissingTile, reason: String) {
@@ -871,23 +741,7 @@ class TileFetcher(
     }
 
     private fun abortInFlight() {
-        if (tile == null) return
-        // The live generation is over here, not when the abort frame is
-        // acknowledged: from this line on nothing on the status channel belongs
-        // to a live transfer, and the device still owes this one a verdict.
-        statusGen++
-        owedVerdicts++
-        transport.sendFrame(TransferFrames.abortFrame()) { ok, error ->
-            if (!ok) Log.w(TAG, "abort write failed: $error")
-        }
-    }
-
-    private fun clearTransfer() {
-        tile = null
-        bytes = null
-        offset = 0
-        awaitingReady = false
-        cancelTimeout()
+        pusher.abortInFlight()
     }
 
     // --- timeouts and teardown ---------------------------------------------
@@ -897,20 +751,9 @@ class TileFetcher(
         timeout = scheduler.postDelayed(REPLY_TIMEOUT_MS) {
             timeout = null
             Log.w(TAG, "timed out in $phase, ${describe(tile)}")
-            when (phase) {
-                Phase.LISTING -> finish("device stopped answering")
-                Phase.PUSHING -> {
-                    // One dead tile does not end the fetch: abort it, count it,
-                    // move on. A device that is really gone will time out on the
-                    // next one too and the queue drains.
-                    val stalled = tile
-                    abortInFlight()
-                    clearTransfer()
-                    if (stalled != null) skip(stalled, SKIP_REFUSED) else nextTile()
-                }
-
-                Phase.IDLE -> Unit
-            }
+            // Only the listing conversation is timed here. A stalled transfer
+            // is the pusher's own clock and comes back as onPushFailed.
+            if (phase == Phase.LISTING) finish("device stopped answering")
         }
     }
 
@@ -945,18 +788,12 @@ class TileFetcher(
         wantedFormat = null
         viewportOnly = false
         tile = null
-        bytes = null
-        offset = 0
-        awaitingReady = false
+        pusher.reset()
         // Tens to hundreds of kB held for a tile of a fetch that is over. The
         // generation guard in maybePrefetch()'s callback would refuse to park
         // anything new here, but bytes already parked have to go, or they
         // outlive the fetch that paid for them.
         dropPrefetch()
-        // A fetch that ended right after an abort would otherwise leave a debt
-        // behind for the next one to pay with its first tile's real verdict.
-        owedVerdicts = 0
-        liveStatusGen = statusGen
     }
 
     private fun describe(t: MissingTile?): String =

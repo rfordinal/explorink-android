@@ -220,6 +220,27 @@ fetched and delivered it — a 317 KB tile landed at roughly 9 kB/s over BLE,
 and the device redrew itself with it. See "One GATT operation at a time"
 below for why that ceiling is what it is.
 
+## Pushing a route the rider shared
+
+Planned, half built. The rider's ask is a route typed in Google Maps, shared
+into this app, ridden on the device — `docs/route-share-plan.md` in the xteink
+repo has the whole chain and its phases.
+
+What is here today, host tested and **never yet run against a device**:
+
+- `RouteWriter.kt` builds the `.tir` file. Byte-for-byte equal to the laptop
+  writer that has fed the device since 2026-08-06 — a golden file from it sits
+  in `app/src/test/resources/route/` and the test asserts equality. Regenerate
+  those with `mapbuilder/tools/make_route_goldens.py`, never by hand.
+- `FilePusher.kt` carries any file to any safe relative path under `/trailink`.
+  It is the loop `TileFetcher` used to own; the fetcher now drives it instead,
+  with no behaviour change — the 35 race tests in `TileFetcherTest` are what
+  says so.
+
+What is missing: the share receiver, the `dir`-link parser, the confirm screen,
+the routing call, and a device screen that can receive a route while the map is
+closed.
+
 ## Checking freshness: is what the device already has still current?
 
 A separate question from the fetch above. `missing` and `tiles` are about
@@ -486,8 +507,16 @@ app/src/main/java/org/explorink/gpsbridge/
   TileFetcher.kt       the whole fetch conversation as a state machine. BLE
                         behind a Transport interface, time behind a Scheduler
                         interface, so it is unit-tested without either.
+  FilePusher.kt        one file's bytes to one relative path: begin, chunks,
+                        verdict, timeout, and every guard that keeps a dead
+                        transfer's late reply off the next one. Knows nothing
+                        about tiles — a route file goes out the same way.
   TransferFrames.kt    the transfer wire format: frames, CRC32, chunk sizing,
                         path rules, status lines. Pure.
+  RouteWriter.kt       the `.tir` route writer: Mercator projection, Douglas-
+                        Peucker, both CRC32s. A port of the laptop's
+                        `mapbuilder/route_file.py`, asserted byte-for-byte
+                        equal to it. Pure.
   FreshnessChecker.kt  the CHECK_TILES conversation as a state machine, and
                         the offline backoff. Same no-BLE-no-Android contract
                         as TileFetcher, unit-tested too.
