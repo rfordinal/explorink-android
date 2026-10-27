@@ -289,12 +289,20 @@ class ShareRouteActivity : Activity() {
         btnSend.isEnabled = false
     }
 
-    /** The route's own name, which is what the device's picker draws. */
+    /**
+     * The route's own name, which is what the device's picker draws.
+     *
+     * Built from the first and last stop that have a **name**, not the first
+     * and last stop. A phone share starts from "my location", which is a bare
+     * coordinate with no label, so taking stops.first() blindly named a
+     * six-stop route "Trnava" -- measured on the first real share, 2026-10-27.
+     */
     private fun routeName(): String {
-        val first = stops.firstOrNull()?.label
-        val last = stops.lastOrNull()?.label
+        val named = stops.mapNotNull { it.label }
+        val first = named.firstOrNull()
+        val last = named.lastOrNull()
         return when {
-            first != null && last != null -> "$first - $last"
+            first != null && last != null && first != last -> "$first - $last"
             last != null -> last
             else -> SimpleDateFormat("d.M.yyyy", Locale.US).format(Calendar.getInstance().time)
         }
