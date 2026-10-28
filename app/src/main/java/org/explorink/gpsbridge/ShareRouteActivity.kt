@@ -283,7 +283,18 @@ class ShareRouteActivity : Activity() {
         // Queued, not sent: the device advertises only while its map or sync
         // screen is open, so "it will go when the device is there" is the honest
         // sentence and the usual one.
-        state("queued: ${merc.size} points, ${bytes.size / 1024} kB")
+        // One decimal, not integer division: the first real shared route was
+        // 2,808 bytes and this line called it "2 kB" while every doc about it
+        // says 2.8 kB (measured 2026-10-27). The point count next to it is what
+        // makes the size checkable, so the two have to agree.
+        state(
+            String.format(
+                Locale.US,
+                "queued: %d points, %.1f kB",
+                merc.size,
+                bytes.size / 1024.0,
+            ),
+        )
         tvNote.text = "It goes to the device the next time the map or the sync screen is open. " +
             "The route is listed under Trips."
         btnSend.isEnabled = false
