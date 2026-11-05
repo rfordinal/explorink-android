@@ -210,6 +210,18 @@ version, and the format-version check happens before a single byte goes out.
 A mismatch is a distinct `skip ... fmt<found>` rather than a plain miss,
 because "no tile here" and "wrong tile here" want different fixes.
 
+**Every failure says which one it was** (2026-11-05). The reason word is
+`nosource` only for a definite 404, `unreachable` for a link that never got
+an answer (no signal, a timeout, a 5xx, a body over the transfer cap),
+`wrongcrc` for a tile the CDN served twice at a content ID the freshness
+index did not promise, and `fmt<found>` for the format mismatch above. One
+word for all of them is what made a content-ID bug take an afternoon: the
+device reported every tile out of date, the app answered `nosource` for every
+one, and the obvious reading — "the CDN does not have these" — was wrong. The
+tiles were there the whole time and a plain `curl` fetched them. `TileSource`
+answers a `Result` rather than a nullable byte array, the same shape
+`PointSync.ReadResult` already used for point shards.
+
 **Nothing is cached on the phone.** A tile lives on the X4 or on the CDN;
 the phone holds one in memory for the length of its transfer and drops it
 the moment it lands, then a static file fetch — no API, a miss is a 404.
@@ -297,8 +309,10 @@ the tile path does not change when a tile is rebuilt, and the CDN's edge
 caches a path for seven days with no purge mechanism, so without the query
 a re-fetch would get back the exact stale copy it is meant to replace. The
 app verifies the arriving tile's content ID independently before writing it,
-retries once past the cache, then gives up with `skip` rather than push a
-tile it cannot vouch for.
+retries once past the cache, then gives up with `skip ... wrongcrc` rather
+than push a tile it cannot vouch for. The retry's own verdict is deliberately
+not forwarded: a second read that 404s does not change what is known, which
+is that a body for this tile exists and it is the wrong one.
 
 **Run against real hardware.** The device's tile-sync screen asked, this app
 answered from the CDN index, and a stale tile came down and afterwards matched
