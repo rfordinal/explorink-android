@@ -57,8 +57,28 @@ class TileFetcher(
          */
         const val REPLY_TIMEOUT_MS = 15_000L
 
-        /** Reason word sent with `skip` when no source has the tile. */
+        /**
+         * Reason word sent with `skip` when the CDN answered a definite 404.
+         * **Absent, specifically** -- the ground has not been built. Until
+         * 2026-11-05 this word also covered a dead network and a tile served at
+         * the wrong content id, which is what made the content-id bug of that
+         * day read as "the CDN does not have these" (T-2070).
+         */
         const val SKIP_NO_SOURCE = "nosource"
+
+        /**
+         * Reason word sent with `skip` when the source could not be reached at
+         * all: no signal, a timeout, a 5xx, a body over the transfer cap.
+         * Nothing is known about whether the tile exists.
+         */
+        const val SKIP_UNREACHABLE = "unreachable"
+
+        /**
+         * Reason word sent with `skip` when the CDN served this tile twice and
+         * neither copy carried the content id the freshness index promised.
+         * The tile is there; it is the wrong version of it.
+         */
+        const val SKIP_WRONG_CONTENT = "wrongcrc"
 
         /** Reason word sent with `skip` when the device refused or failed the push. */
         const val SKIP_REFUSED = "refused"
@@ -577,7 +597,7 @@ class TileFetcher(
             // can go out now instead of after a whole HTTPS GET.
             prefetched = null
             Log.i(TAG, "using the prefetched ${describe(next)} (${ready.second.size} bytes)")
-            onTileBytes(next, relPath, ready.second, fetchGen)
+            onTileBytes(next, relPath, TileSource.Result.Bytes(ready.second), fetchGen)
             return
         }
         // Anything held is for some other tile, or is a read still out for this
@@ -596,8 +616,8 @@ class TileFetcher(
         source.read(
             next.z, next.col, next.row, wantedFormat,
             expected.get(next.z, next.col, next.row),
-        ) { data ->
-            onTileBytes(next, relPath, data, gen)
+        ) { result ->
+            onTileBytes(next, relPath, result, gen)
         }
     }
 
@@ -632,7 +652,7 @@ class TileFetcher(
         source.read(
             next.z, next.col, next.row, wantedFormat,
             expected.get(next.z, next.col, next.row),
-        ) { data ->
+        ) { result ->
             if (gen != fetchGen) {
                 Log.i(TAG, "dropping a prefetch of ${describe(next)}; its fetch has moved on")
                 return@read
@@ -645,7 +665,10 @@ class TileFetcher(
                 return@read
             }
             prefetching = null
-            if (data != null) prefetched = next to data
+            // Only bytes are kept. A miss is not remembered here, whichever
+            // kind it was: nextTile() reads the tile again and that read's own
+            // verdict is the one that becomes a `skip` reason.
+            if (result is TileSource.Result.Bytes) prefetched = next to result.bytes
         }
     }
 
@@ -675,7 +698,7 @@ class TileFetcher(
      * -- there it is one late chunk callback vs. the live tile, here it is one
      * late read vs. the live fetch.
      */
-    private fun onTileBytes(next: MissingTile, relPath: String, data: ByteArray?, gen: Int) {
+    private fun onTileBytes(next: MissingTile, relPath: String, result: TileSource.Result, gen: Int) {
         if (gen != fetchGen) {
             Log.i(TAG, "dropping a late read for ${describe(next)}; its fetch has moved on")
             return
@@ -684,9 +707,25 @@ class TileFetcher(
             Log.i(TAG, "dropping a late read for ${describe(next)}; the fetch has ended")
             return
         }
-        if (data == null) {
-            skip(next, SKIP_NO_SOURCE)
-            return
+        val data = when (result) {
+            is TileSource.Result.Bytes -> result.bytes
+            is TileSource.Result.NotFound -> {
+                skip(next, SKIP_NO_SOURCE)
+                return
+            }
+            is TileSource.Result.Unreachable -> {
+                skip(next, SKIP_UNREACHABLE)
+                return
+            }
+            is TileSource.Result.WrongContent -> {
+                Log.w(
+                    TAG,
+                    "${describe(next)} is content ${result.found?.toString(16)} on the CDN, " +
+                        "the index says ${result.wanted.toString(16)}",
+                )
+                skip(next, SKIP_WRONG_CONTENT)
+                return
+            }
         }
 
         // Checked here, before a single byte goes out. A wrong-version tile

@@ -29,6 +29,13 @@ class TileFetcherTest {
 
     private class FakeSource : TileSource {
         val tiles = mutableMapOf<String, ByteArray>()
+
+        /**
+         * Keys whose read answers something other than bytes or a 404. A tile
+         * absent from [tiles] with no entry here reads as [TileSource.Result.NotFound],
+         * which is what the CDN says for ground nobody has built.
+         */
+        val verdicts = mutableMapOf<String, TileSource.Result>()
         /** Format version the fetcher passed down, so a test can prove it did. */
         var lastFormatAsked: Int? = -1
         /** Expected content id the fetcher passed down, so a test can prove it did. */
@@ -45,7 +52,7 @@ class TileFetcherTest {
 
         /** Keys whose reads are parked instead of answered inline. */
         val hold = mutableSetOf<String>()
-        private val held = mutableListOf<Pair<String, (ByteArray?) -> Unit>>()
+        private val held = mutableListOf<Pair<String, (TileSource.Result) -> Unit>>()
 
         // Completes inline unless held. The real sources come back on the main
         // thread from a worker; the fetcher only requires "exactly once, on my
@@ -56,7 +63,7 @@ class TileFetcherTest {
             row: Long,
             formatVersion: Int?,
             expectedContentId: Long?,
-            done: (ByteArray?) -> Unit,
+            done: (TileSource.Result) -> Unit,
         ) {
             lastFormatAsked = formatVersion
             lastCrcAsked = expectedContentId
@@ -66,13 +73,19 @@ class TileFetcherTest {
                 held.add(key to done)
                 return
             }
-            done(tiles[key])
+            done(answerFor(key))
         }
 
         /** Answers the [index]th parked read, in the order they were asked for. */
         fun release(index: Int) {
             val (key, done) = held[index]
-            done(tiles[key])
+            done(answerFor(key))
+        }
+
+        private fun answerFor(key: String): TileSource.Result {
+            val bytes = tiles[key]
+            if (bytes != null) return TileSource.Result.Bytes(bytes)
+            return verdicts[key] ?: TileSource.Result.NotFound
         }
 
         override fun describe(): String = "fake"
@@ -302,6 +315,57 @@ class TileFetcherTest {
     }
 
     @Test
+    fun `a source that could not be reached is skipped as unreachable, not as absent`() {
+        // The distinction that cost an afternoon on 2026-11-05 (T-2070):
+        // `nosource` reads as "the CDN does not hold this", which sends somebody
+        // off to build ground that is already built. A dead link knows nothing
+        // about what the CDN holds.
+        val h = Harness()
+        h.source.verdicts["12/2199/1416"] = TileSource.Result.Unreachable
+
+        h.fetcher.onCommandLine("NEED_TILES 1 fmt 2")
+        h.list(MissingTile(12, 2199, 1416, 1))
+
+        assertEquals(0, h.transport.frames.size)
+        assertTrue(h.transport.commands.contains("skip 12 2199 1416 ${TileFetcher.SKIP_UNREACHABLE}"))
+        assertEquals(1, h.recorder.finalSkipped)
+    }
+
+    @Test
+    fun `a tile served at the wrong content id is skipped as wrongcrc`() {
+        // The tile is on the CDN and a plain curl fetches it. What is wrong is
+        // which version came back -- an edge serving a stale body past `?crc=`,
+        // or an index ahead of the tiles. Nothing about absence.
+        val h = Harness()
+        h.source.verdicts["12/2199/1416"] =
+            TileSource.Result.WrongContent(found = 0xDEADBEEFL, wanted = 0xABB60454L)
+
+        h.fetcher.onCommandLine("NEED_TILES 1 fmt 2")
+        h.list(MissingTile(12, 2199, 1416, 1))
+
+        assertEquals(0, h.transport.frames.size)
+        assertTrue(h.transport.commands.contains("skip 12 2199 1416 ${TileFetcher.SKIP_WRONG_CONTENT}"))
+        assertEquals(1, h.recorder.finalSkipped)
+    }
+
+    @Test
+    fun `the three failure reasons are three different words`() {
+        // A reason word the device and its log can act on only exists if the
+        // words differ. Spelled out here so a future merge cannot quietly
+        // collapse two of them back into one.
+        val words = setOf(
+            TileFetcher.SKIP_NO_SOURCE,
+            TileFetcher.SKIP_UNREACHABLE,
+            TileFetcher.SKIP_WRONG_CONTENT,
+            TileFetcher.SKIP_REFUSED,
+        )
+        assertEquals(4, words.size)
+        // The device truncates a reason at 16 bytes including the terminator
+        // (MapCommandParser::kSkipReasonBytes).
+        words.forEach { assertTrue("$it is too long for the device", it.length <= 15) }
+    }
+
+    @Test
     fun `a tile built to another format version is skipped before any bytes go out`() {
         val h = Harness()
         h.source.tiles["12/2199/1416"] = tileBytes(200, version = 3)
@@ -422,7 +486,7 @@ class TileFetcherTest {
         // arrive while a read is in flight. The late answer must not open a
         // transfer on a fetch that is already over.
         val h = Harness()
-        var deliver: ((ByteArray?) -> Unit)? = null
+        var deliver: ((TileSource.Result) -> Unit)? = null
         val slow = object : TileSource {
             override fun read(
                 z: Int,
@@ -430,7 +494,7 @@ class TileFetcherTest {
                 row: Long,
                 formatVersion: Int?,
                 expectedContentId: Long?,
-                done: (ByteArray?) -> Unit,
+                done: (TileSource.Result) -> Unit,
             ) {
                 deliver = done
             }
@@ -447,7 +511,7 @@ class TileFetcherTest {
         fetcher.onDisconnected()
         assertEquals(TileFetcher.Phase.IDLE, fetcher.phase)
 
-        deliver?.invoke(tileBytes(50))
+        deliver?.invoke(TileSource.Result.Bytes(tileBytes(50)))
         assertEquals(0, h.transport.beginFrames().size)
         assertEquals(TileFetcher.Phase.IDLE, fetcher.phase)
     }
@@ -464,17 +528,17 @@ class TileFetcherTest {
         val h = Harness()
         val source = object : TileSource {
             val immediate = mutableMapOf<String, ByteArray>()
-            var deliverA: ((ByteArray?) -> Unit)? = null
+            var deliverA: ((TileSource.Result) -> Unit)? = null
             override fun read(
                 z: Int,
                 col: Long,
                 row: Long,
                 formatVersion: Int?,
                 expectedContentId: Long?,
-                done: (ByteArray?) -> Unit,
+                done: (TileSource.Result) -> Unit,
             ) {
                 val bytes = immediate["$z/$col/$row"]
-                if (bytes != null) done(bytes) else deliverA = done
+                if (bytes != null) done(TileSource.Result.Bytes(bytes)) else deliverA = done
             }
             override fun describe(): String = "test"
         }
@@ -502,7 +566,7 @@ class TileFetcherTest {
         assertEquals(1, h.transport.beginFrames().size)
 
         // A's read finally lands, mid B's transfer.
-        source.deliverA?.invoke(tileBytes(50))
+        source.deliverA?.invoke(TileSource.Result.Bytes(tileBytes(50)))
 
         // No begin frame for A's tile -- the guard held.
         assertEquals(1, h.transport.beginFrames().size)

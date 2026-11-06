@@ -30,7 +30,38 @@ import java.util.concurrent.Executors
  */
 interface TileSource {
     /**
-     * Hands back the tile's bytes, or null if this source does not have it.
+     * What a read came back with.
+     *
+     * **Three failures, not one.** A single `null` for every miss is what made
+     * the 2026-11-05 content-id bug take an afternoon to find: the device
+     * reported every tile out of date, the app answered `skip nosource` for
+     * every one, and the obvious reading -- "the CDN does not hold these" --
+     * was wrong. The tiles were there the whole time and a plain `curl`
+     * fetched them; what failed was the content check below
+     * (`../../docs/TODO.md`, T-2070). The same shape [PointSync.ReadResult]
+     * already uses for point shards, for the same reason.
+     */
+    sealed class Result {
+        data class Bytes(val bytes: ByteArray) : Result()
+
+        /** A *definite* 404 -- the CDN was asked and said this tile does not exist. */
+        object NotFound : Result()
+
+        /** Anything else that stopped the read: a timeout, a 5xx, no signal, a body over the cap. */
+        object Unreachable : Result()
+
+        /**
+         * The CDN served a tile, twice, and neither copy was the content id the
+         * freshness index promised. The bytes are real and they are the wrong
+         * version -- an edge serving a stale body past `?crc=`, or an index
+         * ahead of the tiles it describes. Nothing a retry fixes, and nothing
+         * "nobody has this tile" describes.
+         */
+        data class WrongContent(val found: Long?, val wanted: Long) : Result()
+    }
+
+    /**
+     * Hands back the tile's bytes, or says why not.
      *
      * [expectedContentId] is what the freshness index says this tile's content
      * should be, when a check has established it ([ExpectedContentIds]), and
@@ -46,7 +77,7 @@ interface TileSource {
         row: Long,
         formatVersion: Int?,
         expectedContentId: Long?,
-        done: (ByteArray?) -> Unit,
+        done: (Result) -> Unit,
     )
 
     /**
@@ -139,11 +170,11 @@ class CdnTileSource(
         row: Long,
         formatVersion: Int?,
         expectedContentId: Long?,
-        done: (ByteArray?) -> Unit,
+        done: (TileSource.Result) -> Unit,
     ) {
         io.execute {
-            val bytes = readVerified(z, col, row, formatVersion, expectedContentId)
-            MainThread.post { done(bytes) }
+            val result = readVerified(z, col, row, formatVersion, expectedContentId)
+            MainThread.post { done(result) }
         }
     }
 
@@ -159,6 +190,10 @@ class CdnTileSource(
      *
      * One retry with a cache-buster, then give up. Giving up is honest: the
      * fetch answers `skip`, the device counts it as failed and stops waiting.
+     *
+     * The verdict says *which* failure, because the two are fixed in different
+     * places and by different people: a miss wants the area built, a content
+     * mismatch wants the edge or the index looked at ([TileSource.Result]).
      */
     private fun readVerified(
         z: Int,
@@ -166,21 +201,31 @@ class CdnTileSource(
         row: Long,
         formatVersion: Int?,
         expectedContentId: Long?,
-    ): ByteArray? {
+    ): TileSource.Result {
         val first = readBlocking(z, col, row, formatVersion, expectedContentId)
-        if (expectedContentId == null || first == null) return first
-        if (TileHeader.contentId(first) == expectedContentId) return first
+        if (first !is TileSource.Result.Bytes) return first
+        if (expectedContentId == null) return first
+        if (TileHeader.contentId(first.bytes) == expectedContentId) return first
 
         val bust = busts.incrementAndGet()
+        val found = TileHeader.contentId(first.bytes)
         Log.w(
             TAG,
-            "z$z $col/$row came back as content ${TileHeader.contentId(first)?.toString(16)}, " +
+            "z$z $col/$row came back as content ${found?.toString(16)}, " +
                 "expected ${expectedContentId.toString(16)} -- retrying past the cache",
         )
         val again = readBlocking(z, col, row, formatVersion, expectedContentId, bust)
-        if (again != null && TileHeader.contentId(again) == expectedContentId) return again
+        if (again is TileSource.Result.Bytes && TileHeader.contentId(again.bytes) == expectedContentId) return again
         Log.w(TAG, "z$z $col/$row still not the expected version; not pushing it")
-        return null
+        // The retry's own verdict is deliberately not forwarded. A second read
+        // that 404s or times out does not change what is known: a body for this
+        // tile exists and it is the wrong one. Answering `nosource` on the
+        // strength of the retry is exactly the conflation this class stopped
+        // making.
+        return TileSource.Result.WrongContent(
+            found = if (again is TileSource.Result.Bytes) TileHeader.contentId(again.bytes) else found,
+            wanted = expectedContentId,
+        )
     }
 
     fun readBlocking(
@@ -190,7 +235,7 @@ class CdnTileSource(
         formatVersion: Int?,
         expectedContentId: Long? = null,
         bust: Long? = null,
-    ): ByteArray? {
+    ): TileSource.Result {
         val version = formatVersion ?: defaultFormatVersion
         val query = buildString {
             if (expectedContentId != null) append("?crc=%08x".format(expectedContentId))
@@ -209,25 +254,29 @@ class CdnTileSource(
                 200 -> {
                     val bytes = conn.inputStream.use { it.readBytes() }
                     if (bytes.size > MAX_TILE_BYTES) {
+                        // Unreachable, not NotFound: the tile exists and this
+                        // phone will not carry it. Saying "nobody has this"
+                        // would send somebody off to build ground that is built.
                         Log.w(TAG, "$url is ${bytes.size} bytes, over the transfer cap")
-                        null
+                        TileSource.Result.Unreachable
                     } else {
-                        bytes
+                        TileSource.Result.Bytes(bytes)
                     }
                 }
                 // A miss. The CDN only holds areas somebody has built, so this
                 // is ordinary, not an error -- the fetch answers `skip nosource`.
-                404 -> null
+                404 -> TileSource.Result.NotFound
                 else -> {
                     Log.w(TAG, "$url -> HTTP $code")
-                    null
+                    TileSource.Result.Unreachable
                 }
             }
         } catch (t: Throwable) {
-            // No network, DNS down, TLS refused: all a miss from here. The rider
-            // gets `skip`, not a crash mid-ride.
+            // No network, DNS down, TLS refused. **Not a miss**: the CDN was
+            // never asked, so nothing is known about whether it holds the tile.
+            // The rider gets `skip`, not a crash mid-ride.
             Log.w(TAG, "fetch failed $url: ${t.javaClass.simpleName}")
-            null
+            TileSource.Result.Unreachable
         } finally {
             conn?.disconnect()
         }
