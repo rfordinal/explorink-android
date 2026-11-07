@@ -3,11 +3,15 @@ package org.explorink.gpsbridge
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
@@ -18,11 +22,14 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.View
-import android.widget.Button
-import android.widget.ProgressBar
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.content.res.ResourcesCompat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -62,26 +69,23 @@ class MainActivity : Activity(), BridgeService.Observer {
         }.toTypedArray()
     }
 
-    private lateinit var tvState: TextView
-    private lateinit var tvProblem: TextView
-    private lateinit var tvWake: TextView
-    private lateinit var tvTilesHead: TextView
-    private lateinit var tvTiles: TextView
-    private lateinit var tvTileNow: TextView
-    private lateinit var pbTileBytes: ProgressBar
-    private lateinit var pbTileSquares: ProgressBar
-    private lateinit var tvFix: TextView
-    private lateinit var tvCounters: TextView
-    private lateinit var tvLogFile: TextView
-    private lateinit var tvEvents: TextView
-    private lateinit var tvVersion: TextView
-    private lateinit var btnWake: Button
-    private lateinit var btnForget: Button
-    private lateinit var btnPins: Button
-    private lateinit var btnRetry: Button
-    private lateinit var btnExport: Button
-    private lateinit var btnRecord: Button
-    private lateinit var btnStop: Button
+    private lateinit var devicePlate: View
+    private lateinit var instrumentRow: View
+    private lateinit var deviceIcon: ImageView
+    private lateinit var deviceNameView: TextView
+    private lateinit var deviceMeta: TextView
+    private lateinit var speedValue: TextView
+    private lateinit var compassNeedle: ImageView
+    private lateinit var nextSendKey: TextView
+    private lateinit var nextSendValue: TextView
+    private lateinit var nextSendSub: TextView
+    private lateinit var recordingRow: View
+    private lateinit var recordingSub: TextView
+    private lateinit var transfersCount: TextView
+    private lateinit var transferTilesRow: View
+    private lateinit var transferTilesIcon: ImageView
+    private lateinit var transferTilesTitle: TextView
+    private lateinit var transferTilesValue: TextView
 
     private val main = Handler(Looper.getMainLooper())
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.US)
@@ -123,41 +127,42 @@ class MainActivity : Activity(), BridgeService.Observer {
         }
         setContentView(R.layout.activity_main)
 
-        tvState = findViewById(R.id.tvState)
-        tvProblem = findViewById(R.id.tvProblem)
-        tvWake = findViewById(R.id.tvWake)
-        tvTilesHead = findViewById(R.id.tvTilesHead)
-        tvTiles = findViewById(R.id.tvTiles)
-        tvTileNow = findViewById(R.id.tvTileNow)
-        pbTileBytes = findViewById(R.id.pbTileBytes)
-        pbTileSquares = findViewById(R.id.pbTileSquares)
-        tvFix = findViewById(R.id.tvFix)
-        tvCounters = findViewById(R.id.tvCounters)
-        tvLogFile = findViewById(R.id.tvLogFile)
-        tvEvents = findViewById(R.id.tvEvents)
-        tvVersion = findViewById(R.id.tvVersion)
-        btnWake = findViewById(R.id.btnWake)
-        btnForget = findViewById(R.id.btnForget)
-        btnPins = findViewById(R.id.btnPins)
-        btnRetry = findViewById(R.id.btnRetry)
-        btnExport = findViewById(R.id.btnExport)
-        btnRecord = findViewById(R.id.btnRecord)
-        btnStop = findViewById(R.id.btnStop)
+        devicePlate = findViewById(R.id.devicePlate)
+        instrumentRow = findViewById(R.id.instrumentRow)
+        deviceIcon = findViewById(R.id.deviceIcon)
+        deviceNameView = findViewById(R.id.deviceName)
+        deviceMeta = findViewById(R.id.deviceMeta)
+        speedValue = findViewById(R.id.speedValue)
+        compassNeedle = findViewById(R.id.compassNeedle)
+        nextSendKey = findViewById(R.id.nextSendKey)
+        nextSendValue = findViewById(R.id.nextSendValue)
+        nextSendSub = findViewById(R.id.nextSendSub)
+        recordingRow = findViewById(R.id.recordingRow)
+        recordingSub = findViewById(R.id.recordingSub)
+        transfersCount = findViewById(R.id.transfersCount)
+        transferTilesRow = findViewById(R.id.transferTilesRow)
+        transferTilesIcon = findViewById(R.id.transferTilesIcon)
+        transferTilesTitle = findViewById(R.id.transferTilesTitle)
+        transferTilesValue = findViewById(R.id.transferTilesValue)
+        transferTilesRow.setOnClickListener { onTransferTilesPressed() }
+        val navMapAreas = findViewById<View>(R.id.navMapAreas)
+        val navPins = findViewById<View>(R.id.navPins)
+        val btnOverflow = findViewById<View>(R.id.btnOverflow)
 
-        btnWake.setOnClickListener { onWakePressed() }
-        btnForget.setOnClickListener { onForgetPressed() }
-        btnPins.setOnClickListener { startActivity(Intent(this, PinsActivity::class.java)) }
-        findViewById<Button>(R.id.btnMapAreas).setOnClickListener {
-            startActivity(Intent(this, TileQueueActivity::class.java))
-        }
-        btnRetry.setOnClickListener { onRetryPressed() }
-        btnExport.setOnClickListener { shareLog() }
-        btnRecord.setOnClickListener { onRecordPressed() }
-        btnStop.setOnClickListener { onStopPressed() }
-
-        // Version, once, at the bottom. Debug builds carry the commit they were
-        // built from, so "which build is on the phone" is answerable.
-        tvVersion.text = "ExplorInk GPS ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+        devicePlate.setOnClickListener { onDevicePlatePressed() }
+        instrumentRow.setOnClickListener { onInstrumentRowPressed() }
+        recordingRow.setOnClickListener { onRecordPressed() }
+        // Pins and Map areas: the old main menu's two real destinations,
+        // moved into bottom nav per the user's "rovnake, co sme tam mali"
+        // call, 2026-11-07 -- not the Outline mockup's illustrative Wallet/
+        // Map data labels, which name screens this app does not have.
+        navMapAreas.setOnClickListener { startActivity(Intent(this, TileQueueActivity::class.java)) }
+        navPins.setOnClickListener { startActivity(Intent(this, PinsActivity::class.java)) }
+        // Retry scan / Share log / Stop service: not one of the Outline
+        // composition's seven Home elements. Lives only in the app bar's
+        // ellipsis, not duplicated into a bottom-nav "More" too -- the
+        // user's call, 2026-11-07.
+        btnOverflow.setOnClickListener { onOverflowPressed() }
 
         render()
 
@@ -435,200 +440,545 @@ class MainActivity : Activity(), BridgeService.Observer {
     // --- UI -------------------------------------------------------------
 
     /**
-     * The auto-start line: whether opening the map on the X4 will start this app
-     * on its own, and if not, what is missing. Two states are not the same
-     * failure, so they do not share a message -- unpaired means no wake at all,
-     * paired-without-background-location means the wake fires and then has no
-     * fixes to send.
+     * The four link states Outline's "Dizajn systém" splits across the
+     * device plate and the instrument row ("Styri stavy linky, nesene
+     * dvoma prvkami"): which one is broken is a question only the plate
+     * can answer by name, but both elements render from this one source of
+     * truth, never two separately derived guesses at the same state.
      */
-    private fun renderWake() {
+    private enum class LinkState { CONNECTED, RESTING, NEVER_PAIRED, HALT }
+
+    /**
+     * BLE state is checked before pairing state, not after: a companion
+     * pairing (CompanionWake) only controls auto-wake, not the BLE link
+     * itself -- this firmware's advertising has no pairing/bonding at all
+     * (docs/ble-advertising.md), so the phone can be mid-scan or already
+     * CONNECTED to a device it has never companion-paired with. Checking
+     * addr == null first showed "Connect a device" while the status line
+     * underneath plainly said "connecting LilyGoT5S3Map" -- caught on the
+     * real phone, 2026-11-07.
+     *
+     * The app does not yet distinguish an expected idle disconnect from a
+     * real link failure at the BLE-state level -- only BleLink.State.FAILED
+     * and a devicePlateBlocker() reason map to HALT; every other
+     * non-connected, paired state reads as RESTING.
+     */
+    private fun currentLinkState(snap: BridgeService.Snapshot?): Pair<LinkState, String?> {
         val addr = CompanionWake.pairedAddress(this)
-        when {
-            addr == null -> {
-                tvWake.text = "auto-start: off -- device not paired"
-                btnWake.text = "Pair the device"
-                btnWake.visibility = View.VISIBLE
-            }
-
-            !hasBackgroundLocation() -> {
-                tvWake.text = "auto-start: paired $addr, but no background location"
-                btnWake.text = "Allow location all the time"
-                btnWake.visibility = View.VISIBLE
-            }
-
-            else -> {
-                tvWake.text = "auto-start: on -- paired $addr"
-                btnWake.visibility = View.GONE
-            }
+        val blocker = devicePlateBlocker()
+        return when {
+            blocker != null -> LinkState.HALT to blocker
+            snap?.bleState == BleLink.State.CONNECTED -> LinkState.CONNECTED to null
+            snap?.bleState == BleLink.State.FAILED -> LinkState.HALT to "Not reaching the device"
+            addr == null && snap?.deviceName == null -> LinkState.NEVER_PAIRED to null
+            else -> LinkState.RESTING to null
         }
-        // Unpairing stays reachable in every paired state, including the one where
-        // background location is still missing -- otherwise pairing the wrong device
-        // is only undoable by granting a permission first.
-        btnForget.visibility = if (addr != null) View.VISIBLE else View.GONE
     }
 
     /**
-     * The map-square block, hidden entirely until the device has asked for
-     * something. An empty labelled box reads like a broken feature; no box reads
-     * like a feature that has not happened yet, which is the truth.
+     * The device plate's four states, per Outline "Dizajn systém" ("Plocha
+     * zariadenia") and the device-plate component sheet: connected (solid
+     * ink border), resting (dashed, "normal - wakes when you follow"),
+     * never paired (dashed, "Connect a device"), and halt / "Not reaching
+     * the device" (ink border plus the diagonal hatch, stop-colored
+     * detail). A background-location gap (paired, BLE fine, but the wake
+     * would silently have no fix to send) is not one of these four Outline
+     * states; it stays reachable only from the tap dialog's first item,
+     * not as a fifth visual state here.
+     *
+     * [link] and [haltName] come from one currentLinkState() call shared
+     * with renderInstrumentRow() (render() computes it once) -- calling it
+     * twice per frame used to mean two LocationManager/CompanionDeviceManager
+     * IPCs and a frame where the two elements could disagree if a toggle
+     * landed between the calls. Caught by Opus review, 2026-11-07.
      */
-    private fun renderTiles(lines: List<String>, now: BridgeService.TileProgress?) {
-        val show = lines.isNotEmpty() || now != null
-        tvTilesHead.visibility = if (show) View.VISIBLE else View.GONE
-        tvTiles.visibility = if (lines.isNotEmpty()) View.VISIBLE else View.GONE
-        if (lines.isNotEmpty()) tvTiles.text = lines.joinToString("\n")
+    private fun renderDevicePlate(snap: BridgeService.Snapshot?, link: LinkState, haltName: String?) {
+        val icon: Int
+        val background: Int
+        val nameColor: Int
+        val metaColor: Int
+        var name: String
+        var meta: String? = null
 
-        val live = if (now != null) View.VISIBLE else View.GONE
-        tvTileNow.visibility = live
-        pbTileBytes.visibility = live
-        pbTileSquares.visibility = live
-        if (now == null) return
+        when (link) {
+            LinkState.HALT -> {
+                icon = R.drawable.ic_triangle_alert
+                background = R.drawable.bg_device_plate_halt
+                nameColor = R.color.ui_ink
+                metaColor = R.color.ui_stop
+                name = haltName ?: "Not reaching the device"
+                meta = when {
+                    haltName != "Not reaching the device" -> "tap to fix"
+                    // "the ride log keeps recording" used to print
+                    // unconditionally, including while nothing was being
+                    // recorded -- caught by Opus review, 2026-11-07.
+                    snap?.recording == true -> "the ride log keeps recording"
+                    else -> null
+                }
+            }
 
-        // Both lines read the way the device's sync screen reads, on purpose:
-        // TileFormat is a port of it (decimal kB, rate over the whole fetch from
-        // completed squares only, skips counted apart).
-        tvTileNow.text = "now: z${now.z} ${now.col}/${now.row}   " +
-            "${TileFormat.bytes(now.sentBytes)} / ${TileFormat.bytes(now.totalBytes)}\n" +
-            TileFormat.summary(
-                now.completedSquares, now.skippedSquares, now.totalSquares,
-                now.movedBytes, now.completedBytes, now.elapsedMs,
-            )
-        // Percent, not bytes, on both bars: setMax per frame makes the bar jump
-        // when one square is bigger than the last.
-        pbTileBytes.progress =
-            if (now.totalBytes > 0) now.sentBytes * 100 / now.totalBytes else 0
-        // Skips fill the ask too -- they are settled, just not arrived -- or the
-        // bar stalls at a square nobody can supply.
-        pbTileSquares.progress =
-            if (now.totalSquares > 0)
-                (now.completedSquares + now.skippedSquares) * 100 / now.totalSquares
-            else 0
+            LinkState.CONNECTED -> {
+                icon = R.drawable.ic_bluetooth
+                background = R.drawable.bg_device_plate_connected
+                nameColor = R.color.ui_ink
+                metaColor = R.color.ui_ink
+                name = snap?.deviceName ?: BleLink.DEVICE_NAME
+                meta = if (snap?.rssi != null) "connected - ${snap.rssi} dBm" else "connected"
+            }
+
+            LinkState.NEVER_PAIRED -> {
+                icon = R.drawable.ic_bluetooth_off
+                background = R.drawable.bg_device_plate_idle
+                nameColor = R.color.ui_ash
+                metaColor = R.color.ui_ash
+                name = "Connect a device"
+            }
+
+            LinkState.RESTING -> {
+                icon = R.drawable.ic_moon
+                background = R.drawable.bg_device_plate_idle
+                nameColor = R.color.ui_ash
+                metaColor = R.color.ui_ash
+                name = "Device resting"
+                meta = "normal - wakes when you follow"
+            }
+        }
+
+        deviceIcon.setImageResource(icon)
+        deviceIcon.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(this, nameColor))
+        devicePlate.background = ContextCompat.getDrawable(this, background)
+        deviceNameView.text = name
+        deviceNameView.setTextColor(ContextCompat.getColor(this, nameColor))
+        if (meta != null) {
+            deviceMeta.text = meta
+            deviceMeta.setTextColor(ContextCompat.getColor(this, metaColor))
+            deviceMeta.visibility = View.VISIBLE
+        } else {
+            deviceMeta.visibility = View.GONE
+        }
     }
 
-    private fun render() {
-        renderWake()
-        val snap = service?.snapshot()
+    /**
+     * Instrument row, per Outline "Dizajn systém": speed plus inline
+     * compass in the left cell, an adaptive right cell that answers why
+     * nothing has gone out yet (NEXT SEND / NO FIX / WAITING / LINK LOST).
+     * Lit (ui_ink) only while position is actually going out; grey
+     * (ui_ash) otherwise -- same rule as the device plate, same
+     * currentLinkState() call (passed in, see renderDevicePlate()'s doc)
+     * so the two never disagree.
+     */
+    private fun renderInstrumentRow(snap: BridgeService.Snapshot?, link: LinkState, haltName: String?) {
+        val fix = snap?.lastFix
+        val sending = link == LinkState.CONNECTED && fix != null
 
-        if (snap == null) {
-            tvState.text = if (permissionsDenied) "permission needed" else "starting"
-            tvFix.text = "fix: none yet"
-            tvCounters.text = "packets: sent 0 / failed 0"
-            tvLogFile.text = "recording: off"
-            tvEvents.text = ""
-            renderTiles(emptyList(), null)
-            btnRecord.text = "Start recording"
-            renderProblems(null)
+        val speedColor = ContextCompat.getColor(this, if (sending) R.color.ui_ink else R.color.ui_ash)
+        speedValue.setTextColor(speedColor)
+        speedValue.text = if (fix != null && fix.hasSpeed()) {
+            "${(fix.speed * 3.6f).toInt()} km/h"
+        } else {
+            "-"
+        }
+        // The needle is the one hand-drawn exception to "icons never carry
+        // a live value" (Outline "Ikony"); the ring stays, the needle is
+        // only hidden when there is no fix to point from.
+        compassNeedle.visibility = if (fix != null) View.VISIBLE else View.GONE
+        compassNeedle.rotation = snap?.bearingDeg ?: 0f
+        compassNeedle.imageTintList = ColorStateList.valueOf(speedColor)
+
+        val key: String
+        val value: String
+        val sub: String?
+        val valueColor: Int
+        val subColor: Int
+
+        when {
+            // The halt case is split in two: a real severed link (FAILED)
+            // vs. a setup blocker (permission/Bluetooth/GPS). Both used to
+            // print "LINK LOST" / "log still recording" unconditionally --
+            // turning off Bluetooth while connected made the row claim the
+            // link was lost and a ride was being logged when neither was
+            // true. Caught by Opus review, 2026-11-07.
+            link == LinkState.HALT && haltName == "Not reaching the device" -> {
+                key = "LINK LOST"
+                value = if (snap != null && snap.lastSentAtMs > 0) {
+                    "${(System.currentTimeMillis() - snap.lastSentAtMs) / 1000} s"
+                } else {
+                    "-"
+                }
+                sub = if (snap?.recording == true) "log still recording" else null
+                valueColor = R.color.ui_ink
+                subColor = R.color.ui_stop
+            }
+
+            link == LinkState.HALT -> {
+                key = haltName?.uppercase(Locale.US) ?: "NOT READY"
+                value = "-"
+                sub = "tap device to fix"
+                valueColor = R.color.ui_ash
+                subColor = R.color.ui_warn
+            }
+
+            link == LinkState.RESTING || link == LinkState.NEVER_PAIRED -> {
+                key = "WAITING"
+                value = "-"
+                sub = "device asleep"
+                valueColor = R.color.ui_ash
+                subColor = R.color.ui_ash
+            }
+
+            fix == null -> {
+                key = "NO FIX"
+                value = "-"
+                sub = "nothing sent"
+                valueColor = R.color.ui_ash
+                subColor = R.color.ui_warn
+            }
+
+            else -> {
+                key = "NEXT SEND"
+                // snap is non-null here: fix came from snap?.lastFix and the
+                // fix == null branch above already caught the other case.
+                val moved = snap?.movedSinceSentM?.toInt()?.toString() ?: "-"
+                val threshold = snap?.moveThresholdM?.toInt() ?: 0
+                value = "$moved/$threshold m"
+                val elapsedS = if (snap!!.lastSentAtMs > 0) {
+                    (System.currentTimeMillis() - snap.lastSentAtMs) / 1000
+                } else 0
+                sub = "${elapsedS} s - floor ${SendPolicy.MIN_INTERVAL_MS / 1000} s"
+                valueColor = R.color.ui_ink
+                subColor = R.color.ui_ink
+            }
+        }
+
+        nextSendKey.text = key
+        nextSendValue.text = value
+        nextSendValue.setTextColor(ContextCompat.getColor(this, valueColor))
+        nextSendSub.text = sub
+        nextSendSub.setTextColor(ContextCompat.getColor(this, subColor))
+    }
+
+    /**
+     * One dialog shape for every tap-for-detail surface on Home (device
+     * plate, instrument row, and whatever else needs one later): own card
+     * (bg_dialog_card, ui_paper, 2dp radius), own title, a mono scrollable
+     * body, and an optional list of full-width action rows -- no leftover
+     * system AlertDialog chrome. [options] is empty for a pure info sheet.
+     */
+    private fun showDetailDialog(
+        title: String,
+        bodyText: String,
+        options: List<Triple<String, Boolean, () -> Unit>> = emptyList(),
+    ) {
+        val dp = resources.displayMetrics.density
+        fun dp(v: Int) = (v * dp).toInt()
+        fun color(id: Int) = ContextCompat.getColor(this, id)
+        val mono = ResourcesCompat.getFont(this, R.font.ibm_plex_mono_regular)
+
+        val titleView = TextView(this).apply {
+            text = title
+            setTextColor(color(R.color.ui_ink))
+            textSize = 17f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(16), dp(16), dp(16), dp(12))
+        }
+        val bodyView = TextView(this).apply {
+            typeface = mono
+            textSize = 11f
+            setTextColor(color(R.color.ui_ash))
+            text = bodyText
+        }
+        val bodyScroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(160))
+            setPadding(dp(16), 0, dp(16), dp(12))
+            addView(bodyView)
+        }
+        fun hairline() = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
+            setBackgroundColor(color(R.color.ui_rule))
+        }
+
+        val dialog = AlertDialog.Builder(this).create()
+
+        /** One row, same shape as a list row elsewhere: 48dp min, ink text,
+            stop-colored for a destructive action, no caps, no ripple accent
+            beyond the platform's default selectable background. */
+        fun actionRow(label: String, destructive: Boolean, action: () -> Unit) = TextView(this).apply {
+            text = label
+            textSize = 15f
+            setTextColor(color(if (destructive) R.color.ui_stop else R.color.ui_ink))
+            minHeight = dp(48)
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(dp(16), 0, dp(16), 0)
+            isClickable = true
+            isFocusable = true
+            val outValue = android.util.TypedValue()
+            theme.resolveAttribute(android.R.attr.selectableItemBackground, outValue, true)
+            setBackgroundResource(outValue.resourceId)
+            setOnClickListener { action(); dialog.dismiss() }
+        }
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_dialog_card)
+            addView(titleView)
+            addView(bodyScroll)
+            if (options.isNotEmpty()) {
+                addView(hairline())
+                options.forEachIndexed { index, (label, destructive, action) ->
+                    addView(actionRow(label, destructive, action))
+                    if (index != options.lastIndex) addView(hairline())
+                }
+            }
+        }
+
+        dialog.setView(container)
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        dialog.show()
+    }
+
+    private fun onDevicePlatePressed() {
+        val addr = CompanionWake.pairedAddress(this)
+        val snap = service?.snapshot()
+        val blocker = devicePlateBlocker()
+        // Only jump straight to the system pairing picker when nothing else
+        // is standing in the way: the plate's halt state says "tap to fix"
+        // for a permission/Bluetooth/GPS blocker, and this used to ignore
+        // that and still open pairing, which can't fix any of the three.
+        // Caught by Opus review, 2026-11-07.
+        if (blocker == null && addr == null && snap?.deviceName == null) {
+            onWakePressed()
             return
         }
 
-        val healthy = snap.bleState == BleLink.State.SCANNING ||
-            snap.bleState == BleLink.State.CONNECTING ||
-            snap.bleState == BleLink.State.CONNECTED
-        val stateText = when (snap.bleState) {
-            BleLink.State.IDLE -> "idle"
-            BleLink.State.NO_PERMISSION -> "permission needed"
-            BleLink.State.BLUETOOTH_OFF -> "Bluetooth off"
-            BleLink.State.SCANNING -> "scanning"
-            BleLink.State.CONNECTING -> "connecting"
-            BleLink.State.CONNECTED -> "connected to ${snap.deviceName ?: BleLink.DEVICE_NAME}"
-            BleLink.State.DISCONNECTED -> "disconnected"
-            BleLink.State.FAILED -> "failed"
+        val options = mutableListOf<Triple<String, Boolean, () -> Unit>>()
+        if (blocker != null) {
+            options.add(Triple("Fix: $blocker", false) { onRetryPressed() })
         }
-        // A healthy state's detail belongs on the state line; only a broken
-        // state's detail belongs in the red block below it.
-        tvState.text = if (healthy && snap.bleDetail != null) {
-            "$stateText\n${snap.bleDetail}"
-        } else {
-            stateText
+        if (addr != null && !hasBackgroundLocation()) {
+            options.add(Triple("Allow location all the time", false) { onWakePressed() })
         }
-        renderProblems(if (healthy) null else snap.bleDetail)
+        if (blocker == null && snap?.bleState != BleLink.State.CONNECTED) {
+            options.add(Triple("Connect now", false) { onRetryPressed() })
+        }
+        // Starting a recording from here too, not only the app bar's
+        // ellipsis: the device plate is the natural place to ask for it,
+        // since a ride needs the link up anyway. Per the user's call,
+        // 2026-11-07, that removed the permanent "Start recording" button.
+        if (snap?.recording != true) {
+            options.add(Triple("Start recording", false) { onRecordPressed() })
+        }
+        if (addr != null) {
+            options.add(Triple("Forget device", true) { onForgetPressed() })
+        }
+        options.add(Triple("Stop service", true) { onStopPressed() })
 
-        val fix = snap.lastFix
-        tvFix.text = if (fix == null) {
-            "fix: none yet"
-        } else {
-            val ageMs = abs(System.currentTimeMillis() - fix.time)
-            buildString {
+        val lines = snap?.events?.takeLast(20) ?: emptyList()
+        showDetailDialog(
+            title = snap?.deviceName ?: BleLink.DEVICE_NAME,
+            bodyText = if (lines.isEmpty()) "no events yet" else lines.joinToString("\n"),
+            options = options,
+        )
+    }
+
+    /**
+     * The instrument row's own detail: the exact fix (lat/lon/accuracy/
+     * provider/age) and the send counters that used to sit permanently
+     * under the row as tvFix/tvCounters, duplicating what the row itself
+     * already shows in rounded form. Folded into a tap sheet instead, per
+     * the user's call, 2026-11-07 -- same move as the device plate's own
+     * log getting pulled off the screen and into its dialog.
+     */
+    private fun onInstrumentRowPressed() {
+        val snap = service?.snapshot()
+        val body = buildString {
+            val fix = snap?.lastFix
+            if (fix == null) {
+                append("fix: none yet")
+            } else {
+                val ageMs = abs(System.currentTimeMillis() - fix.time)
                 append("lat ").append(String.format(Locale.US, "%.7f", fix.latitude))
                 append("   lon ").append(String.format(Locale.US, "%.7f", fix.longitude))
                 append("\nacc ")
                 append(if (fix.hasAccuracy()) String.format(Locale.US, "%.1f m", fix.accuracy) else "-")
-                append("   speed ")
-                append(if (fix.hasSpeed()) String.format(Locale.US, "%.1f km/h", fix.speed * 3.6f) else "-")
-                // Normalised for display: Location.getBearing() and bearingTo()
-                // both hand back negative degrees, which reads like a bug.
-                val shown = ((snap.bearingDeg % 360f) + 360f) % 360f
-                append("\nheading sector ").append(PositionPacket.headingSector(snap.bearingDeg))
-                append(" (").append(String.format(Locale.US, "%.0f", shown)).append("°)")
                 append("\nprovider ").append(fix.provider ?: "?")
                 append("   age ").append(ageMs / 1000).append(" s")
                 append("\nlast sent ")
                 append(if (snap.lastSentAtMs == 0L) "never" else timeFmt.format(Date(snap.lastSentAtMs)))
             }
-        }
-
-        tvCounters.text = buildString {
-            append("packets: sent ").append(snap.sentOk)
-            append(" / failed ").append(snap.sentFailed)
-            append("   seq ").append(snap.seq)
-            append("\nsend when moved ")
-            if (snap.movedSinceSentM == null) {
-                append("-")
-            } else {
-                append(snap.movedSinceSentM.toInt())
+            if (snap != null) {
+                append("\n\npackets: sent ").append(snap.sentOk)
+                append(" / failed ").append(snap.sentFailed)
+                append("   seq ").append(snap.seq)
+                append("\nkeep-alive ").append(SendPolicy.KEEPALIVE_INTERVAL_MS / 60000).append(" min")
+                snap.lastSendReason?.let { append("\nlast send reason: ").append(it) }
+                snap.tileFetchStatus?.let { append("\ntiles: ").append(it) }
+                snap.pointSyncStatus?.let { append("\npoints: ").append(it) }
             }
-            append(" / ").append(snap.moveThresholdM.toInt()).append(" m")
-            append("   min ").append(SendPolicy.MIN_INTERVAL_MS / 1000).append("s")
-            append("   keep-alive ").append(SendPolicy.KEEPALIVE_INTERVAL_MS / 60000).append(" min")
-            snap.lastSendReason?.let { append("\nlast send reason: ").append(it) }
-            // Only once a fetch has happened: the rider starts one from the
-            // device's own menu, so an idle line here would be noise on every
-            // ride that never asks for tiles.
-            snap.tileFetchStatus?.let { append("\ntiles: ").append(it) }
-            // Same reasoning as tileFetchStatus above -- only once a point
-            // sync has happened. Was written by BridgeService and never read
-            // anywhere until now (code review, 2026-09-13).
-            snap.pointSyncStatus?.let { append("\npoints: ").append(it) }
         }
-
-        val f = snap.logFile
-        tvLogFile.text = when {
-            snap.recording && f != null ->
-                "recording: ${f.name}\n${snap.logLines} lines  ·  ${f.parent}"
-            snap.recording -> "recording: opening file..."
-            f != null -> "recording: off\nlast file: ${f.name}"
-            else -> "recording: off"
-        }
-
-        btnRecord.text = if (snap.recording) "Stop recording" else "Start recording"
-        renderTiles(snap.tileLog, snap.tileProgress)
-        tvEvents.text = snap.events.joinToString("\n")
+        showDetailDialog(title = "Position", bodyText = body)
     }
 
-    private fun renderProblems(bleDetail: String?) {
-        val problems = ArrayList<String>()
-        if (permissionsDenied) {
-            problems.add(
-                "Permission denied. Press Retry scan to open app settings and grant " +
-                    "Nearby devices + Location (Precise, while using the app)."
-            )
-        }
-        val adapter = service?.bluetoothAdapter()
-        if (adapter != null && !adapter.isEnabled) {
-            problems.add("Bluetooth is off. Press Retry scan to open Bluetooth settings.")
-        }
-        val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-        if (lm != null && !lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-            problems.add("Location (GPS) is off in phone settings.")
-        }
-        bleDetail?.let { problems.add(it) }
+    /**
+     * Transfers, per Outline "Dizajn systém": one row, lit while a fetch is
+     * moving, grey otherwise -- never hidden outright, since "IDLE / up to
+     * date" is itself one of the row's defined states, not an empty state
+     * to collapse away. No progress bars in the collapsed row (the detail
+     * dialog is where those would live, per Outline's "rozbalitelny
+     * riadok," not built here); the rate line already answers "is this
+     * moving."
+     */
+    private fun renderTransfers(snap: BridgeService.Snapshot?) {
+        val now = snap?.tileProgress
+        val lit = now != null
+        val color = ContextCompat.getColor(this, if (lit) R.color.ui_ink else R.color.ui_ash)
+        transferTilesTitle.setTextColor(color)
+        transferTilesIcon.imageTintList = ColorStateList.valueOf(color)
+        transferTilesValue.setTextColor(color)
 
-        if (problems.isEmpty()) {
-            tvProblem.visibility = View.GONE
+        if (now != null) {
+            transferTilesTitle.text = "Map squares z${now.z}"
+            val left = (now.totalSquares - now.completedSquares - now.skippedSquares).coerceAtLeast(0)
+            val rate = TileFormat.ratePerSec(now.completedBytes, now.elapsedMs, now.completedSquares)
+            transferTilesValue.text = if (rate != null) "$left left   ${TileFormat.rate(rate)}" else "$left left"
+            transfersCount.text = "1 running"
         } else {
-            tvProblem.visibility = View.VISIBLE
-            tvProblem.text = problems.joinToString("\n")
+            transferTilesTitle.text = "Map squares"
+            transferTilesValue.text = snap?.tileFetchStatus ?: "up to date"
+            transfersCount.text = ""
         }
+    }
+
+    /** The tile row's own detail: the exact in-flight square and the map-square
+        log that used to sit permanently under it as tvTilesHead/tvTileNow/
+        pbTileBytes/pbTileSquares/tvTiles. */
+    private fun onTransferTilesPressed() {
+        val snap = service?.snapshot()
+        val now = snap?.tileProgress
+        val body = buildString {
+            if (now != null) {
+                // Reads the way the device's own sync screen reads, on purpose:
+                // TileFormat is a port of it.
+                append("now: z${now.z} ${now.col}/${now.row}   ")
+                append(TileFormat.bytes(now.sentBytes)).append(" / ").append(TileFormat.bytes(now.totalBytes))
+                append("\n")
+                append(
+                    TileFormat.summary(
+                        now.completedSquares, now.skippedSquares, now.totalSquares,
+                        now.movedBytes, now.completedBytes, now.elapsedMs,
+                    )
+                )
+            } else {
+                append(snap?.tileFetchStatus ?: "up to date")
+            }
+            val lines = snap?.tileLog ?: emptyList()
+            if (lines.isNotEmpty()) {
+                append("\n\n").append(lines.joinToString("\n"))
+            }
+        }
+        showDetailDialog(title = "Map squares", bodyText = body)
+    }
+
+    /**
+     * Retry scan / Share log / Stop service: none of the three is one of
+     * the Outline composition's seven Home elements, so none gets a
+     * standalone button. Lives only in the app bar's ellipsis -- not
+     * duplicated into a bottom-nav "More" too, per the user's call,
+     * 2026-11-07.
+     */
+    private fun onOverflowPressed() {
+        val snap = service?.snapshot()
+        val options = mutableListOf<Triple<String, Boolean, () -> Unit>>()
+        // Per the user's call, 2026-11-07: "Start recording" is no longer a
+        // permanent Home button, so it needs a way to be started from here
+        // too (the other way is the device plate's own dialog).
+        if (snap?.recording != true) {
+            options.add(Triple("Start recording", false) { onRecordPressed() })
+        }
+        options.add(Triple("Retry scan", false) { onRetryPressed() })
+        options.add(Triple("Share log", false) { shareLog() })
+        options.add(Triple("Stop service", true) { onStopPressed() })
+        showDetailDialog(
+            title = "More",
+            bodyText = "ExplorInk GPS ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+            options = options,
+        )
+    }
+
+    private fun render() {
+        val snap = service?.snapshot()
+        // Computed once, not once per element: each call hits
+        // CompanionWake.pairedAddress() (a CompanionDeviceManager IPC) and
+        // LocationManager.isProviderEnabled() (another IPC), and calling it
+        // twice per frame left a window where the two elements could read
+        // different answers. Caught by Opus review, 2026-11-07.
+        val (link, haltName) = currentLinkState(snap)
+        renderDevicePlate(snap, link, haltName)
+        renderInstrumentRow(snap, link, haltName)
+        renderTransfers(snap)
+        renderRecordingRow(snap)
+
+        // Exact fix (lat/lon/accuracy/provider/age) and the send counters
+        // live in onInstrumentRowPressed()'s detail sheet now, not as a
+        // permanent block here -- see that function's doc comment. The raw
+        // BLE event log (tvEvents) and the version string (tvVersion) are
+        // gone the same way: both duplicated content already shown on
+        // request (device plate's dialog, app bar ellipsis's dialog).
+    }
+
+    /**
+     * Recording row, per Outline "Zvysok skladby": visible only while a
+     * ride is actually recording, per the user's call, 2026-11-07 --
+     * starting one is not a Home-screen action any more (see
+     * onDevicePlatePressed() / onOverflowPressed()). Tapping this row
+     * stops recording only, never the whole bridge service. The "since
+     * HH:MM - X MB" sub-line replaces tvLogFile's permanent text (file
+     * name, line count, "last file" when idle); the idle/"last file"
+     * detail has no Outline-composition home, so it is dropped rather than
+     * kept duplicated nowhere useful.
+     */
+    private fun renderRecordingRow(snap: BridgeService.Snapshot?) {
+        val recording = snap?.recording == true
+        recordingRow.visibility = if (recording) View.VISIBLE else View.GONE
+        if (!recording) return
+
+        val f = snap?.logFile
+        val since = f?.let { startTimeFromFileName(it.name) }
+        val sizeMb = f?.length()?.let { it / 1_000_000.0 }
+        recordingSub.text = when {
+            since != null && sizeMb != null -> "since %s - %.1f MB".format(Locale.US, since, sizeMb)
+            sizeMb != null -> "%.1f MB".format(Locale.US, sizeMb)
+            else -> "opening file..."
+        }
+    }
+
+    /** "explorink-gps-20261107-153446.jsonl" -> "15:34", for the ride log
+        row's "since HH:MM" line (SessionLogger.kt names the file this way;
+        there is no separately stored start time to read instead). */
+    private fun startTimeFromFileName(name: String): String? {
+        val m = Regex("""(\d{8})-(\d{6})""").find(name) ?: return null
+        val hhmmss = m.groupValues[2]
+        return "${hhmmss.substring(0, 2)}:${hhmmss.substring(2, 4)}"
+    }
+
+    /**
+     * What, if anything, keeps the device plate from even trying: a denied
+     * permission, Bluetooth off, or GPS off. These used to be their own
+     * tvProblem block (see renderDevicePlate()'s comment); now they take
+     * over the plate directly, since they are exactly the thing standing
+     * between the rider and a connection. Null means nothing is blocking.
+     */
+    private fun devicePlateBlocker(): String? {
+        // missingPermissions(), not the sticky permissionsDenied flag: that
+        // flag means "was denied once" (onRetryPressed() needs that to pick
+        // settings vs. the system dialog) and never clears once the user
+        // grants it from Settings, which left this returning "Permission
+        // needed" forever -- caught by Opus review, 2026-11-07.
+        if (missingPermissions().isNotEmpty()) return "Permission needed"
+        val adapter = service?.bluetoothAdapter()
+        if (adapter != null && !adapter.isEnabled) return "Bluetooth is off"
+        val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        if (lm != null && !lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) return "Location is off"
+        return null
     }
 
     // --- export ---------------------------------------------------------

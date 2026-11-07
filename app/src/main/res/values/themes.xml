@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Palette, type and metrics follow the Outline design system, step by
-         step: colors (this file + colors.xml), typography (this file +
-         res/font/), buttons (this file + bg_button_outline.xml). Layout
-         (bottom nav, device plate, instrument row) is a later, separate
-         pass, see https://wiki.comsultia.com/doc/dizajn-system-i82dz3W2tt
+    <!-- Palette, type and metrics follow the Outline design system: colors
+         (this file + colors.xml), typography (this file + res/font/),
+         buttons (this file + bg_button_outline.xml), and layout (bottom
+         nav, device plate, instrument row, Transfers, recording row), see
+         https://wiki.comsultia.com/doc/dizajn-system-i82dz3W2tt
 
          Light theme only for now: values-night/ (the dark token set from the
          same Outline doc) is removed, not merely unused, so the app ignores
@@ -13,9 +13,18 @@
          paper identity reads as a defect, not a feature. The dark tokens are
          still in git history (last commit touching
          app/src/main/res/values-night/) for whenever dark mode gets its own
-         real pass. -->
+         real pass.
 
-    <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+         Light.NoActionBar, not DayNight.NoActionBar: a DayNight parent still
+         resolves every attribute AppTheme does not explicitly override (in
+         particular colorControlHighlight, which every ?attr/selectableItem-
+         Background ripple in this layout relies on, plus the plain
+         AlertDialog.Builder in onForgetPressed()) from Material's own dark
+         base when the phone's system dark mode is on: removing
+         values-night/ alone did not actually force those to light. Caught
+         by Opus review, 2026-11-07. -->
+
+    <style name="AppTheme" parent="Theme.MaterialComponents.Light.NoActionBar">
         <item name="android:windowLightStatusBar">@bool/window_light_status_bar</item>
         <item name="android:windowLightNavigationBar">@bool/window_light_status_bar</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
@@ -40,7 +49,8 @@
              accent, so every Material color slot that would normally
              carry a brand hue points at ui_ink instead. warn/stop are never
              theme-wide; they are applied explicitly per signal line
-             (ui_stop on tvProblem, see the layout files). -->
+             (ui_stop on the device plate's halt state, the instrument row's
+             LINK LOST cell, etc.: see the layout and MainActivity.kt). -->
         <item name="colorPrimary">@color/ui_ink</item>
         <item name="colorPrimaryDark">@color/ui_ink</item>
         <item name="colorPrimaryVariant">@color/ui_ink</item>
