@@ -33,16 +33,22 @@ import java.util.UUID
  * with no security (see `BlePositionServer.h`), and the channel is 0.5-1 m of
  * air inside a handlebar bag.
  *
- * Four characteristics, all on the one connection (`docs/ble-map-transfer-protocol.md`):
+ * Five characteristics, all on the one connection (`docs/ble-map-transfer-protocol.md`):
  *
  *  - `...0002` position, write only. 21 bytes per fix.
  *  - `...0003` command console, write out and **indicate in**. The device sends
  *    `NEED_TILES <n>` here unprompted when the rider asks for missing tiles.
  *  - `...0004` transfer frames, write only.
  *  - `...0005` transfer status, indicate in: `RDY`/`OK`/`ERR`.
+ *  - `...0006` this app's own version, write only, once per connection.
  *
- * The last three are optional at discovery: an older firmware build has only
- * the position characteristic, and the bridge must still work against it.
+ * All but the position characteristic are optional at discovery: an older
+ * firmware build has only that one, and the bridge must still work against it.
+ *
+ * The device also publishes the Bluetooth SIG Device Information Service
+ * (`0x180A`) with its firmware revision and model number -- a separate service,
+ * read here as the other half of the version handshake
+ * (`docs/ble-version-handshake.md`).
  *
  * ## One GATT operation at a time
  *
@@ -126,10 +132,11 @@ class BleLink(
         /**
          * What this app writes to [CLIENT_INFO_CHAR_UUID].
          *
-         * Platform word plus version, because the device logs it into a crash
-         * report where "1.4.2" alone would not say whose 1.4.2. Kept under the
-         * firmware's 31-byte store (`kClientVersionBytes`), which truncates
-         * rather than refusing anything longer.
+         * Platform word plus version, because the device logs it where "1.4.2"
+         * alone would not say whose 1.4.2. Capped at the 31 characters the
+         * firmware stores (`kClientVersionBytes` is 32, terminator included),
+         * which truncates rather than refusing anything longer -- the cap is
+         * here so the truncation point is this app's choice, not a surprise.
          */
         fun clientInfoPayload(): ByteArray =
             "android ${BuildConfig.VERSION_NAME}".take(31).toByteArray(Charsets.US_ASCII)
@@ -946,12 +953,10 @@ class BleLink(
                 // just the address.
                 setState(State.CONNECTED, connectedAddress)
                 listener.onBleEvent("ready", "position characteristic found", null)
+                // Queues the subscriptions, and the version handshake behind
+                // them -- see subscribeTileChannels for why the handshake
+                // cannot be enqueued from here.
                 subscribeTileChannels(g)
-                // After the subscriptions and the MTU exchange they queue, on
-                // purpose. This is diagnostics: the tile channels are what the
-                // rider is waiting for, and the client-info write wants the
-                // bigger MTU anyway rather than the 20-byte floor.
-                exchangeVersions(g)
             }
         }
 
@@ -1091,6 +1096,9 @@ class BleLink(
         val status = statusChar
         if (command == null || status == null || transferChar == null) {
             listener.onBleEvent("tiles_unavailable", "firmware has no transfer channel", null)
+            // No version handshake either, deliberately: a build with no
+            // transfer channel predates both of these characteristics by years,
+            // so there would be nothing to read and nothing to write to.
             return
         }
 
@@ -1114,6 +1122,16 @@ class BleLink(
                 } else {
                     listener.onBleEvent("tiles_unavailable", "$failures subscribe(s) failed", null)
                 }
+                // Here and not in onServicesDiscovered, which is where it reads
+                // like it belongs. The MTU op is enqueued *from this callback*
+                // (above), so anything queued back in onServicesDiscovered goes
+                // out ahead of it -- which put the client-info write on a link
+                // still at MTU 23 and split it across an ATT long write, the
+                // one path this ordering exists to avoid. Enqueued here it
+                // lands behind the MTU op, and behind both subscriptions, which
+                // is also the right priority: the tile channels are what the
+                // rider is waiting for and the handshake is diagnostics.
+                exchangeVersions(g)
             }
         }
 
@@ -1227,7 +1245,13 @@ class BleLink(
                 // One event for the pair rather than one each, fired off the
                 // last read so both values are in it. A failed read leaves its
                 // half null, which is what null means here -- "did not say".
-                if (isLast) {
+                //
+                // Not fired when nothing was read at all. The queue fails every
+                // outstanding op on teardown, so without this a link dropped
+                // mid-handshake writes "unknown model, firmware unstated" into
+                // the ride log -- which reads as the device having answered
+                // badly rather than as a connection that went away.
+                if (isLast && (deviceFirmwareVersion != null || deviceModel != null)) {
                     listener.onBleEvent(
                         "device_version",
                         "${deviceModel ?: "unknown model"}, firmware ${deviceFirmwareVersion ?: "unstated"}",
@@ -1242,9 +1266,11 @@ class BleLink(
 
         val ch = clientInfoChar
         if (ch == null) {
-            // Not an error line: the same firmware that has no DIS has no
-            // client-info characteristic either, and that case is already
-            // reported above.
+            // Log only. Normally this is the same old firmware the branch above
+            // already reported, but the two are independent on the device side:
+            // a failed Device Information Service creation is not fatal there
+            // (`BlePositionServer::begin`), so either half can be missing on
+            // its own and neither absence is worth a ride-log line of its own.
             Log.i(TAG, "device has no client info characteristic; not sending app version")
             return
         }
@@ -1279,16 +1305,6 @@ class BleLink(
     }
 
     /**
-     * One Device Information Service string, as text.
-     *
-     * Bounded and stripped of anything unprintable before it can reach a log
-     * line or the ride log. The device at the other end is ours, but nothing
-     * about this link proves that -- there is no pairing and no bonding
-     * (`firmware/explorink/docs/ble-advertising.md`), so the bytes are whatever
-     * the peer sent. Same treatment the firmware gives the string this app
-     * writes to it, for the same reason.
-     */
-    /**
      * One completed characteristic read.
      *
      * The value is stored here rather than handed to the op's `done`, because
@@ -1311,6 +1327,16 @@ class BleLink(
         opQueue.onReadComplete(ch, ok, if (ok) null else "read status $status")
     }
 
+    /**
+     * One Device Information Service string, as text.
+     *
+     * Bounded and stripped of anything unprintable before it can reach a log
+     * line or the ride log. The device at the other end is ours, but nothing
+     * about this link proves that -- there is no pairing and no bonding
+     * (`firmware/explorink/docs/ble-advertising.md`), so the bytes are whatever
+     * the peer sent. Same treatment the firmware gives the string this app
+     * writes to it, for the same reason.
+     */
     private fun deviceInfoText(value: ByteArray): String? {
         val text = String(value, Charsets.UTF_8)
             .take(64)
