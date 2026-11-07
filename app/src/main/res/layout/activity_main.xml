@@ -5,6 +5,20 @@
     android:fitsSystemWindows="true"
     android:orientation="vertical">
 
+    <!-- The existing mark+wordmark lockup (res/drawable/ic_logo.xml), not
+         the mountain hero from the Outline mockup: that illustration is
+         not yet a real asset (Obrazovky doc, "Dve otvorene diery": only the
+         wordmark/lockup exist in docs/branding/, not the mountains). -->
+    <ImageView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="20dp"
+        android:layout_marginBottom="4dp"
+        android:src="@drawable/ic_logo"
+        android:tint="@color/ui_ink"
+        android:contentDescription="@string/app_name" />
+
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
