@@ -37,9 +37,8 @@
     </style>
 
     <!-- "secondary" per the Tlacidla table: transparent fill, 2dp ink
-         outline. All buttons use this for now; the spec's "one primary
-         button per screen" (solid ink fill) is a layout decision, made
-         when Home is rebuilt to the real composition, not before. -->
+         outline. Theme default, so a plain <Button> with no explicit style
+         gets this. -->
     <style name="AppButton" parent="android:Widget.Material.Button">
         <item name="android:background">@drawable/bg_button_outline</item>
         <item name="android:textColor">@color/ui_ink</item>
@@ -47,5 +46,25 @@
         <item name="android:textAllCaps">false</item>
         <item name="android:stateListAnimator">@null</item>
         <item name="android:minHeight">48dp</item>
+    </style>
+
+    <!-- "primary" per the Tlacidla table: solid ink fill, on-ink text. One
+         per screen; apply explicitly with style="@style/AppButton.Primary". -->
+    <style name="AppButton.Primary">
+        <item name="android:background">@drawable/bg_button_primary</item>
+        <item name="android:textColor">@color/ui_on_ink</item>
+    </style>
+
+    <!-- "quiet" per the Tlacidla table: no border, graphite text, weight 500. -->
+    <style name="AppButton.Quiet">
+        <item name="android:background">@drawable/bg_button_quiet</item>
+        <item name="android:textColor">@color/ui_graphite</item>
+    </style>
+
+    <!-- "destructive" per the Tlacidla table: stop outline and text. Never
+         adjacent to the primary button on the same screen. -->
+    <style name="AppButton.Destructive">
+        <item name="android:background">@drawable/bg_button_destructive</item>
+        <item name="android:textColor">@color/ui_stop</item>
     </style>
 </resources>

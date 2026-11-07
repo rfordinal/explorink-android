@@ -163,12 +163,22 @@
         android:paddingEnd="8dp"
         android:paddingBottom="8dp">
 
+        <!-- Role per the Outline "Aky druh, kedy" rule: btnRecord is primary
+             (the one action Home always exists for, once set up), btnForget
+             is destructive (discards the paired state), btnWake/btnPins/
+             btnMapAreas are secondary (a required setup step or navigation,
+             not quite this screen's own problem), and btnRetry/btnExport/
+             btnStop are quiet (low-weight, repeatable, no state discarded).
+             State-dependent primary swap, btnWake would arguably be primary
+             while unpaired, is deferred, not pretended to be solved here. -->
+
         <!-- One button, one next step: pair the device, then grant background
              location. It hides itself once auto-start is fully set up. -->
         <Button
             android:id="@+id/btnWake"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
             android:text="Pair the device"
             android:visibility="gone" />
 
@@ -177,8 +187,10 @@
              state is how a rider unpairs by accident. -->
         <Button
             android:id="@+id/btnForget"
+            style="@style/AppButton.Destructive"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
             android:text="Forget the device"
             android:visibility="gone" />
 
@@ -189,6 +201,7 @@
             android:id="@+id/btnPins"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
             android:text="Pins" />
 
         <!-- Map areas: the one path to the card that is not reactive. Both
@@ -199,12 +212,15 @@
             android:id="@+id/btnMapAreas"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
             android:text="Map areas" />
 
         <Button
             android:id="@+id/btnRecord"
+            style="@style/AppButton.Primary"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
             android:text="Start recording"
             android:textStyle="bold" />
 
@@ -215,6 +231,7 @@
 
             <Button
                 android:id="@+id/btnRetry"
+                style="@style/AppButton.Quiet"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -222,13 +239,17 @@
 
             <Button
                 android:id="@+id/btnExport"
+                style="@style/AppButton.Quiet"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
                 android:layout_weight="1"
                 android:text="Share log" />
 
             <Button
                 android:id="@+id/btnStop"
+                style="@style/AppButton.Quiet"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"

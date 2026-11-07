@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "destructive" per the Tlacidla table: 2dp stop outline. Pressed state
+     tints with ui_tint rather than a solid stop fill, so the stop-colored
+     text stays legible against its own background. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <stroke android:width="2dp" android:color="@color/ui_stop" />
+            <corners android:radius="2dp" />
+            <solid android:color="@color/ui_tint" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <stroke android:width="2dp" android:color="@color/ui_stop" />
+            <corners android:radius="2dp" />
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+</selector>
