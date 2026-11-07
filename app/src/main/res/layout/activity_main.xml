@@ -166,11 +166,13 @@
         <!-- Role per the Outline "Aky druh, kedy" rule: btnRecord is primary
              (the one action Home always exists for, once set up), btnForget
              is destructive (discards the paired state), btnWake/btnPins/
-             btnMapAreas are secondary (a required setup step or navigation,
-             not quite this screen's own problem), and btnRetry/btnExport/
-             btnStop are quiet (low-weight, repeatable, no state discarded).
-             State-dependent primary swap, btnWake would arguably be primary
-             while unpaired, is deferred, not pretended to be solved here. -->
+             btnMapAreas/btnStop are secondary (a required setup step, plain
+             navigation, or, for Stop, an action real enough to close the
+             whole bridge and finish() the activity, which is more than
+             "quiet" claims to be even though no stored state is lost), and
+             btnRetry/btnExport are quiet (low-weight, repeatable). State-
+             dependent primary swap, btnWake would arguably be primary while
+             unpaired, is deferred, not pretended to be solved here. -->
 
         <!-- One button, one next step: pair the device, then grant background
              location. It hides itself once auto-start is fully set up. -->
@@ -249,7 +251,6 @@
 
             <Button
                 android:id="@+id/btnStop"
-                style="@style/AppButton.Quiet"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"

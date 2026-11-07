@@ -73,10 +73,16 @@
                 android:textSize="12sp"
                 android:text="phone position: none yet" />
 
+            <!-- Two ways to set the same thing. Primary is below, not here:
+                 per this file's own header comment, the coordinate field is
+                 the screen's whole reason to exist (the device already knows
+                 where the rider is standing; typing coordinates is the one
+                 thing only the phone can do). -->
             <Button
                 android:id="@+id/btnSaveHere"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
                 android:text="Save at the phone position" />
 
             <!-- The one thing the device cannot do at all: a place the rider is not
@@ -94,8 +100,10 @@
 
             <Button
                 android:id="@+id/btnSaveAt"
+                style="@style/AppButton.Primary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
                 android:text="Save at those coordinates" />
 
             <TextView
@@ -135,6 +143,7 @@
 
             <Button
                 android:id="@+id/btnHistory"
+                style="@style/AppButton.Quiet"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
@@ -151,6 +160,7 @@
 
             <Button
                 android:id="@+id/btnHistoryOlder"
+                style="@style/AppButton.Quiet"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="Older"
@@ -168,6 +178,7 @@
 
         <Button
             android:id="@+id/btnPinsRefresh"
+            style="@style/AppButton.Quiet"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -175,6 +186,7 @@
 
         <Button
             android:id="@+id/btnPinsClose"
+            style="@style/AppButton.Quiet"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"

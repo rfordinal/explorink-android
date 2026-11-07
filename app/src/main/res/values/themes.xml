@@ -7,6 +7,7 @@
          pass, see https://wiki.comsultia.com/doc/dizajn-system-i82dz3W2tt -->
     <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="android:windowLightStatusBar">@bool/window_light_status_bar</item>
+        <item name="android:windowLightNavigationBar">@bool/window_light_status_bar</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
 
@@ -27,6 +28,13 @@
         <item name="colorAccent">@color/ui_ink</item>
 
         <item name="android:colorBackground">@color/ui_paper</item>
+        <!-- Explicit, not just colorBackground: whether a MaterialComponents
+             v2 (not v3) parent forwards colorBackground to the actual window
+             background depends on the exact AppCompat chain, so this is
+             stated directly rather than relied on indirectly. Measured
+             #121210 on a real dark-mode screenshot either way, but this
+             removes the ambiguity going forward. -->
+        <item name="android:windowBackground">@color/ui_paper</item>
         <item name="colorSurface">@color/ui_paper_sub</item>
         <item name="colorOnBackground">@color/ui_ink</item>
         <item name="colorOnSurface">@color/ui_ink</item>
@@ -41,7 +49,7 @@
          gets this. -->
     <style name="AppButton" parent="android:Widget.Material.Button">
         <item name="android:background">@drawable/bg_button_outline</item>
-        <item name="android:textColor">@color/ui_ink</item>
+        <item name="android:textColor">@color/button_text_secondary</item>
         <item name="android:fontFamily">@font/instrument_sans</item>
         <item name="android:textAllCaps">false</item>
         <item name="android:stateListAnimator">@null</item>
@@ -52,19 +60,19 @@
          per screen; apply explicitly with style="@style/AppButton.Primary". -->
     <style name="AppButton.Primary">
         <item name="android:background">@drawable/bg_button_primary</item>
-        <item name="android:textColor">@color/ui_on_ink</item>
+        <item name="android:textColor">@color/button_text_primary</item>
     </style>
 
-    <!-- "quiet" per the Tlacidla table: no border, graphite text, weight 500. -->
+    <!-- "quiet" per the Tlacidla table: no border, graphite text. -->
     <style name="AppButton.Quiet">
         <item name="android:background">@drawable/bg_button_quiet</item>
-        <item name="android:textColor">@color/ui_graphite</item>
+        <item name="android:textColor">@color/button_text_quiet</item>
     </style>
 
     <!-- "destructive" per the Tlacidla table: stop outline and text. Never
          adjacent to the primary button on the same screen. -->
     <style name="AppButton.Destructive">
         <item name="android:background">@drawable/bg_button_destructive</item>
-        <item name="android:textColor">@color/ui_stop</item>
+        <item name="android:textColor">@color/button_text_destructive</item>
     </style>
 </resources>

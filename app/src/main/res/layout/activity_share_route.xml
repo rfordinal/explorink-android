@@ -81,13 +81,16 @@
 
         <Button
             android:id="@+id/btnRouteSend"
+            style="@style/AppButton.Primary"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:layout_marginEnd="4dp"
             android:text="Send to device" />
 
         <Button
             android:id="@+id/btnRouteCancel"
+            style="@style/AppButton.Quiet"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"

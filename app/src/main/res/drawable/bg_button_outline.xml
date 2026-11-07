@@ -3,6 +3,17 @@
      transparent fill, 2dp ink outline, almost-square 2dp corner radius.
      No elevation, no shadow; AppButton kills those separately. -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- "disabled" per the Tlacidla table: rule outline, ash text (the text
+         color lives in button_text_secondary.xml, not here). Checked first:
+         a disabled view never reports state_pressed, but order should not
+         matter for correctness anyway. -->
+    <item android:state_enabled="false">
+        <shape android:shape="rectangle">
+            <stroke android:width="2dp" android:color="@color/ui_rule" />
+            <corners android:radius="2dp" />
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
             <stroke android:width="2dp" android:color="@color/ui_ink" />

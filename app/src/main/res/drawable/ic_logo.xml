@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The ExplorInk lockup (mark + wordmark, no tagline), same paths as
-     web/assets/brand/explorink-lockup.svg. Used in the title bar instead of
-     the plain "ExplorInk GPS" text. -->
+     web/assets/brand/explorink-lockup.svg. Used at the top of Home's layout
+     (activity_main.xml), tinted with ui_ink, no longer in the action bar,
+     which the app's theme now suppresses entirely (Theme.MaterialComponents
+     ...NoActionBar). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="121dp"
     android:height="32dp"
