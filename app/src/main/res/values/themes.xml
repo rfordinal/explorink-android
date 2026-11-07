@@ -1,8 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="@android:style/Theme.Material.Light">
+    <style name="AppTheme" parent="Theme.MaterialComponents.Light.NoActionBar">
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+
+        <item name="colorPrimary">@color/brand_accent</item>
+        <item name="colorPrimaryDark">@color/brand_accent_variant</item>
+        <item name="colorPrimaryVariant">@color/brand_accent_variant</item>
+        <item name="colorOnPrimary">#FFFFFFFF</item>
+
+        <item name="colorSecondary">@color/brand_green</item>
+        <item name="colorSecondaryVariant">@color/brand_green_variant</item>
+        <item name="colorOnSecondary">#FFFFFFFF</item>
+
+        <item name="colorAccent">@color/brand_green</item>
+
+        <item name="android:colorBackground">@color/brand_paper</item>
+        <item name="colorSurface">@color/brand_paper_2</item>
+        <item name="colorOnBackground">@color/brand_ink</item>
+        <item name="colorOnSurface">@color/brand_ink</item>
+        <item name="android:textColorPrimary">@color/brand_ink</item>
+
+        <!-- MainActivity and friends extend plain Activity, not
+             AppCompatActivity, so there is no LayoutInflater.Factory2 to swap
+             a layout's plain <Button> for a themed MaterialButton, and
+             colorPrimary above never reaches it. android:colorButtonNormal is
+             the platform attribute the stock Widget.Material.Button reads for
+             its own background, so it recolors the existing buttons directly. -->
+        <item name="android:buttonStyle">@style/AppButton</item>
+        <item name="android:colorButtonNormal">@color/brand_accent</item>
+        <item name="android:colorControlHighlight">@color/brand_accent_variant</item>
+    </style>
+
+    <style name="AppButton" parent="android:Widget.Material.Button">
+        <item name="android:textColor">#FFFFFFFF</item>
     </style>
 </resources>

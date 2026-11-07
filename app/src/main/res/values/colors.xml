@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#FF202124</color>
+
+    <!-- Brand palette, same values as web/css/style.css's accent/cta-green/
+         paper/ink custom properties. CSS and Android have no shared token
+         format, so this is a second copy kept in sync by hand. -->
+    <color name="brand_accent">#B4501C</color>
+    <color name="brand_accent_variant">#8C3C14</color>
+    <color name="brand_green">#2F8F52</color>
+    <color name="brand_green_variant">#267142</color>
+    <color name="brand_paper">#F4F2EC</color>
+    <color name="brand_paper_2">#EAE7DE</color>
+    <color name="brand_ink">#14130F</color>
 </resources>
