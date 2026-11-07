@@ -1,8 +1,78 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="@android:style/Theme.Material.Light">
-        <item name="android:windowLightStatusBar">true</item>
+    <!-- Palette, type and metrics follow the Outline design system, step by
+         step: colors (this file + colors.xml), typography (this file +
+         res/font/), buttons (this file + bg_button_outline.xml). Layout
+         (bottom nav, device plate, instrument row) is a later, separate
+         pass, see https://wiki.comsultia.com/doc/dizajn-system-i82dz3W2tt -->
+    <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowLightStatusBar">@bool/window_light_status_bar</item>
+        <item name="android:windowLightNavigationBar">@bool/window_light_status_bar</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+
+        <item name="android:fontFamily">@font/instrument_sans</item>
+
+        <!-- The color budget is eight neutrals plus warn/stop, no third
+             accent, so every Material color slot that would normally
+             carry a brand hue points at ui_ink instead. warn/stop are never
+             theme-wide; they are applied explicitly per signal line
+             (ui_stop on tvProblem, see the layout files). -->
+        <item name="colorPrimary">@color/ui_ink</item>
+        <item name="colorPrimaryDark">@color/ui_ink</item>
+        <item name="colorPrimaryVariant">@color/ui_ink</item>
+        <item name="colorOnPrimary">@color/ui_on_ink</item>
+        <item name="colorSecondary">@color/ui_ink</item>
+        <item name="colorSecondaryVariant">@color/ui_ink</item>
+        <item name="colorOnSecondary">@color/ui_on_ink</item>
+        <item name="colorAccent">@color/ui_ink</item>
+
+        <item name="android:colorBackground">@color/ui_paper</item>
+        <!-- Explicit, not just colorBackground: whether a MaterialComponents
+             v2 (not v3) parent forwards colorBackground to the actual window
+             background depends on the exact AppCompat chain, so this is
+             stated directly rather than relied on indirectly. Measured
+             #121210 on a real dark-mode screenshot either way, but this
+             removes the ambiguity going forward. -->
+        <item name="android:windowBackground">@color/ui_paper</item>
+        <item name="colorSurface">@color/ui_paper_sub</item>
+        <item name="colorOnBackground">@color/ui_ink</item>
+        <item name="colorOnSurface">@color/ui_ink</item>
+        <item name="android:textColorPrimary">@color/ui_ink</item>
+        <item name="android:textColorSecondary">@color/ui_graphite</item>
+
+        <item name="android:buttonStyle">@style/AppButton</item>
+    </style>
+
+    <!-- "secondary" per the Tlacidla table: transparent fill, 2dp ink
+         outline. Theme default, so a plain <Button> with no explicit style
+         gets this. -->
+    <style name="AppButton" parent="android:Widget.Material.Button">
+        <item name="android:background">@drawable/bg_button_outline</item>
+        <item name="android:textColor">@color/button_text_secondary</item>
+        <item name="android:fontFamily">@font/instrument_sans</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:minHeight">48dp</item>
+    </style>
+
+    <!-- "primary" per the Tlacidla table: solid ink fill, on-ink text. One
+         per screen; apply explicitly with style="@style/AppButton.Primary". -->
+    <style name="AppButton.Primary">
+        <item name="android:background">@drawable/bg_button_primary</item>
+        <item name="android:textColor">@color/button_text_primary</item>
+    </style>
+
+    <!-- "quiet" per the Tlacidla table: no border, graphite text. -->
+    <style name="AppButton.Quiet">
+        <item name="android:background">@drawable/bg_button_quiet</item>
+        <item name="android:textColor">@color/button_text_quiet</item>
+    </style>
+
+    <!-- "destructive" per the Tlacidla table: stop outline and text. Never
+         adjacent to the primary button on the same screen. -->
+    <style name="AppButton.Destructive">
+        <item name="android:background">@drawable/bg_button_destructive</item>
+        <item name="android:textColor">@color/button_text_destructive</item>
     </style>
 </resources>

@@ -8,8 +8,8 @@ plugins {
 // APK came from -- a bare "0.2.0" on a sideloaded debug build tells you nothing
 // about which of six builds is actually on the phone. Same reasoning as the
 // firmware's TRAILINK_VERSION.
-val appVersion = "0.3.8"
-val appVersionCode = 20
+val appVersion = "0.3.9"
+val appVersionCode = 21
 
 fun gitDescribe(): String {
     fun run(vararg cmd: String): String = try {
@@ -68,11 +68,20 @@ android {
 }
 
 dependencies {
-    // FileProvider for the share intent. Only dependency the app needs; the UI is
-    // plain framework views, no AppCompat, no Compose.
+    // FileProvider for the share intent.
     // Pinned to the last release that compiles against SDK 36 (Android 16),
     // which is what this app targets. 1.19.0 demands SDK 37 / AGP 9.
     implementation("androidx.core:core-ktx:1.17.0")
+
+    // The activities are plain android.app.Activity, not AppCompatActivity, so
+    // there is no LayoutInflater.Factory2 to swap <Button> for a themed
+    // MaterialButton -- this dependency does NOT auto-style the existing plain
+    // views (button coloring goes through android:buttonStyle in themes.xml
+    // instead). Its one real job is supplying the
+    // Theme.MaterialComponents.DayNight.NoActionBar parent, for day/night
+    // token switching, ahead of the bottom-navigation step where actual
+    // Material widgets will get used.
+    implementation("com.google.android.material:material:1.12.0")
 
     // The 19-byte encoder, the transfer wire format and the tile-fetch state
     // machine are pure JVM code, so they are checked on the laptop rather than

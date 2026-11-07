@@ -113,7 +113,6 @@ class MainActivity : Activity(), BridgeService.Observer {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        showLogoInTitleBar()
 
         tvState = findViewById(R.id.tvState)
         tvProblem = findViewById(R.id.tvProblem)
@@ -283,16 +282,6 @@ class MainActivity : Activity(), BridgeService.Observer {
      * Two steps, in this order because the second is pointless without the first:
      * pair the X4, then grant background location.
      */
-    /** Swaps the plain "ExplorInk GPS" title text for the brand mark. */
-    private fun showLogoInTitleBar() {
-        actionBar?.apply {
-            setDisplayShowTitleEnabled(false)
-            setDisplayShowHomeEnabled(true)
-            setDisplayUseLogoEnabled(true)
-            setLogo(R.drawable.ic_logo)
-        }
-    }
-
     private fun onWakePressed() {
         if (!CompanionWake.isPaired(this)) {
             // The link has to go first. A connected X4 stops advertising, and the

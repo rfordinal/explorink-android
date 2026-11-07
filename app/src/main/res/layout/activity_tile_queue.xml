@@ -44,7 +44,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingBottom="8dp"
-                android:textColor="#FFB00020"
+                android:textColor="@color/ui_stop"
                 android:textSize="14sp"
                 android:visibility="gone" />
 
@@ -52,7 +52,7 @@
                 android:id="@+id/tvQueueStatus"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="12dp"
                 android:textSize="12sp"
                 android:visibility="gone" />
@@ -95,6 +95,7 @@
                      so rather than leaving the rider in another app wondering. -->
                 <Button
                     android:id="@+id/btnPickOnMap"
+                    style="@style/AppButton.Quiet"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:contentDescription="Open a map to pick the place"
@@ -115,6 +116,7 @@
                 android:id="@+id/btnUseMyPosition"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
                 android:text="Use my position" />
 
             <TextView
@@ -170,15 +172,19 @@
                 android:id="@+id/tvPlan"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingTop="8dp"
                 android:textSize="13sp"
                 android:visibility="gone" />
 
+            <!-- The commit: btnPlan above only checks cost, nothing is
+                 queued until this. -->
             <Button
                 android:id="@+id/btnAddZone"
+                style="@style/AppButton.Primary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
                 android:text="Add to the queue"
                 android:visibility="gone" />
 
@@ -187,7 +193,7 @@
                 android:layout_height="1dp"
                 android:layout_marginTop="16dp"
                 android:layout_marginBottom="12dp"
-                android:background="#33888888" />
+                android:background="@color/ui_rule" />
 
             <TextView
                 android:id="@+id/tvSummary"
@@ -202,7 +208,7 @@
                 android:id="@+id/tvCurrent"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="8dp"
                 android:textSize="12sp"
                 android:visibility="gone" />
@@ -251,6 +257,7 @@
 
         <Button
             android:id="@+id/btnQueueContinue"
+            style="@style/AppButton.Quiet"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -258,12 +265,12 @@
             android:minWidth="0dp"
             android:paddingStart="2dp"
             android:paddingEnd="2dp"
-            android:textAllCaps="false"
             android:textSize="14sp"
             android:text="Continue" />
 
         <Button
             android:id="@+id/btnQueuePause"
+            style="@style/AppButton.Quiet"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -271,12 +278,12 @@
             android:minWidth="0dp"
             android:paddingStart="2dp"
             android:paddingEnd="2dp"
-            android:textAllCaps="false"
             android:textSize="14sp"
             android:text="Pause" />
 
         <Button
             android:id="@+id/btnQueueClear"
+            style="@style/AppButton.Quiet"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -284,12 +291,12 @@
             android:minWidth="0dp"
             android:paddingStart="2dp"
             android:paddingEnd="2dp"
-            android:textAllCaps="false"
             android:textSize="14sp"
             android:text="Clear sent" />
 
         <Button
             android:id="@+id/btnQueueClose"
+            style="@style/AppButton.Quiet"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -297,7 +304,6 @@
             android:minWidth="0dp"
             android:paddingStart="2dp"
             android:paddingEnd="2dp"
-            android:textAllCaps="false"
             android:textSize="14sp"
             android:text="Close" />
     </LinearLayout>
