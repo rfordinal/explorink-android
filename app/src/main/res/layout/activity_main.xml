@@ -30,7 +30,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingBottom="12dp"
-                android:textColor="#FFB00020"
+                android:textColor="@color/ui_stop"
                 android:textSize="14sp"
                 android:visibility="gone" />
 
@@ -38,7 +38,7 @@
                 android:id="@+id/tvWake"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="12dp"
                 android:textSize="13sp"
                 android:text="auto-start: -" />
@@ -47,7 +47,7 @@
                 android:id="@+id/tvFix"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="12dp"
                 android:textSize="13sp"
                 android:text="fix: none yet" />
@@ -56,7 +56,7 @@
                 android:id="@+id/tvCounters"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="12dp"
                 android:textSize="13sp"
                 android:text="sent 0 / failed 0" />
@@ -65,7 +65,7 @@
                 android:id="@+id/tvLogFile"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="12dp"
                 android:textSize="11sp"
                 android:text="log: -" />
@@ -91,7 +91,7 @@
                 android:id="@+id/tvTileNow"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingTop="2dp"
                 android:textSize="12sp"
                 android:visibility="gone" />
@@ -117,7 +117,7 @@
                 android:id="@+id/tvTiles"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="12dp"
                 android:textSize="12sp"
                 android:visibility="gone" />
@@ -126,17 +126,17 @@
                 android:id="@+id/tvEvents"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
-                android:textColor="#FF555555"
+                android:fontFamily="@font/ibm_plex_mono_regular"
+                android:textColor="@color/ui_ash"
                 android:textSize="11sp" />
 
             <TextView
                 android:id="@+id/tvVersion"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingTop="16dp"
-                android:textColor="#FF999999"
+                android:textColor="@color/ui_ash"
                 android:textSize="10sp" />
         </LinearLayout>
     </ScrollView>

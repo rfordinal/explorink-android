@@ -28,8 +28,8 @@
             android:id="@+id/tvRowDetail"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:textColor="#FF777777"
+            android:fontFamily="@font/ibm_plex_mono_regular"
+            android:textColor="@color/ui_ash"
             android:textSize="11sp" />
     </LinearLayout>
 
@@ -38,7 +38,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center_vertical"
-        android:fontFamily="monospace"
+        android:fontFamily="@font/ibm_plex_mono_regular"
         android:paddingStart="8dp"
         android:textSize="14sp" />
 </LinearLayout>

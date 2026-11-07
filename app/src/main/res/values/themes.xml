@@ -1,39 +1,51 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="Theme.MaterialComponents.Light.NoActionBar">
-        <item name="android:windowLightStatusBar">true</item>
+    <!-- Palette, type and metrics follow the Outline design system, step by
+         step: colors (this file + colors.xml), typography (this file +
+         res/font/), buttons (this file + bg_button_outline.xml). Layout
+         (bottom nav, device plate, instrument row) is a later, separate
+         pass, see https://wiki.comsultia.com/doc/dizajn-system-i82dz3W2tt -->
+    <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowLightStatusBar">@bool/window_light_status_bar</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
 
-        <item name="colorPrimary">@color/brand_accent</item>
-        <item name="colorPrimaryDark">@color/brand_accent_variant</item>
-        <item name="colorPrimaryVariant">@color/brand_accent_variant</item>
-        <item name="colorOnPrimary">#FFFFFFFF</item>
+        <item name="android:fontFamily">@font/instrument_sans</item>
 
-        <item name="colorSecondary">@color/brand_green</item>
-        <item name="colorSecondaryVariant">@color/brand_green_variant</item>
-        <item name="colorOnSecondary">#FFFFFFFF</item>
+        <!-- The color budget is eight neutrals plus warn/stop, no third
+             accent, so every Material color slot that would normally
+             carry a brand hue points at ui_ink instead. warn/stop are never
+             theme-wide; they are applied explicitly per signal line
+             (ui_stop on tvProblem, see the layout files). -->
+        <item name="colorPrimary">@color/ui_ink</item>
+        <item name="colorPrimaryDark">@color/ui_ink</item>
+        <item name="colorPrimaryVariant">@color/ui_ink</item>
+        <item name="colorOnPrimary">@color/ui_on_ink</item>
+        <item name="colorSecondary">@color/ui_ink</item>
+        <item name="colorSecondaryVariant">@color/ui_ink</item>
+        <item name="colorOnSecondary">@color/ui_on_ink</item>
+        <item name="colorAccent">@color/ui_ink</item>
 
-        <item name="colorAccent">@color/brand_green</item>
+        <item name="android:colorBackground">@color/ui_paper</item>
+        <item name="colorSurface">@color/ui_paper_sub</item>
+        <item name="colorOnBackground">@color/ui_ink</item>
+        <item name="colorOnSurface">@color/ui_ink</item>
+        <item name="android:textColorPrimary">@color/ui_ink</item>
+        <item name="android:textColorSecondary">@color/ui_graphite</item>
 
-        <item name="android:colorBackground">@color/brand_paper</item>
-        <item name="colorSurface">@color/brand_paper_2</item>
-        <item name="colorOnBackground">@color/brand_ink</item>
-        <item name="colorOnSurface">@color/brand_ink</item>
-        <item name="android:textColorPrimary">@color/brand_ink</item>
-
-        <!-- MainActivity and friends extend plain Activity, not
-             AppCompatActivity, so there is no LayoutInflater.Factory2 to swap
-             a layout's plain <Button> for a themed MaterialButton, and
-             colorPrimary above never reaches it. android:colorButtonNormal is
-             the platform attribute the stock Widget.Material.Button reads for
-             its own background, so it recolors the existing buttons directly. -->
         <item name="android:buttonStyle">@style/AppButton</item>
-        <item name="android:colorButtonNormal">@color/brand_accent</item>
-        <item name="android:colorControlHighlight">@color/brand_accent_variant</item>
     </style>
 
+    <!-- "secondary" per the Tlacidla table: transparent fill, 2dp ink
+         outline. All buttons use this for now; the spec's "one primary
+         button per screen" (solid ink fill) is a layout decision, made
+         when Home is rebuilt to the real composition, not before. -->
     <style name="AppButton" parent="android:Widget.Material.Button">
-        <item name="android:textColor">#FFFFFFFF</item>
+        <item name="android:background">@drawable/bg_button_outline</item>
+        <item name="android:textColor">@color/ui_ink</item>
+        <item name="android:fontFamily">@font/instrument_sans</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:minHeight">48dp</item>
     </style>
 </resources>

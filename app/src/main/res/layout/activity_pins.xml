@@ -38,7 +38,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingBottom="8dp"
-                android:textColor="#FFB00020"
+                android:textColor="@color/ui_stop"
                 android:textSize="14sp"
                 android:visibility="gone" />
 
@@ -46,7 +46,7 @@
                 android:id="@+id/tvPinsStatus"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="12dp"
                 android:textSize="12sp"
                 android:visibility="gone" />
@@ -68,7 +68,7 @@
                 android:id="@+id/tvPhoneFix"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingTop="4dp"
                 android:textSize="12sp"
                 android:text="phone position: none yet" />
@@ -102,7 +102,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingBottom="12dp"
-                android:textColor="#FF777777"
+                android:textColor="@color/ui_ash"
                 android:textSize="11sp"
                 android:text="Decimal degrees, a geo: link, a Google Maps link, or a share from a maps app. A short maps.app.goo.gl link is opened for you." />
 
@@ -119,7 +119,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingBottom="8dp"
-                android:textColor="#FF777777"
+                android:textColor="@color/ui_ash"
                 android:textSize="12sp"
                 android:visibility="gone" />
 
@@ -144,7 +144,7 @@
                 android:id="@+id/tvHistory"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingTop="4dp"
                 android:textSize="11sp"
                 android:visibility="gone" />

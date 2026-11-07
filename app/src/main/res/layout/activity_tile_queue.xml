@@ -44,7 +44,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingBottom="8dp"
-                android:textColor="#FFB00020"
+                android:textColor="@color/ui_stop"
                 android:textSize="14sp"
                 android:visibility="gone" />
 
@@ -52,7 +52,7 @@
                 android:id="@+id/tvQueueStatus"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="12dp"
                 android:textSize="12sp"
                 android:visibility="gone" />
@@ -170,7 +170,7 @@
                 android:id="@+id/tvPlan"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingTop="8dp"
                 android:textSize="13sp"
                 android:visibility="gone" />
@@ -202,7 +202,7 @@
                 android:id="@+id/tvCurrent"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
+                android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="8dp"
                 android:textSize="12sp"
                 android:visibility="gone" />
