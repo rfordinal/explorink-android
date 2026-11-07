@@ -4,12 +4,35 @@
          step: colors (this file + colors.xml), typography (this file +
          res/font/), buttons (this file + bg_button_outline.xml). Layout
          (bottom nav, device plate, instrument row) is a later, separate
-         pass, see https://wiki.comsultia.com/doc/dizajn-system-i82dz3W2tt -->
+         pass, see https://wiki.comsultia.com/doc/dizajn-system-i82dz3W2tt
+
+         Light theme only for now: values-night/ (the dark token set from the
+         same Outline doc) is removed, not merely unused, so the app ignores
+         the phone's system dark mode and always renders the paper palette.
+         Decided 2026-11-07: a dark mode that only half-matches the e-ink
+         paper identity reads as a defect, not a feature. The dark tokens are
+         still in git history (last commit touching
+         app/src/main/res/values-night/) for whenever dark mode gets its own
+         real pass. -->
+
     <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="android:windowLightStatusBar">@bool/window_light_status_bar</item>
         <item name="android:windowLightNavigationBar">@bool/window_light_status_bar</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+
+        <!-- minSdk is 31, so this is unconditional (no values-v29 split
+             needed). Without it, Android's own Force Dark saw a theme with
+             no values-night/ left, decided on its own that unstyled
+             TextViews needed inverting while the phone's system dark mode
+             was on, and inverted their text to near-white over the light
+             ui_paper background: invisible, not the android:textColorPrimary
+             override above (which was correctly compiled to ui_ink the
+             whole time; confirmed with aapt2 dump). Force Dark only touches
+             plain platform widgets, which is why the hero bitmap and the
+             custom button drawables were unaffected and only the plain
+             TextViews (tvState, tvFix, tvCounters, ...) went invisible. -->
+        <item name="android:forceDarkAllowed">false</item>
 
         <item name="android:fontFamily">@font/instrument_sans</item>
 

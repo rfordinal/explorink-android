@@ -112,6 +112,15 @@ class MainActivity : Activity(), BridgeService.Observer {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The theme's android:forceDarkAllowed=false alone did not stop
+        // Android's Force Dark from inverting plain TextViews to near-white
+        // on a phone with system dark mode on (confirmed on a real S24:
+        // identical build, system light mode, text renders correctly dark).
+        // forceDarkAllowed is a View property, not a Window one; it has to
+        // be set on the decor view before the layout inflates underneath it.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.decorView.isForceDarkAllowed = false
+        }
         setContentView(R.layout.activity_main)
 
         tvState = findViewById(R.id.tvState)

@@ -5,18 +5,31 @@
     android:fitsSystemWindows="true"
     android:orientation="vertical">
 
-    <!-- The existing mark+wordmark lockup (res/drawable/ic_logo.xml), not
-         the mountain hero from the Outline mockup: that illustration is
-         not yet a real asset (Obrazovky doc, "Dve otvorene diery": only the
-         wordmark/lockup exist in docs/branding/, not the mountains). -->
+    <!-- The approved brand lockup (mountains + mark + wordmark), per Outline
+         "Obrazovky" doc, "Brandova kresba": same drawing as
+         docs/branding/explorink-home-header.svg (the firmware's 480x224
+         device render) and web/assets/brand/mountains.svg, recolored to
+         ui_ink/ui_paper and rasterized to drawable-nodpi/ic_home_hero.png.
+         Not a VectorDrawable: the mountain line art is 547 separate potrace
+         contours, and Android re-tessellates a vector's paths every frame,
+         which ANR'd the activity on real hardware ("top resumed state loss
+         timeout") the first time this was tried. A raster has no such cost.
+         No android:tint: the bitmap already bakes in both ui_ink (lines) and
+         ui_paper (knockout plates), and a tint would paint over that.
+         Fixed 300x140dp, not wrap_content: the PNG lives in drawable-nodpi/
+         at 1440x672px so it stays sharp, but nodpi skips density scaling, so
+         without an explicit size the ImageView rendered it near 1:1 (huge)
+         and pushed everything below it off screen. fitCenter keeps it
+         proportional inside the fixed box. -->
+
     <ImageView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
+        android:layout_width="300dp"
+        android:layout_height="140dp"
         android:layout_gravity="center_horizontal"
-        android:layout_marginTop="20dp"
+        android:layout_marginTop="12dp"
         android:layout_marginBottom="4dp"
-        android:src="@drawable/ic_logo"
-        android:tint="@color/ui_ink"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_home_hero"
         android:contentDescription="@string/app_name" />
 
     <ScrollView
@@ -35,6 +48,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingBottom="4dp"
+                android:textColor="@color/ui_ink"
                 android:textSize="20sp"
                 android:textStyle="bold"
                 android:text="starting" />
@@ -54,6 +68,7 @@
                 android:layout_height="wrap_content"
                 android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="12dp"
+                android:textColor="@color/ui_ink"
                 android:textSize="13sp"
                 android:text="auto-start: -" />
 
@@ -63,6 +78,7 @@
                 android:layout_height="wrap_content"
                 android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="12dp"
+                android:textColor="@color/ui_ink"
                 android:textSize="13sp"
                 android:text="fix: none yet" />
 
@@ -72,6 +88,7 @@
                 android:layout_height="wrap_content"
                 android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="12dp"
+                android:textColor="@color/ui_ink"
                 android:textSize="13sp"
                 android:text="sent 0 / failed 0" />
 
@@ -81,6 +98,7 @@
                 android:layout_height="wrap_content"
                 android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="12dp"
+                android:textColor="@color/ui_ink"
                 android:textSize="11sp"
                 android:text="log: -" />
 
@@ -93,6 +111,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingBottom="2dp"
+                android:textColor="@color/ui_ink"
                 android:textSize="13sp"
                 android:textStyle="bold"
                 android:text="map squares"
@@ -107,6 +126,7 @@
                 android:layout_height="wrap_content"
                 android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingTop="2dp"
+                android:textColor="@color/ui_ink"
                 android:textSize="12sp"
                 android:visibility="gone" />
 
@@ -133,6 +153,7 @@
                 android:layout_height="wrap_content"
                 android:fontFamily="@font/ibm_plex_mono_regular"
                 android:paddingBottom="12dp"
+                android:textColor="@color/ui_ink"
                 android:textSize="12sp"
                 android:visibility="gone" />
 
