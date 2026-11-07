@@ -99,6 +99,41 @@ class BleLink(
         val TRANSFER_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0004")
         val TRANSFER_STATUS_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0005")
 
+        /**
+         * The client half of the version handshake: this app writes what it is,
+         * once per connection. Write-only, nothing is read back.
+         *
+         * Custom because the device half below is the Bluetooth SIG's standard
+         * service, which describes a peripheral and is read-only by definition --
+         * the SIG has no characteristic for "the central says what it is".
+         */
+        val CLIENT_INFO_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0006")
+
+        /**
+         * Device Information Service, Bluetooth SIG 0x180A, and the two
+         * characteristics of it the device answers.
+         *
+         * A separate service from [SERVICE_UUID], and deliberately not advertised
+         * by the device -- discovered after connecting like any other. A firmware
+         * older than this handshake has neither, so both reads are skipped
+         * silently: a missing one costs a version string in the ride log, not the
+         * connection.
+         */
+        val DEVICE_INFO_SERVICE_UUID: UUID = UUID.fromString("0000180a-0000-1000-8000-00805f9b34fb")
+        val FIRMWARE_REVISION_CHAR_UUID: UUID = UUID.fromString("00002a26-0000-1000-8000-00805f9b34fb")
+        val MODEL_NUMBER_CHAR_UUID: UUID = UUID.fromString("00002a24-0000-1000-8000-00805f9b34fb")
+
+        /**
+         * What this app writes to [CLIENT_INFO_CHAR_UUID].
+         *
+         * Platform word plus version, because the device logs it into a crash
+         * report where "1.4.2" alone would not say whose 1.4.2. Kept under the
+         * firmware's 31-byte store (`kClientVersionBytes`), which truncates
+         * rather than refusing anything longer.
+         */
+        fun clientInfoPayload(): ByteArray =
+            "android ${BuildConfig.VERSION_NAME}".take(31).toByteArray(Charsets.US_ASCII)
+
         private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         /**
@@ -218,6 +253,26 @@ class BleLink(
     private var cmdChar: BluetoothGattCharacteristic? = null
     private var transferChar: BluetoothGattCharacteristic? = null
     private var statusChar: BluetoothGattCharacteristic? = null
+    private var clientInfoChar: BluetoothGattCharacteristic? = null
+
+    /**
+     * The firmware revision the connected device reported (DIS 0x2A26), or null
+     * when it did not.
+     *
+     * **Null is "did not say", never "old firmware is fine to assume things
+     * about".** A build older than this handshake carries no Device Information
+     * Service at all, and so does anything else that happens to speak our
+     * service. Same rule as [DeviceInfo.Screen.UNSTATED]: an absence is not a
+     * value to act on.
+     *
+     * Cleared on teardown, because it belongs to one connection.
+     */
+    var deviceFirmwareVersion: String? = null
+        private set
+
+    /** The device's model number (DIS 0x2A24), e.g. `Xteink X4 Pro`. Null as above. */
+    var deviceModel: String? = null
+        private set
     private var wantRunning = false
 
     /**
@@ -432,6 +487,12 @@ class BleLink(
         cmdChar = null
         transferChar = null
         statusChar = null
+        clientInfoChar = null
+        // Both belong to the connection that stated them, same as the MTU below.
+        // The next device may be a different board running a different build,
+        // and a stale pair here would be read as its answer.
+        deviceFirmwareVersion = null
+        deviceModel = null
         tileChannelReady = false
         mtu = 23
         commandBuffer.setLength(0)
@@ -494,6 +555,12 @@ class BleLink(
         cmdChar = null
         transferChar = null
         statusChar = null
+        clientInfoChar = null
+        // Both belong to the connection that stated them, same as the MTU below.
+        // The next device may be a different board running a different build,
+        // and a stale pair here would be read as its answer.
+        deviceFirmwareVersion = null
+        deviceModel = null
         tileChannelReady = false
         mtu = 23
         commandBuffer.setLength(0)
@@ -800,6 +867,9 @@ class BleLink(
                         cmdChar = null
                         transferChar = null
                         statusChar = null
+                        clientInfoChar = null
+                        deviceFirmwareVersion = null
+                        deviceModel = null
                         tileChannelReady = false
                         mtu = 23
                         commandBuffer.setLength(0)
@@ -864,6 +934,7 @@ class BleLink(
                 cmdChar = svc.getCharacteristic(COMMAND_CHAR_UUID)
                 transferChar = svc.getCharacteristic(TRANSFER_CHAR_UUID)
                 statusChar = svc.getCharacteristic(TRANSFER_STATUS_CHAR_UUID)
+                clientInfoChar = svc.getCharacteristic(CLIENT_INFO_CHAR_UUID)
                 cancelConnectTimeout()
                 directReconnects = 0
                 lastAddress = connectedAddress ?: lastAddress
@@ -876,6 +947,11 @@ class BleLink(
                 setState(State.CONNECTED, connectedAddress)
                 listener.onBleEvent("ready", "position characteristic found", null)
                 subscribeTileChannels(g)
+                // After the subscriptions and the MTU exchange they queue, on
+                // purpose. This is diagnostics: the tile channels are what the
+                // rider is waiting for, and the client-info write wants the
+                // bigger MTU anyway rather than the 20-byte floor.
+                exchangeVersions(g)
             }
         }
 
@@ -886,6 +962,28 @@ class BleLink(
         ) {
             val copy = value.copyOf()
             main.post { handleIndication(characteristic.uuid, copy) }
+        }
+
+        override fun onCharacteristicRead(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray,
+            status: Int,
+        ) {
+            val copy = value.copyOf()
+            main.post { handleRead(characteristic, copy, status) }
+        }
+
+        // The pre-Android-13 form, same split as onCharacteristicChanged above
+        // and not optional for the same reason: minSdk is 31.
+        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+        override fun onCharacteristicRead(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int,
+        ) {
+            val copy = characteristic.value?.copyOf() ?: ByteArray(0)
+            main.post { handleRead(characteristic, copy, status) }
         }
 
         // The pre-Android-13 form, where the value lives on the characteristic
@@ -1096,6 +1194,132 @@ class BleLink(
     }
 
     /**
+     * The version handshake, both directions, once per connection.
+     *
+     * Reads the device's firmware revision and model number off the Bluetooth
+     * SIG Device Information Service, and writes what this app is to the
+     * device's client-info characteristic. Neither half is required for
+     * anything: a firmware older than the handshake has neither characteristic,
+     * and the bridge's whole job -- forwarding fixes and moving tiles -- works
+     * against it unchanged.
+     *
+     * Everything goes through the queue, so these ops simply wait behind the
+     * subscriptions and the MTU exchange rather than racing them.
+     */
+    @SuppressLint("MissingPermission")
+    private fun exchangeVersions(g: BluetoothGatt) {
+        val dis = g.getService(DEVICE_INFO_SERVICE_UUID)
+        val reads = listOfNotNull(
+            dis?.getCharacteristic(FIRMWARE_REVISION_CHAR_UUID)?.let { "firmware revision" to it },
+            dis?.getCharacteristic(MODEL_NUMBER_CHAR_UUID)?.let { "model number" to it },
+        )
+        if (reads.isEmpty()) {
+            listener.onBleEvent(
+                "device_info_absent",
+                "no device information service; firmware predates the version handshake",
+                null,
+            )
+        }
+        reads.forEachIndexed { i, (label, ch) ->
+            val isLast = i == reads.lastIndex
+            enqueueRead(label, ch) { ok, error ->
+                if (!ok) Log.w(TAG, "$label read failed: ${error ?: "unknown"}")
+                // One event for the pair rather than one each, fired off the
+                // last read so both values are in it. A failed read leaves its
+                // half null, which is what null means here -- "did not say".
+                if (isLast) {
+                    listener.onBleEvent(
+                        "device_version",
+                        "${deviceModel ?: "unknown model"}, firmware ${deviceFirmwareVersion ?: "unstated"}",
+                        mapOf(
+                            "firmware" to deviceFirmwareVersion,
+                            "model" to deviceModel,
+                        ),
+                    )
+                }
+            }
+        }
+
+        val ch = clientInfoChar
+        if (ch == null) {
+            // Not an error line: the same firmware that has no DIS has no
+            // client-info characteristic either, and that case is already
+            // reported above.
+            Log.i(TAG, "device has no client info characteristic; not sending app version")
+            return
+        }
+        enqueueWrite("client info", ch, clientInfoPayload()) { ok, error ->
+            if (!ok) Log.w(TAG, "client info write failed: ${error ?: "unknown"}")
+        }
+    }
+
+    /**
+     * Queues one characteristic read. Same contract as [enqueueWrite]: never
+     * queues on a link that is not connected.
+     *
+     * The value does not come back through [done] -- it arrives on
+     * `onCharacteristicRead` and is stored there. [done] says only whether the
+     * read happened.
+     */
+    private fun enqueueRead(
+        label: String,
+        ch: BluetoothGattCharacteristic,
+        done: (Boolean, String?) -> Unit,
+    ): Boolean {
+        if (state != State.CONNECTED || gatt == null) {
+            done(false, "not connected")
+            return false
+        }
+        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+            done(false, "BLUETOOTH_CONNECT not granted")
+            return false
+        }
+        opQueue.enqueue(GattOpQueue.Op.read(label = label, ch = ch, done = done))
+        return true
+    }
+
+    /**
+     * One Device Information Service string, as text.
+     *
+     * Bounded and stripped of anything unprintable before it can reach a log
+     * line or the ride log. The device at the other end is ours, but nothing
+     * about this link proves that -- there is no pairing and no bonding
+     * (`firmware/explorink/docs/ble-advertising.md`), so the bytes are whatever
+     * the peer sent. Same treatment the firmware gives the string this app
+     * writes to it, for the same reason.
+     */
+    /**
+     * One completed characteristic read.
+     *
+     * The value is stored here rather than handed to the op's `done`, because
+     * the queue's completion contract carries only success and a reason -- and
+     * a read's payload belongs to the characteristic it came from, which is
+     * exactly what this switch keys on. Same shape as [handleIndication].
+     *
+     * The queue is told last, on purpose: completing the op pumps the next one,
+     * and the value must be in place before anything reacts to the read being
+     * done.
+     */
+    private fun handleRead(ch: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
+        val ok = status == BluetoothGatt.GATT_SUCCESS
+        if (ok) {
+            when (ch.uuid) {
+                FIRMWARE_REVISION_CHAR_UUID -> deviceFirmwareVersion = deviceInfoText(value)
+                MODEL_NUMBER_CHAR_UUID -> deviceModel = deviceInfoText(value)
+            }
+        }
+        opQueue.onReadComplete(ch, ok, if (ok) null else "read status $status")
+    }
+
+    private fun deviceInfoText(value: ByteArray): String? {
+        val text = String(value, Charsets.UTF_8)
+            .take(64)
+            .filter { it.code in 0x20..0x7E }
+            .trim()
+        return text.ifEmpty { null }
+    }
+
+    /**
      * Splits an indication's bytes into whole lines and hands them to the
      * listener. Each channel keeps its own assembler: a line split across two
      * indications must not be spliced onto the other channel's half-line.
@@ -1249,6 +1473,10 @@ class BleLink(
             when (op.kind) {
                 GattOpQueue.Kind.DESCRIPTOR -> writeDescriptor(g, op)
                 GattOpQueue.Kind.WRITE -> writeCharacteristic(g, op)
+                GattOpQueue.Kind.READ -> {
+                    val ch = op.characteristic
+                    ch != null && g.readCharacteristic(ch)
+                }
                 // Also takes the stack's busy flag, which is why it is queued
                 // rather than called straight from a completion callback.
                 GattOpQueue.Kind.MTU -> g.requestMtu(DESIRED_MTU)

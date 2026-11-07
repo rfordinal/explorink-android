@@ -122,6 +122,13 @@ class GattOpQueue(
         /** `onDescriptorWrite` -- a CCCD write, i.e. a subscription. */
         DESCRIPTOR,
 
+        /**
+         * `onCharacteristicRead`. One ATT round trip taking the same busy flag
+         * as a write, so it is queued for the same reason everything else here
+         * is: issued alongside one, the stack refuses whichever came second.
+         */
+        READ,
+
         /** `onMtuChanged`. An MTU exchange takes the same busy flag as a write. */
         MTU,
     }
@@ -155,6 +162,16 @@ class GattOpQueue(
                 timeoutMs: Long = WRITE_TIMEOUT_MS,
                 done: (Boolean, String?) -> Unit,
             ): Op = Op(label, Kind.WRITE, bytes, ch, null, timeoutMs, done)
+
+            /**
+             * A characteristic read. No payload going out; the value arrives on
+             * the callback, so [done] says only whether it came.
+             */
+            fun read(
+                label: String,
+                ch: BluetoothGattCharacteristic,
+                done: (Boolean, String?) -> Unit,
+            ): Op = Op(label, Kind.READ, ByteArray(0), ch, null, WRITE_TIMEOUT_MS, done)
 
             /** A descriptor (CCCD) write. */
             fun descriptor(
@@ -228,6 +245,10 @@ class GattOpQueue(
         deliver(Kind.DESCRIPTOR, null, d, ok, error)
     }
 
+    fun onReadComplete(ch: BluetoothGattCharacteristic, ok: Boolean, error: String?) {
+        deliver(Kind.READ, ch, null, ok, error)
+    }
+
     /**
      * `onMtuChanged`. Can also arrive unsolicited -- the peer may start an MTU
      * exchange itself -- which is why it completes an op only when the op in
@@ -268,6 +289,7 @@ class GattOpQueue(
         val matches = when (kind) {
             Kind.WRITE -> op.kind == Kind.WRITE && op.characteristic === ch
             Kind.DESCRIPTOR -> op.kind == Kind.DESCRIPTOR && op.descriptor === d
+            Kind.READ -> op.kind == Kind.READ && op.characteristic === ch
             Kind.MTU -> op.kind == Kind.MTU
         }
         if (!matches) return
@@ -278,11 +300,11 @@ class GattOpQueue(
      * Whether a callback of [callback] kind can be the answer to an op of [op]
      * kind. Tombstones only -- a live op is matched on identity.
      *
-     * Writes and descriptor writes are one family: both are ATT writes, and the
-     * point after a timeout is to free the stack on the next write-ish callback,
-     * not to insist on which of the two it was. `onMtuChanged` is its own family
-     * because it can arrive unsolicited. Read off the Android API contract, not
-     * measured.
+     * Writes, descriptor writes and reads are one family: all three are ordinary
+     * ATT transactions, and the point after a timeout is to free the stack on the
+     * next such callback, not to insist on which of them it was. `onMtuChanged`
+     * is its own family because it can arrive unsolicited. Read off the Android
+     * API contract, not measured.
      */
     private fun sameFamily(op: Kind, callback: Kind): Boolean =
         if (op == Kind.MTU) callback == Kind.MTU else callback != Kind.MTU
