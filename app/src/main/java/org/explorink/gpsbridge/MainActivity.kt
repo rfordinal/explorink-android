@@ -506,10 +506,10 @@ class MainActivity : Activity(), BridgeService.Observer {
      * NEVER_PAIRED reads [snap.unpairedDeviceFound] to tell "nothing is out
      * there" from "something answered, go pick it" -- without it the plate
      * stayed mute even once a board was in range, and the only other option
-     * (connect to it on its own) cannot say *which* board, since every one
-     * of them advertises the same name and UUID (Outline "Obrazovky",
-     * screen 6). Tapping either reading still opens the same system picker.
-     * Reported 2026-11-08.
+     * (connect to it on its own) cannot say *which* board, since two boards
+     * of the same model advertise the same name and UUID (Outline
+     * "Obrazovky", screen 6). Tapping either reading still opens the same
+     * system picker. Reported 2026-11-08.
      *
      * Stays grey (ui_ash) and says "something", never "Device found" in
      * ink: Outline's own rule for this plate is "grey means not connected"

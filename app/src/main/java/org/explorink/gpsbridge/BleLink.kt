@@ -235,15 +235,19 @@ class BleLink(
     }
 
     /**
-     * The MAC address of the one X4 this phone is paired with, or null while
-     * unpaired. Set from the CompanionDeviceManager association
+     * The MAC address of the one board this phone is paired with, or null
+     * while unpaired. Set from the CompanionDeviceManager association
      * ([CompanionWake.pairedAddress]).
      *
      * When set, it is the only device this link will look at or talk to. That
-     * matters because every X4 running this firmware advertises the same name and
-     * the same service UUID, so the name/UUID filters below cannot tell one from
-     * another: unpaired, the app connects to whichever advertises first, which
-     * with two devices in range is a coin flip. Pairing removes the guess.
+     * matters because two boards of the *same* model advertise the same name
+     * and the same service UUID ([KNOWN_DEVICE_NAMES] above is one name per
+     * model, not one name total -- confirmed on hardware 2026-11-08, an X3
+     * and an X4 Pro side by side showed up as "XteinkX3Map" and
+     * "XteinkX4ProMap", distinct), so the name/UUID filters below cannot tell
+     * two of the same model apart: unpaired, the app connects to whichever of
+     * them advertises first, which with two of the same model in range is a
+     * coin flip. Pairing removes the guess.
      */
     var pinnedAddress: String? = null
         set(value) {
@@ -252,11 +256,12 @@ class BleLink(
 
     /**
      * When a matching device was last seen while unpaired. [handleScanResult]
-     * sets this instead of connecting -- every board advertises the same name
-     * and UUID (see [pinnedAddress]'s doc), so this can only say *something*
-     * answered, never *which* board. [discoveredRecently] is how Home's
-     * device plate turns that into "Device found - tap to connect" instead
-     * of silently connecting to a stranger's device or staying mute.
+     * sets this instead of connecting -- two boards of the same model share a
+     * name and UUID (see [pinnedAddress]'s doc), so this can only say
+     * *something* answered, never *which one* when more than one of that
+     * model is in range. [discoveredRecently] is how Home's device plate
+     * turns that into "something is advertising - tap to pick it" instead of
+     * silently connecting to a stranger's device or staying mute.
      */
     @Volatile
     private var lastDiscoveredAtMs: Long = 0L
