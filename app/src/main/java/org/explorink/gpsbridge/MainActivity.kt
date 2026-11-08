@@ -896,6 +896,7 @@ class MainActivity : Activity(), BridgeService.Observer {
         }
         options.add(Triple("Retry scan", false) { onRetryPressed() })
         options.add(Triple("Share log", false) { shareLog() })
+        options.add(Triple("About", false) { startActivity(Intent(this, AboutActivity::class.java)) })
         options.add(Triple("Stop service", true) { onStopPressed() })
         showDetailDialog(
             title = "More",

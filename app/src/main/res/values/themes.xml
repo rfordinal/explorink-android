@@ -108,4 +108,37 @@
         <item name="android:background">@drawable/bg_button_destructive</item>
         <item name="android:textColor">@color/button_text_destructive</item>
     </style>
+
+    <!-- About screen only, for now: the "label" degree per Outline "Dizajn
+         systém" (11.5/14sp Sans 600 caps, +0.10em), used there for section
+         headers (WHAT IT DOES, PRIVACY, ...) rather than for navigation. -->
+    <style name="AboutSectionLabel">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginBottom">6dp</item>
+        <item name="android:letterSpacing">0.10</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:textColor">@color/ui_ash</item>
+        <item name="android:textSize">11.5sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <!-- The "body" degree (15/23sp Sans 400), for explanatory text. -->
+    <style name="AboutBody">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:lineSpacingExtra">4sp</item>
+        <item name="android:textColor">@color/ui_graphite</item>
+        <item name="android:textSize">15sp</item>
+    </style>
+
+    <!-- The one hairline separator, per Outline "Metriky": 1dp, rule, the
+         only divider the system uses. -->
+    <style name="AboutDivider">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">1dp</item>
+        <item name="android:layout_marginTop">16dp</item>
+        <item name="android:layout_marginBottom">16dp</item>
+        <item name="android:background">@color/ui_rule</item>
+    </style>
 </resources>
