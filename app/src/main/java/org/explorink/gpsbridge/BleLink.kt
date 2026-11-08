@@ -1131,7 +1131,20 @@ class BleLink(
                 // lands behind the MTU op, and behind both subscriptions, which
                 // is also the right priority: the tile channels are what the
                 // rider is waiting for and the handshake is diagnostics.
-                exchangeVersions(g)
+                //
+                // **Caught here, and the catch is the point.** This runs inside
+                // the subscription's own completion callback, so an exception
+                // escaping it would take out the path that brings the link up
+                // -- and the version handshake is an add-on that no older
+                // firmware answers at all. It must never be able to cost a
+                // connection. Nothing in it is expected to throw; that is
+                // exactly why a surprise here would be the kind nobody is
+                // watching for.
+                try {
+                    exchangeVersions(g)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "version handshake skipped", t)
+                }
             }
         }
 
@@ -1318,13 +1331,22 @@ class BleLink(
      */
     private fun handleRead(ch: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
         val ok = status == BluetoothGatt.GATT_SUCCESS
-        if (ok) {
-            when (ch.uuid) {
-                FIRMWARE_REVISION_CHAR_UUID -> deviceFirmwareVersion = deviceInfoText(value)
-                MODEL_NUMBER_CHAR_UUID -> deviceModel = deviceInfoText(value)
+        // try/finally, not try/catch: the queue must be told the op finished
+        // whatever happens above it. Skip that and the slot stays occupied, the
+        // stack stays busy, and every later operation -- position fixes, tile
+        // frames -- queues behind a read that will never complete, until the
+        // dead-link timer tears the connection down. Storing a diagnostic
+        // string must not be able to do that.
+        try {
+            if (ok) {
+                when (ch.uuid) {
+                    FIRMWARE_REVISION_CHAR_UUID -> deviceFirmwareVersion = deviceInfoText(value)
+                    MODEL_NUMBER_CHAR_UUID -> deviceModel = deviceInfoText(value)
+                }
             }
+        } finally {
+            opQueue.onReadComplete(ch, ok, if (ok) null else "read status $status")
         }
-        opQueue.onReadComplete(ch, ok, if (ok) null else "read status $status")
     }
 
     /**
