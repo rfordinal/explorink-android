@@ -462,17 +462,23 @@ class MainActivity : Activity(), BridgeService.Observer {
      * real link failure at the BLE-state level -- only BleLink.State.FAILED
      * and a devicePlateBlocker() reason map to HALT; every other
      * non-connected, paired state reads as RESTING.
+     *
+     * Returns the paired address alongside the state (rather than letting
+     * renderDevicePlate() read CompanionWake.pairedAddress() a second time)
+     * for the same reason render() already computes this once per frame --
+     * see render()'s comment.
      */
-    private fun currentLinkState(snap: BridgeService.Snapshot?): Pair<LinkState, String?> {
+    private fun currentLinkState(snap: BridgeService.Snapshot?): Triple<LinkState, String?, String?> {
         val addr = CompanionWake.pairedAddress(this)
         val blocker = devicePlateBlocker()
-        return when {
+        val state = when {
             blocker != null -> LinkState.HALT to blocker
             snap?.bleState == BleLink.State.CONNECTED -> LinkState.CONNECTED to null
             snap?.bleState == BleLink.State.FAILED -> LinkState.HALT to "Not reaching the device"
             addr == null && snap?.deviceName == null -> LinkState.NEVER_PAIRED to null
             else -> LinkState.RESTING to null
         }
+        return Triple(state.first, state.second, addr)
     }
 
     /**
@@ -491,8 +497,13 @@ class MainActivity : Activity(), BridgeService.Observer {
      * twice per frame used to mean two LocationManager/CompanionDeviceManager
      * IPCs and a frame where the two elements could disagree if a toggle
      * landed between the calls. Caught by Opus review, 2026-11-07.
+     *
+     * RESTING shows a short suffix of [addr]: without it this state reads
+     * identical whether the rider is paired with the right X4 or with a
+     * stale one from a previous device, and the only way to tell was to
+     * tap through to the detail dialog. Reported 2026-11-08.
      */
-    private fun renderDevicePlate(snap: BridgeService.Snapshot?, link: LinkState, haltName: String?) {
+    private fun renderDevicePlate(snap: BridgeService.Snapshot?, link: LinkState, haltName: String?, addr: String?) {
         val icon: Int
         val background: Int
         val nameColor: Int
@@ -540,7 +551,11 @@ class MainActivity : Activity(), BridgeService.Observer {
                 nameColor = R.color.ui_ash
                 metaColor = R.color.ui_ash
                 name = "Device resting"
-                meta = "normal - wakes when you follow"
+                meta = if (addr != null) {
+                    "normal - wakes when you follow · paired ..${addr.takeLast(5)}"
+                } else {
+                    "normal - wakes when you follow"
+                }
             }
         }
 
@@ -772,10 +787,16 @@ class MainActivity : Activity(), BridgeService.Observer {
         }
         options.add(Triple("Stop service", true) { onStopPressed() })
 
-        val lines = snap?.events?.takeLast(20) ?: emptyList()
+        // Leads with the paired address, not just the generic device name:
+        // when the plate reads "Device resting" because the paired X4 is
+        // not the one in the room, this is the only place that ever named
+        // which address it actually is. Reported 2026-11-08.
+        val header = if (addr != null) "paired with $addr" else "not paired"
+        val events = snap?.events?.takeLast(20) ?: emptyList()
+        val bodyText = if (events.isEmpty()) header else (listOf(header, "") + events).joinToString("\n")
         showDetailDialog(
             title = snap?.deviceName ?: BleLink.DEVICE_NAME,
-            bodyText = if (lines.isEmpty()) "no events yet" else lines.joinToString("\n"),
+            bodyText = bodyText,
             options = options,
         )
     }
@@ -912,8 +933,8 @@ class MainActivity : Activity(), BridgeService.Observer {
         // LocationManager.isProviderEnabled() (another IPC), and calling it
         // twice per frame left a window where the two elements could read
         // different answers. Caught by Opus review, 2026-11-07.
-        val (link, haltName) = currentLinkState(snap)
-        renderDevicePlate(snap, link, haltName)
+        val (link, haltName, addr) = currentLinkState(snap)
+        renderDevicePlate(snap, link, haltName, addr)
         renderInstrumentRow(snap, link, haltName)
         renderTransfers(snap)
         renderRecordingRow(snap)
