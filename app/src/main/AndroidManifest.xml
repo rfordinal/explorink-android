@@ -122,6 +122,16 @@
             android:parentActivityName=".MainActivity"
             android:screenOrientation="portrait" />
 
+        <!-- App identity, the in-app privacy disclosure and the permission
+             list, reached from the app bar's "More" overflow. -->
+        <activity
+            android:name=".AboutActivity"
+            android:exported="false"
+            android:label="About ExplorInk"
+            android:launchMode="singleTop"
+            android:parentActivityName=".MainActivity"
+            android:screenOrientation="portrait" />
+
         <!-- The one share entry, and the reason it is one.
              There used to be two, one per destination, because a shared *place*
              is either a pin or an area to cache and only the rider knows which.
