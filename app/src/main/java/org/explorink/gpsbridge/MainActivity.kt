@@ -346,7 +346,7 @@ class MainActivity : Activity(), BridgeService.Observer {
             .setTitle("Forget $addr?")
             .setMessage(
                 "The map screen will stop starting this app on its own, and the app " +
-                    "will connect to whichever device answers first until you pair again."
+                    "will stop connecting to anything until you pair again."
             )
             .setPositiveButton("Forget") { _, _ ->
                 service?.forgetPairing()
@@ -510,6 +510,13 @@ class MainActivity : Activity(), BridgeService.Observer {
      * of them advertises the same name and UUID (Outline "Obrazovky",
      * screen 6). Tapping either reading still opens the same system picker.
      * Reported 2026-11-08.
+     *
+     * Stays grey (ui_ash) and says "something", never "Device found" in
+     * ink: Outline's own rule for this plate is "grey means not connected"
+     * and screen 6 explicitly bans a single confirmed-sounding "found your
+     * device" claim for the same reason it hands pairing to a list, not a
+     * banner -- this plate cannot say which board answered. Caught in
+     * review (Opus) before this shipped as the ink/singular version.
      */
     private fun renderDevicePlate(snap: BridgeService.Snapshot?, link: LinkState, haltName: String?, addr: String?) {
         val icon: Int
@@ -548,15 +555,11 @@ class MainActivity : Activity(), BridgeService.Observer {
             LinkState.NEVER_PAIRED -> {
                 icon = R.drawable.ic_bluetooth_off
                 background = R.drawable.bg_device_plate_idle
+                nameColor = R.color.ui_ash
+                metaColor = R.color.ui_ash
+                name = "Connect a device"
                 if (snap?.unpairedDeviceFound == true) {
-                    nameColor = R.color.ui_ink
-                    metaColor = R.color.ui_ink
-                    name = "Device found"
-                    meta = "tap to connect"
-                } else {
-                    nameColor = R.color.ui_ash
-                    metaColor = R.color.ui_ash
-                    name = "Connect a device"
+                    meta = "something is advertising · tap to pick it"
                 }
             }
 
@@ -567,7 +570,7 @@ class MainActivity : Activity(), BridgeService.Observer {
                 metaColor = R.color.ui_ash
                 name = "Device resting"
                 meta = if (addr != null) {
-                    "normal - wakes when you follow · paired ..${addr.takeLast(5)}"
+                    "wakes when you follow · paired ..${addr.takeLast(5)}"
                 } else {
                     "normal - wakes when you follow"
                 }

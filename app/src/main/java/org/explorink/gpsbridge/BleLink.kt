@@ -493,6 +493,9 @@ class BleLink(
     fun clearRememberedAddress() {
         lastAddress = null
         directReconnects = 0
+        // So "Device found" re-earns its own fresh "discovered" event after an
+        // unpair, instead of silently inheriting a sighting from before it.
+        lastDiscoveredAtMs = 0L
     }
 
     /** Manual retry from the UI: tear everything down and start clean. */
