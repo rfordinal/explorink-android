@@ -14,9 +14,11 @@ package org.explorink.gpsbridge
  * (`pins.icons.txt`, 2026-08-17). This mirrors that: [glyphTextFor] hands
  * back the same character for those keys, [iconFor] returns null.
  *
- * A key this build does not know gets no icon and no glyph text, same as
- * [PinKinds.isKnown] already treats it: the row still shows, just with its
- * raw key for a label, per [PinKinds.labelFor].
+ * A key this build does not know gets neither (both functions return null
+ * for it) -- the two call sites (PinsActivity.renderRows, PinKindAdapter)
+ * show a literal "?" in the glyph slot for that case rather than leaving it
+ * empty, the same way [PinKinds.isKnown] lets the row still show with its
+ * raw key for a label (per [PinKinds.labelFor]) instead of hiding the row.
  */
 object PinIcons {
 

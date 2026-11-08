@@ -764,7 +764,7 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
     private fun renderSummary(snap: BridgeService.OutboxSnapshot) {
         val t = snap.totals
         if (t.tiles == 0) {
-            tvSummary.text = "nothing queued"
+            tvSummary.text = "Nothing queued"
             tvCurrent.visibility = View.GONE
             return
         }
@@ -843,7 +843,16 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
             // does not change `detail` at all, and a cache keyed on `detail`
             // alone left a renamed row showing its old label until something
             // else about it changed.
-            val cacheKey = "${row.zone.label} $detail"
+            //
+            // The badge's own sending/not-sending edge is folded in on top,
+            // separately from `detail`: `detail`'s "left" figure is
+            // TileFormat.bytes()'s rounded text (nearest 100 kB above 1 MB,
+            // nearest 1 kB below it), so inFlightBytes crossing zero -- the
+            // one thing the badge actually tests -- can leave `detail`
+            // byte-identical and the repaint never happens. Caught in review:
+            // a drop mid-square left the badge reading "Sending" forever
+            // next to tvProblem's own "Not connected to the device".
+            val cacheKey = "${row.zone.label} $detail ${t.inFlightBytes > 0}"
             if (rowText[row.zone.zoneId] != cacheKey) {
                 rowText[row.zone.zoneId] = cacheKey
                 v.findViewById<TextView>(R.id.tvZoneLabel).text =
@@ -862,13 +871,24 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
      * ink = fully on device, 2dp ink + hatch = needs you -- generalised to a
      * second thing this app lists, the same way the device plate and the
      * wallet row already share one state-coding system.
+     *
+     * "On device" means `sent + noData >= tiles` with no `stuck`, the same
+     * definition [TileOutbox.Totals.fraction] already uses for "nothing left
+     * to do" -- not `sent >= tiles` alone. A zone with even one absent (sea)
+     * square never finishes sending by that narrower test, so a fully
+     * resolved zone read "Queued" forever. Caught in review.
+     *
+     * `stuck` is checked first and wins over "On device": a square that gave
+     * up is not resolved, it is a thing the rider can act on
+     * ("Retry gave up"), so it stays "Needs you" even once nothing else is
+     * owed.
      */
     private fun renderZoneBadge(badge: TextView, t: TileOutbox.Totals) {
         val (bg, text, textColor) = when {
-            t.sent >= t.tiles && t.tiles > 0 ->
-                Triple(R.drawable.bg_badge_done, "On device", R.color.ui_on_ink)
-            t.stuck > 0 && t.inFlightBytes <= 0 && t.sent < t.tiles ->
+            t.stuck > 0 && t.inFlightBytes <= 0 ->
                 Triple(R.drawable.bg_device_plate_halt, "Needs you", R.color.ui_ink)
+            t.stuck == 0 && t.tiles > 0 && t.sent + t.noData >= t.tiles ->
+                Triple(R.drawable.bg_badge_done, "On device", R.color.ui_on_ink)
             t.inFlightBytes > 0 ->
                 Triple(R.drawable.bg_badge_progress, "Sending", R.color.ui_ink)
             else ->
