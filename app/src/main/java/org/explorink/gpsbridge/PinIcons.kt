@@ -9,8 +9,9 @@ package org.explorink.gpsbridge
  * the log's contract, the glyph is not.
  *
  * `parking` and `c1`-`c5` have no Lucide source on the device either -- the
- * firmware bakes a "P" or a digit from a font instead, because a parking
- * glyph and `circle-parking` both read as mush at the panel's size
+ * firmware bakes a "P" or a digit from a font instead: Lucide has no
+ * numerals, and "a parking P beats any car glyph at 20 px" -- `handshake`
+ * and `circle-parking` were both judged mush at that size on the panel
  * (`pins.icons.txt`, 2026-08-17). This mirrors that: [glyphTextFor] hands
  * back the same character for those keys, [iconFor] returns null.
  *

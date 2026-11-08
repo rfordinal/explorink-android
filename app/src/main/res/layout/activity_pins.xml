@@ -95,13 +95,14 @@
                 android:text="SAVE A PIN" />
 
             <!-- The ink-outline box is drawn here, not on the Spinner itself:
-                 Widget.Spinner's own default background bakes a dropdown
-                 arrow into its 9-patch, so replacing it (as every other
-                 control on this screen replaces its own background) throws
-                 that arrow away with it. ic_chevron_down restores the
-                 affordance as a non-interactive overlay; touches pass
-                 through to the Spinner underneath because the ImageView has
-                 no click handling of its own to consume them. -->
+                 the arrow a Spinner normally shows comes from its own default
+                 background, so replacing that background (as every other
+                 control on this screen replaces its own) takes the arrow with
+                 it. Observed here; the exact drawable it lives in was not
+                 chased down. ic_chevron_down restores the affordance as a
+                 non-interactive overlay; touches pass through to the Spinner
+                 underneath because the ImageView has no click handling of its
+                 own to consume them. -->
             <FrameLayout
                 android:layout_width="match_parent"
                 android:layout_height="48dp"

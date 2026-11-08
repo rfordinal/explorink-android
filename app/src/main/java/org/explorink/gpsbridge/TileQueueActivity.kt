@@ -872,16 +872,17 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
      * second thing this app lists, the same way the device plate and the
      * wallet row already share one state-coding system.
      *
-     * "On device" means `sent + noData >= tiles` with no `stuck`, the same
-     * definition [TileOutbox.Totals.fraction] already uses for "nothing left
-     * to do" -- not `sent >= tiles` alone. A zone with even one absent (sea)
-     * square never finishes sending by that narrower test, so a fully
-     * resolved zone read "Queued" forever. Caught in review.
+     * "On device" means `sent + noData >= tiles` with no `stuck`.
+     * [TileOutbox.Totals.fraction] counts the same absent squares as done for
+     * the same reason ("Absent and given-up squares count as done: they are
+     * never coming"), and the old `sent >= tiles` test did not -- so a zone
+     * with even one absent (sea) square read "Queued" forever. This badge
+     * parts with `fraction` on one point, deliberately: `fraction` also counts
+     * `stuck` as done, and the badge does not, because a gave-up square is a
+     * thing the rider can still act on. Caught in review.
      *
-     * `stuck` is checked first and wins over "On device": a square that gave
-     * up is not resolved, it is a thing the rider can act on
-     * ("Retry gave up"), so it stays "Needs you" even once nothing else is
-     * owed.
+     * `stuck` is therefore checked first and wins over "On device": it stays
+     * "Needs you" ("Retry gave up") even once nothing else is owed.
      */
     private fun renderZoneBadge(badge: TextView, t: TileOutbox.Totals) {
         val (bg, text, textColor) = when {
