@@ -94,13 +94,34 @@
                 style="@style/SectionLabel"
                 android:text="SAVE A PIN" />
 
-            <Spinner
-                android:id="@+id/spKind"
+            <!-- The ink-outline box is drawn here, not on the Spinner itself:
+                 Widget.Spinner's own default background bakes a dropdown
+                 arrow into its 9-patch, so replacing it (as every other
+                 control on this screen replaces its own background) throws
+                 that arrow away with it. ic_chevron_down restores the
+                 affordance as a non-interactive overlay; touches pass
+                 through to the Spinner underneath because the ImageView has
+                 no click handling of its own to consume them. -->
+            <FrameLayout
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
-                android:background="@drawable/bg_button_outline"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp" />
+                android:background="@drawable/bg_button_outline">
+
+                <Spinner
+                    android:id="@+id/spKind"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@null"
+                    android:paddingEnd="36dp" />
+
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_gravity="center_vertical|end"
+                    android:layout_marginEnd="12dp"
+                    android:src="@drawable/ic_chevron_down"
+                    android:contentDescription="@null" />
+            </FrameLayout>
 
             <TextView
                 android:id="@+id/tvPhoneFix"

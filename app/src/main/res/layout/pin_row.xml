@@ -5,7 +5,16 @@
      device confirms both on its own screen), so they live in the dialog the
      row opens rather than as two more taps' worth of buttons per row on a
      phone. No state badge here, unlike a zone row: a pin the device reports
-     is simply on the device, there is no partial-sync state to show. -->
+     is simply on the device, there is no partial-sync state to show.
+
+     The leading glyph is the pin's own kind icon (PinIcons.kt), the same
+     mark the firmware draws on the map balloon for that kind, not a
+     generic map-pin. Set in PinsActivity.renderRows(). ivRowIcon and
+     tvRowGlyph share the one 24dp slot and only one of the two is ever
+     visible per row: a kind with a Lucide source (house, flag-triangle-
+     right, circle-dot, tent, heart) shows the ImageView, a kind the
+     firmware bakes from a font instead (the "P" for parking, the digits
+     for #1-#5) shows the TextView. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -15,12 +24,27 @@
     android:paddingTop="12dp"
     android:paddingBottom="12dp">
 
-    <ImageView
+    <FrameLayout
         android:layout_width="24dp"
-        android:layout_height="24dp"
-        android:src="@drawable/ic_map_pin"
-        android:tint="@color/ui_ash"
-        android:contentDescription="@null" />
+        android:layout_height="24dp">
+
+        <ImageView
+            android:id="@+id/ivRowIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:tint="@color/ui_ash"
+            android:contentDescription="@null" />
+
+        <TextView
+            android:id="@+id/tvRowGlyph"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fontFamily="@font/ibm_plex_mono_regular"
+            android:gravity="center"
+            android:textColor="@color/ui_ash"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </FrameLayout>
 
     <LinearLayout
         android:layout_width="0dp"

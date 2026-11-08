@@ -17,10 +17,10 @@ import android.text.TextWatcher
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
-import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.TextView
@@ -481,7 +481,7 @@ class PinsActivity : Activity(), BridgeService.Observer {
         // resetting the adapter under an open spinner loses the rider's choice.
         val at = spKind.selectedItemPosition.coerceAtLeast(0)
         spinnerLabels = labels
-        spKind.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
+        spKind.adapter = PinKindAdapter(this, PinKinds.ALL, labels)
         if (at < labels.size) spKind.setSelection(at)
     }
 
@@ -506,6 +506,20 @@ class PinsActivity : Activity(), BridgeService.Observer {
         val inflater = LayoutInflater.from(this)
         for (pin in pins) {
             val row = inflater.inflate(R.layout.pin_row, llPins, false)
+            val iconRes = PinIcons.iconFor(pin.key)
+            if (iconRes != null) {
+                row.findViewById<ImageView>(R.id.ivRowIcon).apply {
+                    setImageResource(iconRes)
+                    visibility = View.VISIBLE
+                }
+                row.findViewById<TextView>(R.id.tvRowGlyph).visibility = View.GONE
+            } else {
+                row.findViewById<ImageView>(R.id.ivRowIcon).visibility = View.GONE
+                row.findViewById<TextView>(R.id.tvRowGlyph).apply {
+                    text = PinIcons.glyphTextFor(pin.key) ?: "?"
+                    visibility = View.VISIBLE
+                }
+            }
             row.findViewById<TextView>(R.id.tvRowLabel).text = pin.label
             row.findViewById<TextView>(R.id.tvRowDetail).text = buildString {
                 append(PinList.formatE7(pin.latE7)).append(", ").append(PinList.formatE7(pin.lonE7))
