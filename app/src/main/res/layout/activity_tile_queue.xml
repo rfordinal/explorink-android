@@ -8,32 +8,74 @@
      The plan step above the queue is not decoration. A city is tens of megabytes
      and twenty to forty minutes over Bluetooth, and the index's sizeBytes is
      exact rather than an average, so the exact cost can be stated before the
-     rider commits to any of it. -->
+     rider commits to any of it.
+
+     App bar, section labels and the hairline divider follow the sub-screen
+     shape Outline "Dizajn systém" specifies and About already uses
+     (arrow-left, sans title, no subtitle; SectionLabel caption style; one
+     1dp ui_rule hairline). This was the pre-redesign screen About's own
+     header comment named explicitly when it adopted that shape first. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fitsSystemWindows="true"
     android:orientation="vertical">
 
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageButton
+            android:id="@+id/btnQueueBack"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="4dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Back"
+            android:padding="12dp"
+            android:src="@drawable/ic_arrow_left" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:text="Map areas"
+            android:textColor="@color/ui_ink"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:padding="16dp">
+        android:paddingStart="16dp"
+        android:paddingTop="4dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="16dp">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
+            <!-- What the queue is doing right now, per Outline "Dizajn
+                 systém" state coding ("Rozsvietené alebo šedé nesie, či sa to
+                 deje práve teraz"): ink and a verb while a phase is actively
+                 running, graphite and a count while something just waits,
+                 gone when there is truly nothing to say. The app bar title
+                 already says "Map areas", so this line never repeats it,
+                 set in TileQueueActivity.render(). -->
             <TextView
-                android:id="@+id/tvQueueState"
+                android:id="@+id/tvQueuePhase"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:paddingBottom="4dp"
-                android:text="map areas"
-                android:textSize="18sp"
-                android:textStyle="bold" />
+                android:paddingBottom="8dp"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
 
             <!-- Red block, same as the pins screen's: a state the rider has to
                  fix before anything here moves. The most common one by far is
@@ -58,12 +100,8 @@
                 android:visibility="gone" />
 
             <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingBottom="2dp"
-                android:text="send an area"
-                android:textSize="13sp"
-                android:textStyle="bold" />
+                style="@style/SectionLabel"
+                android:text="SEND AN AREA" />
 
             <!-- A share from a maps app lands here, and so does a pasted link or
                  a typed pair. PinCoordinates reads all of them and refuses a
@@ -92,25 +130,29 @@
                      handlers), and Google Maps 26.35 exposes no intent that
                      returns a coordinate. So the way back is the share sheet,
                      which this activity already accepts, and the hint below says
-                     so rather than leaving the rider in another app wondering. -->
+                     so rather than leaving the rider in another app wondering.
+                     Text, not an emoji glyph: Outline "Dizajn systém" reserves
+                     icons for the Lucide set, and no map-pick glyph exists there
+                     yet. -->
                 <Button
                     android:id="@+id/btnPickOnMap"
                     style="@style/AppButton.Quiet"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:contentDescription="Open a map to pick the place"
+                    android:layout_marginStart="8dp"
                     android:minWidth="0dp"
-                    android:text="🗺"
-                    android:textSize="20sp" />
+                    android:text="Pick on map" />
             </LinearLayout>
 
             <TextView
                 android:id="@+id/tvPickHint"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
                 android:paddingBottom="4dp"
-                android:text="Tap the map icon, hold the spot you want, then Share it back to ExplorInk tiles."
-                android:textSize="12sp" />
+                android:textColor="@color/ui_ash"
+                android:textSize="12sp"
+                android:text="Tap Pick on map, hold the spot you want, then Share it back to ExplorInk tiles." />
 
             <Button
                 android:id="@+id/btnUseMyPosition"
@@ -120,16 +162,15 @@
                 android:text="Use my position" />
 
             <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingTop="8dp"
-                android:paddingBottom="2dp"
-                android:text="box size"
-                android:textSize="13sp" />
+                style="@style/SectionLabel"
+                android:layout_marginTop="16dp"
+                android:text="BOX SIZE" />
 
             <!-- 20 km is the default because the returns fall off above it:
                  measured against the live CDN, another 3 MB past 20 km buys
-                 outskirts (docs/send-tiles-plan.md). -->
+                 outskirts (docs/send-tiles-plan.md). Default RadioButton look
+                 already follows ui_ink via the theme's colorAccent override
+                 (themes.xml, AppTheme), so it is not restyled further here. -->
             <RadioGroup
                 android:id="@+id/rgSize"
                 android:layout_width="match_parent"
@@ -164,6 +205,7 @@
                 android:id="@+id/btnPlan"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
                 android:text="Check area availability" />
 
             <!-- The plan, in exact numbers rather than an estimate. Nothing is
@@ -178,7 +220,7 @@
                 android:visibility="gone" />
 
             <!-- The commit: btnPlan above only checks cost, nothing is
-                 queued until this. -->
+                 queued until this. The one primary button on this screen. -->
             <Button
                 android:id="@+id/btnAddZone"
                 style="@style/AppButton.Primary"
@@ -189,19 +231,21 @@
                 android:visibility="gone" />
 
             <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:layout_marginTop="16dp"
-                android:layout_marginBottom="12dp"
-                android:background="@color/ui_rule" />
+                style="@style/HairlineDivider"
+                android:layout_marginTop="20dp" />
+
+            <TextView
+                style="@style/SectionLabel"
+                android:text="QUEUE" />
 
             <TextView
                 android:id="@+id/tvSummary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingBottom="4dp"
-                android:text="nothing queued"
-                android:textSize="14sp"
+                android:text="Nothing queued"
+                android:textColor="@color/ui_ink"
+                android:textSize="15sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -213,19 +257,24 @@
                 android:textSize="12sp"
                 android:visibility="gone" />
 
+            <!-- One zone per row, per Outline "Dizajn systém" "Riadok zoznamu",
+                 separated by the system's one hairline. -->
             <LinearLayout
                 android:id="@+id/llZones"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical" />
+                android:divider="@drawable/divider_hairline"
+                android:orientation="vertical"
+                android:showDividers="middle" />
 
             <TextView
                 android:id="@+id/tvQueueEmpty"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingTop="4dp"
-                android:text="No areas queued."
-                android:textSize="13sp" />
+                android:textColor="@color/ui_ash"
+                android:textSize="13sp"
+                android:text="No areas queued." />
         </LinearLayout>
     </ScrollView>
 
@@ -234,7 +283,11 @@
          "CONTINU / E" on a 720 px phone. Sentence case, no default side padding
          and one line each, so a label can never break mid-word again. This
          screen is read, not shouted at, and the rest of it is sentence case
-         already. Seen on a Galaxy S24 Ultra, 2026-09-03. -->
+         already. Seen on a Galaxy S24 Ultra, 2026-09-03.
+
+         Three now, not four: Close moved to the app bar's back arrow, the
+         same move About made first, so this row is only the actions that
+         belong to the running queue. -->
     <!-- Why Continue is greyed out, next to Continue. The state that disables it
          is stated at the top of the screen ("map areas: sending"), which is the
          wrong end of a scrolling page from the button the rider is pressing: a
@@ -293,18 +346,5 @@
             android:paddingEnd="2dp"
             android:textSize="14sp"
             android:text="Clear sent" />
-
-        <Button
-            android:id="@+id/btnQueueClose"
-            style="@style/AppButton.Quiet"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:maxLines="1"
-            android:minWidth="0dp"
-            android:paddingStart="2dp"
-            android:paddingEnd="2dp"
-            android:textSize="14sp"
-            android:text="Close" />
     </LinearLayout>
 </LinearLayout>

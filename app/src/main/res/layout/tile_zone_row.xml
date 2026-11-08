@@ -1,35 +1,76 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One zone the rider asked for. The whole row is the button, the same as a pin
-     row: dropping a zone is the one thing to do to it and it needs a
-     confirmation anyway, so it lives in the dialog the row opens rather than as
-     another tap target per row. -->
+<!-- One zone the rider asked for, per Outline "Dizajn systém" "Riadok
+     zoznamu": icon | name + meta + progress | state badge | chevron. The
+     whole row is the button, same as a pin row: dropping a zone is the one
+     thing to do to it and it needs a confirmation anyway, so it lives in the
+     dialog the row opens rather than as another tap target per row. The
+     badge's background/text is set per-row in TileQueueActivity.renderZones()
+     from the zone's own totals (sent/tiles/stuck/inFlightBytes): there is
+     no stored "zone state" enum, so the badge is derived, the same way the
+     detail line already is. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="?android:attr/selectableItemBackground"
-    android:orientation="vertical"
-    android:paddingTop="8dp"
-    android:paddingBottom="8dp">
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingTop="12dp"
+    android:paddingBottom="12dp">
 
-    <TextView
-        android:id="@+id/tvZoneLabel"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:textSize="15sp"
-        android:textStyle="bold" />
+    <ImageView
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:src="@drawable/ic_layers"
+        android:tint="@color/ui_ash"
+        android:contentDescription="@null" />
 
-    <TextView
-        android:id="@+id/tvZoneDetail"
-        android:layout_width="match_parent"
+    <LinearLayout
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:layout_marginStart="13dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tvZoneLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/ui_ink"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvZoneDetail"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="@font/ibm_plex_mono_regular"
+            android:textColor="@color/ui_ash"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- No progress bar here, per Outline "Dizajn systém" "Rozbaliteľný riadok
+         prenosu": "V zbalených riadkoch nie sú progress bary". The detail
+         line's own "x/y sent" count already answers the fraction, a bar
+         would only repeat it. Fixed width, so a badge text/background swap
+         (Queued -> Sending -> On device) never changes this view's measured
+         bounds. -->
+    <TextView
+        android:id="@+id/tvZoneBadge"
+        android:layout_width="88dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
         android:fontFamily="@font/ibm_plex_mono_regular"
-        android:textColor="@color/ui_ash"
-        android:textSize="11sp" />
+        android:gravity="center"
+        android:paddingTop="3dp"
+        android:paddingBottom="3dp"
+        android:textSize="10sp"
+        android:letterSpacing="0.05" />
 
-    <ProgressBar
-        android:id="@+id/pbZone"
-        style="?android:attr/progressBarStyleHorizontal"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:max="1000" />
+    <ImageView
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:layout_marginStart="4dp"
+        android:src="@drawable/ic_chevron_right"
+        android:tint="@color/ui_ash"
+        android:contentDescription="@null" />
 </LinearLayout>

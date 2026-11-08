@@ -17,11 +17,12 @@ import android.view.LayoutInflater
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -73,7 +74,7 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         private const val UI_TICK_MS = 1000L
     }
 
-    private lateinit var tvState: TextView
+    private lateinit var tvPhase: TextView
     private lateinit var tvProblem: TextView
     private lateinit var tvStatus: TextView
     private lateinit var tvWhy: TextView
@@ -151,14 +152,10 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_tile_queue)
-        actionBar?.apply {
-            setDisplayShowTitleEnabled(false)
-            setDisplayShowHomeEnabled(true)
-            setDisplayUseLogoEnabled(true)
-            setLogo(R.drawable.ic_logo)
-        }
 
-        tvState = findViewById(R.id.tvQueueState)
+        findViewById<ImageButton>(R.id.btnQueueBack).setOnClickListener { finish() }
+
+        tvPhase = findViewById(R.id.tvQueuePhase)
         tvProblem = findViewById(R.id.tvQueueProblem)
         tvStatus = findViewById(R.id.tvQueueStatus)
         tvWhy = findViewById(R.id.tvQueueWhy)
@@ -184,7 +181,6 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         btnContinue.setOnClickListener { onContinuePressed() }
         btnPause.setOnClickListener { service?.outboxPause() }
         btnClear.setOnClickListener { onClearPressed() }
-        findViewById<Button>(R.id.btnQueueClose).setOnClickListener { finish() }
 
         // A plan is about one point and one side. Changing either invalidates
         // it, and an Add button still offering the old numbers is how a rider
@@ -472,18 +468,43 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
 
     private fun onZonePressed(row: BridgeService.ZoneRow) {
         val zone = row.zone
-        val actions = listOf("Rename", "Check state", "Retry gave up", "Drop")
+        val actions = listOf("Open in Google Maps", "Rename", "Check state", "Retry gave up", "Drop")
         AlertDialog.Builder(this)
             .setTitle(zone.label)
             .setItems(actions.toTypedArray()) { _, which ->
                 when (which) {
-                    0 -> onRenameZonePressed(zone)
-                    1 -> onCheckZoneStatePressed(zone)
-                    2 -> onRetryGaveUpPressed(zone)
-                    3 -> onDropZonePressed(zone)
+                    0 -> onOpenZoneInMapsPressed(zone)
+                    1 -> onRenameZonePressed(zone)
+                    2 -> onCheckZoneStatePressed(zone)
+                    3 -> onRetryGaveUpPressed(zone)
+                    4 -> onDropZonePressed(zone)
                 }
             }
             .show()
+    }
+
+    /**
+     * Shows the zone's centre on a real map, so a rider who only has
+     * coordinates to go by can see what the box actually covers before
+     * trusting it. The zoom guess matches the box this screen sends
+     * ([onPickOnMap] already does the same for z=11 at the 20 km default),
+     * so the framed view is roughly the area that was queued.
+     */
+    private fun onOpenZoneInMapsPressed(zone: TileZone) {
+        val z = when {
+            zone.sideKm <= 10 -> 12
+            zone.sideKm <= 20 -> 11
+            else -> 10
+        }
+        val uri = Uri.parse(
+            String.format(Locale.US, "geo:%.6f,%.6f?z=%d", zone.latE7 / 1e7, zone.lonE7 / 1e7, z),
+        )
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri))
+        } catch (t: Throwable) {
+            Log.w(TAG, "no maps app for $uri", t)
+            toast("No maps app on this phone.")
+        }
     }
 
     /**
@@ -586,7 +607,7 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
         lastRepaintMs = System.currentTimeMillis()
         val snap = service?.outboxSnapshot()
         if (snap == null) {
-            tvState.text = "map areas"
+            tvPhase.visibility = View.GONE
             tvProblem.visibility = View.VISIBLE
             tvProblem.text = "The bridge is not running. Open the main screen first."
             llZones.removeAllViews()
@@ -594,14 +615,27 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
             return
         }
 
-        tvState.text = when (snap.phase) {
-            TileOutboxController.Phase.IDLE ->
-                if (snap.totals.queued > 0) "map areas: ${snap.totals.queued} to send" else "map areas"
-            TileOutboxController.Phase.ASKING_INFO -> "map areas: asking the device"
-            TileOutboxController.Phase.READING_MAPSET -> "map areas: reading the map server"
-            TileOutboxController.Phase.SCANNING -> "map areas: checking the map server"
-            TileOutboxController.Phase.ANNOUNCING -> "map areas: telling the device"
-            TileOutboxController.Phase.PUSHING -> "map areas: sending"
+        // Lit ink while a phase is actively doing something, graphite while
+        // the queue is merely waiting on the rider, gone when there is
+        // nothing to say at all -- per Outline "Dizajn systém" state coding.
+        if (snap.phase == TileOutboxController.Phase.IDLE && snap.totals.queued == 0) {
+            tvPhase.visibility = View.GONE
+        } else {
+            tvPhase.visibility = View.VISIBLE
+            tvPhase.setTextColor(
+                ContextCompat.getColor(
+                    this,
+                    if (snap.phase == TileOutboxController.Phase.IDLE) R.color.ui_graphite else R.color.ui_ink,
+                ),
+            )
+            tvPhase.text = when (snap.phase) {
+                TileOutboxController.Phase.IDLE -> "${snap.totals.queued} to send"
+                TileOutboxController.Phase.ASKING_INFO -> "Asking the device"
+                TileOutboxController.Phase.READING_MAPSET -> "Reading the map server"
+                TileOutboxController.Phase.SCANNING -> "Checking the map server"
+                TileOutboxController.Phase.ANNOUNCING -> "Telling the device"
+                TileOutboxController.Phase.PUSHING -> "Sending"
+            }
         }
 
         val problems = ArrayList<String>()
@@ -730,7 +764,7 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
     private fun renderSummary(snap: BridgeService.OutboxSnapshot) {
         val t = snap.totals
         if (t.tiles == 0) {
-            tvSummary.text = "nothing queued"
+            tvSummary.text = "Nothing queued"
             tvCurrent.visibility = View.GONE
             return
         }
@@ -809,14 +843,59 @@ class TileQueueActivity : Activity(), BridgeService.Observer {
             // does not change `detail` at all, and a cache keyed on `detail`
             // alone left a renamed row showing its old label until something
             // else about it changed.
-            val cacheKey = "${row.zone.label} $detail"
+            //
+            // The badge's own sending/not-sending edge is folded in on top,
+            // separately from `detail`: `detail`'s "left" figure is
+            // TileFormat.bytes()'s rounded text (nearest 100 kB above 1 MB,
+            // nearest 1 kB below it), so inFlightBytes crossing zero -- the
+            // one thing the badge actually tests -- can leave `detail`
+            // byte-identical and the repaint never happens. Caught in review:
+            // a drop mid-square left the badge reading "Sending" forever
+            // next to tvProblem's own "Not connected to the device".
+            val cacheKey = "${row.zone.label} $detail ${t.inFlightBytes > 0}"
             if (rowText[row.zone.zoneId] != cacheKey) {
                 rowText[row.zone.zoneId] = cacheKey
                 v.findViewById<TextView>(R.id.tvZoneLabel).text =
                     "${row.zone.label}   ${dayFmt.format(Date(row.zone.createdAtMs))}"
                 v.findViewById<TextView>(R.id.tvZoneDetail).text = detail
-                v.findViewById<ProgressBar>(R.id.pbZone).progress = (t.fraction * 1000).toInt()
+                renderZoneBadge(v.findViewById(R.id.tvZoneBadge), t)
             }
         }
+    }
+
+    /**
+     * The row badge, derived from [t] rather than stored: there is no "zone
+     * state" enum, only counts, the same way [detail][renderZones] already is
+     * one. Follows the same fill-states Outline "Dizajn systém" defines for a
+     * wallet row's SyncState -- dashed = not moving, 1dp ink = sending, solid
+     * ink = fully on device, 2dp ink + hatch = needs you -- generalised to a
+     * second thing this app lists, the same way the device plate and the
+     * wallet row already share one state-coding system.
+     *
+     * "On device" means `sent + noData >= tiles` with no `stuck`, the same
+     * definition [TileOutbox.Totals.fraction] already uses for "nothing left
+     * to do" -- not `sent >= tiles` alone. A zone with even one absent (sea)
+     * square never finishes sending by that narrower test, so a fully
+     * resolved zone read "Queued" forever. Caught in review.
+     *
+     * `stuck` is checked first and wins over "On device": a square that gave
+     * up is not resolved, it is a thing the rider can act on
+     * ("Retry gave up"), so it stays "Needs you" even once nothing else is
+     * owed.
+     */
+    private fun renderZoneBadge(badge: TextView, t: TileOutbox.Totals) {
+        val (bg, text, textColor) = when {
+            t.stuck > 0 && t.inFlightBytes <= 0 ->
+                Triple(R.drawable.bg_device_plate_halt, "Needs you", R.color.ui_ink)
+            t.stuck == 0 && t.tiles > 0 && t.sent + t.noData >= t.tiles ->
+                Triple(R.drawable.bg_badge_done, "On device", R.color.ui_on_ink)
+            t.inFlightBytes > 0 ->
+                Triple(R.drawable.bg_badge_progress, "Sending", R.color.ui_ink)
+            else ->
+                Triple(R.drawable.bg_device_plate_idle, "Queued", R.color.ui_graphite)
+        }
+        badge.setBackgroundResource(bg)
+        badge.text = text
+        badge.setTextColor(ContextCompat.getColor(this, textColor))
     }
 }

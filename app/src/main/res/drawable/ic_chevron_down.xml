@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lucide "chevron-down", firmware/explorink/freeink-sdk/libs/assets/Icons/lucide/icons/chevron-down.svg,
+     hand-converted per the ic_house.xml convention: stroke-only path, same
+     24dp box, 2dp stroke, round caps/joins as the source. The dropdown
+     affordance a custom-backgrounded Spinner loses when its default
+     Widget.Spinner background (which bakes the arrow into the 9-patch) is
+     replaced by the flat ink-outline box every other control here uses. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="@color/ui_ash"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="m6 9 6 6 6-6" />
+</vector>
