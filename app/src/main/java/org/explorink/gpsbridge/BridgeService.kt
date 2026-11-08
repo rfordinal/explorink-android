@@ -183,6 +183,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         val tileLog: List<String>,
         /** The transfer happening right now, or null when nothing is in flight. */
         val tileProgress: TileProgress?,
+        /** An unpaired board answered the scan recently (BleLink.discoveredRecently()).
+            Home shows "Device found" instead of staying mute or connecting on its own. */
+        val unpairedDeviceFound: Boolean,
     )
 
     /**
@@ -564,9 +567,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
      *
      * Everything the association implied goes with it, in one place rather than
      * three: the pin, the remembered address behind a direct reconnect, and the
-     * live link to the device being forgotten. Then a clean restart, unpinned, so
-     * the rider is left with a working bridge on the old first-match rules instead
-     * of nothing.
+     * live link to the device being forgotten. Then a clean restart, unpinned --
+     * the rider is left with "Device found" at most if a board answers, never a
+     * silent reconnect to it (BleLink.handleScanResult()).
      */
     fun forgetPairing() {
         CompanionWake.forget(this)
@@ -660,6 +663,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         pointSyncStatus = pointSyncStatus,
         tileLog = tileLog.toList(),
         tileProgress = tileProgress,
+        unpairedDeviceFound = ble.discoveredRecently(),
     )
 
     // --- recording ------------------------------------------------------
