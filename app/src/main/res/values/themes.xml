@@ -1,15 +1,47 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Palette, type and metrics follow the Outline design system, step by
-         step: colors (this file + colors.xml), typography (this file +
-         res/font/), buttons (this file + bg_button_outline.xml). Layout
-         (bottom nav, device plate, instrument row) is a later, separate
-         pass, see https://wiki.comsultia.com/doc/dizajn-system-i82dz3W2tt -->
-    <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <!-- Palette, type and metrics follow the Outline design system: colors
+         (this file + colors.xml), typography (this file + res/font/),
+         buttons (this file + bg_button_outline.xml), and layout (bottom
+         nav, device plate, instrument row, Transfers, recording row), see
+         https://wiki.comsultia.com/doc/dizajn-system-i82dz3W2tt
+
+         Light theme only for now: values-night/ (the dark token set from the
+         same Outline doc) is removed, not merely unused, so the app ignores
+         the phone's system dark mode and always renders the paper palette.
+         Decided 2026-11-07: a dark mode that only half-matches the e-ink
+         paper identity reads as a defect, not a feature. The dark tokens are
+         still in git history (last commit touching
+         app/src/main/res/values-night/) for whenever dark mode gets its own
+         real pass.
+
+         Light.NoActionBar, not DayNight.NoActionBar: a DayNight parent still
+         resolves every attribute AppTheme does not explicitly override (in
+         particular colorControlHighlight, which every ?attr/selectableItem-
+         Background ripple in this layout relies on, plus the plain
+         AlertDialog.Builder in onForgetPressed()) from Material's own dark
+         base when the phone's system dark mode is on: removing
+         values-night/ alone did not actually force those to light. Caught
+         by Opus review, 2026-11-07. -->
+
+    <style name="AppTheme" parent="Theme.MaterialComponents.Light.NoActionBar">
         <item name="android:windowLightStatusBar">@bool/window_light_status_bar</item>
         <item name="android:windowLightNavigationBar">@bool/window_light_status_bar</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+
+        <!-- minSdk is 31, so this is unconditional (no values-v29 split
+             needed). Without it, Android's own Force Dark saw a theme with
+             no values-night/ left, decided on its own that unstyled
+             TextViews needed inverting while the phone's system dark mode
+             was on, and inverted their text to near-white over the light
+             ui_paper background: invisible, not the android:textColorPrimary
+             override above (which was correctly compiled to ui_ink the
+             whole time; confirmed with aapt2 dump). Force Dark only touches
+             plain platform widgets, which is why the hero bitmap and the
+             custom button drawables were unaffected and only the plain
+             TextViews (tvState, tvFix, tvCounters, ...) went invisible. -->
+        <item name="android:forceDarkAllowed">false</item>
 
         <item name="android:fontFamily">@font/instrument_sans</item>
 
@@ -17,7 +49,8 @@
              accent, so every Material color slot that would normally
              carry a brand hue points at ui_ink instead. warn/stop are never
              theme-wide; they are applied explicitly per signal line
-             (ui_stop on tvProblem, see the layout files). -->
+             (ui_stop on the device plate's halt state, the instrument row's
+             LINK LOST cell, etc.: see the layout and MainActivity.kt). -->
         <item name="colorPrimary">@color/ui_ink</item>
         <item name="colorPrimaryDark">@color/ui_ink</item>
         <item name="colorPrimaryVariant">@color/ui_ink</item>
@@ -74,5 +107,38 @@
     <style name="AppButton.Destructive">
         <item name="android:background">@drawable/bg_button_destructive</item>
         <item name="android:textColor">@color/button_text_destructive</item>
+    </style>
+
+    <!-- Shared across every screen with section headers (About, Map areas,
+         Pins): the "label" degree per Outline "Dizajn systém" (11.5/14sp
+         Sans 600 caps, +0.10em), e.g. WHAT IT DOES, SAVE A PIN. -->
+    <style name="SectionLabel">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginBottom">6dp</item>
+        <item name="android:letterSpacing">0.10</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:textColor">@color/ui_ash</item>
+        <item name="android:textSize">11.5sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <!-- The "body" degree (15/23sp Sans 400), for explanatory text. -->
+    <style name="Body">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:lineSpacingExtra">4sp</item>
+        <item name="android:textColor">@color/ui_graphite</item>
+        <item name="android:textSize">15sp</item>
+    </style>
+
+    <!-- The one hairline separator, per Outline "Metriky": 1dp, rule, the
+         only divider the system uses. -->
+    <style name="HairlineDivider">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">1dp</item>
+        <item name="android:layout_marginTop">16dp</item>
+        <item name="android:layout_marginBottom">16dp</item>
+        <item name="android:background">@color/ui_rule</item>
     </style>
 </resources>

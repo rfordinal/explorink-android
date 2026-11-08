@@ -379,6 +379,13 @@ class BleLink(
     var connectedAddress: String? = null
         private set
 
+    /** RSSI at the last scan hit, not a live reading during an active
+        connection (that needs GATT.readRemoteRssi() polling, not added
+        here). Good enough for a "connected - -58 dBm" line, not for a
+        signal-bars animation. */
+    var lastRssi: Int? = null
+        private set
+
     /**
      * Delayed work for [opQueue], on the same main looper as everything else
      * here.
@@ -506,6 +513,10 @@ class BleLink(
         statusBuffer.setLength(0)
         connectedName = null
         connectedAddress = null
+        // Otherwise a direct reconnect (no scan) shows the stale dBm from
+        // whenever the device was last found, which can be hours old and
+        // read as a live signal number. Caught by Opus review, 2026-11-07.
+        lastRssi = null
         // Not just tidying: start() bails out early while state == CONNECTING,
         // so a caller that tears down a stuck connect and then calls start()
         // again (retry, connect timeout) needs this cleared first -- else the
@@ -574,6 +585,10 @@ class BleLink(
         statusBuffer.setLength(0)
         connectedName = null
         connectedAddress = null
+        // Otherwise a direct reconnect (no scan) shows the stale dBm from
+        // whenever the device was last found, which can be hours old and
+        // read as a live signal number. Caught by Opus review, 2026-11-07.
+        lastRssi = null
         // Before failing the ops, so a done-callback that tries to enqueue is
         // refused on a clean state instead of writing onto a dead gatt. The
         // listener hears about it below, once there is nothing left in flight.
@@ -749,6 +764,7 @@ class BleLink(
         connectedName = advName ?: gattName ?: DEVICE_NAME
         connectedAddress = device.address
         lastAddress = device.address
+        lastRssi = result.rssi
         setState(State.CONNECTING, "${connectedName} (${device.address})")
         listener.onBleEvent(
             "found",

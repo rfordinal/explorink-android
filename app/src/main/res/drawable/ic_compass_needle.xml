@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The needle half of the hand-drawn compass (see ic_compass_ring.xml).
+     A single line from the ring's centre toward north; the ImageView
+     holding this is rotated by view.rotation = bearingDeg at runtime, so
+     the needle itself is drawn pointing straight up, at 0 degrees. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="22"
+    android:viewportHeight="22">
+    <path
+        android:strokeColor="@color/ui_ink"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M11,11 L11,4" />
+</vector>

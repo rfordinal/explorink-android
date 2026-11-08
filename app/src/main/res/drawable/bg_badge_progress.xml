@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Row badge, "sending" state: 1dp solid ui_ink border, per Outline "Dizajn
+     systém" list-row SyncState table (SYNCING: "orámovanie ink 1 dp"). One
+     weight lighter than the device plate's 2dp "connected" border, which
+     marks a whole-screen-level state rather than one row among many. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <stroke android:width="1dp" android:color="@color/ui_ink" />
+    <corners android:radius="2dp" />
+    <solid android:color="@android:color/transparent" />
+</shape>

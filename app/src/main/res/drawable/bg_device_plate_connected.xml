@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Device plate, "connected" state per Outline "Dizajn systém",
+     "Plocha zariadenia": 2dp solid ui_ink border, same almost-square 2dp
+     radius as the buttons. The "halt" / "Not reaching the device" state
+     has its own drawable, bg_device_plate_halt.xml (same border plus the
+     diagonal hatch fill). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <stroke android:width="2dp" android:color="@color/ui_ink" />
+    <corners android:radius="2dp" />
+    <solid android:color="@android:color/transparent" />
+</shape>

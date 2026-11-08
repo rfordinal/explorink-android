@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lucide "map-pin", firmware/explorink/freeink-sdk/libs/assets/Icons/lucide/icons/map-pin.svg,
+     hand-converted: one Android path per source SVG path/circle element
+     (fixed 2026-11-07: concatenating multiple source "d" strings into one
+     pathData is wrong: each source path's relative commands restart from
+     its own implicit (0,0), and gluing them together makes the second
+     piece continue from the first piece's end point instead, which is
+     what broke this icon's shape the first time). Circles become two-arc
+     path data since VectorDrawable has no &lt;circle&gt; tag. Same 24dp
+     box, 2dp stroke, round caps/joins as the source. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="@color/ui_ink"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" />
+    <path
+        android:strokeColor="@color/ui_ink"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M15.0,10.0 A3.0,3.0 0 1 0 9.0,10.0 A3.0,3.0 0 1 0 15.0,10.0 Z" />
+</vector>

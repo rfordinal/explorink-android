@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lucide "triangle-alert", firmware/explorink/freeink-sdk/libs/assets/Icons/lucide/icons/triangle-alert.svg,
+     hand-converted: one Android path per source SVG path/circle element
+     (fixed 2026-11-07: concatenating multiple source "d" strings into one
+     pathData is wrong: each source path's relative commands restart from
+     its own implicit (0,0), and gluing them together makes the second
+     piece continue from the first piece's end point instead, which is
+     what broke this icon's shape the first time). Circles become two-arc
+     path data since VectorDrawable has no &lt;circle&gt; tag. Same 24dp
+     box, 2dp stroke, round caps/joins as the source. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="@color/ui_ink"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
+    <path
+        android:strokeColor="@color/ui_ink"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M12 9v4" />
+    <path
+        android:strokeColor="@color/ui_ink"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M12 17h.01" />
+</vector>

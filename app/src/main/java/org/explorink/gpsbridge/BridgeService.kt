@@ -157,6 +157,8 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         val bleState: BleLink.State,
         val bleDetail: String?,
         val deviceName: String?,
+        /** RSSI at the last scan hit; see BleLink.lastRssi for what this is not. */
+        val rssi: Int?,
         val lastFix: Location?,
         val bearingDeg: Float,
         val lastSentAtMs: Long,
@@ -640,6 +642,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         bleState = bleState,
         bleDetail = bleDetail,
         deviceName = ble.connectedName,
+        rssi = ble.lastRssi,
         lastFix = lastFix,
         bearingDeg = lastBearingDeg,
         lastSentAtMs = lastSentAtMs,

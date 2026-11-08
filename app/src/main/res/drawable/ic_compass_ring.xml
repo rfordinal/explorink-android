@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hand-drawn, not Lucide, per Outline "Ikony" exception for a live
+     value a static glyph cannot carry: a hairline ring in ui_rule plus a
+     2dp north tick in ui_ink. The needle is a separate drawable or view
+     (ic_compass_needle.xml) rotated at runtime by view.rotation: rotating
+     a path inside one vector needs a pivot dance this is simpler without. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="22"
+    android:viewportHeight="22">
+    <path
+        android:strokeColor="@color/ui_rule"
+        android:strokeWidth="1"
+        android:pathData="M20,11 A9,9 0 1 1 2,11 A9,9 0 1 1 20,11 Z" />
+    <path
+        android:strokeColor="@color/ui_ink"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M11,1 L11,3" />
+</vector>

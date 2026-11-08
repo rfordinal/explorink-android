@@ -11,3 +11,13 @@ Bundled in `app/src/main/res/font/`, all under the SIL Open Font License 1.1
   https://github.com/IBM/plex
 
 No modifications made to any of the three.
+
+# Third-party libraries
+
+Bundled in the compiled APK, both under the Apache License 2.0
+(https://www.apache.org/licenses/LICENSE-2.0), unmodified:
+
+- androidx.core:core-ktx 1.17.0 -- The Android Open Source Project
+  https://developer.android.com/jetpack/androidx/releases/core
+- com.google.android.material:material 1.12.0 -- Google LLC
+  https://github.com/material-components/material-components-android

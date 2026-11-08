@@ -3,32 +3,71 @@
      device can only save a pin where the rider is standing, and this is where a
      place found on a map at home gets onto the card. Everything else here is the
      device's own answer, read back after every change : the device is
-     authoritative and the phone keeps no copy (docs/android-pins.md). -->
+     authoritative and the phone keeps no copy (docs/android-pins.md).
+
+     App bar, section labels and the hairline divider follow the sub-screen
+     shape Outline "Dizajn systém" specifies and About already uses
+     (arrow-left, sans title, no subtitle; SectionLabel caption style; one
+     1dp ui_rule hairline). -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fitsSystemWindows="true"
     android:orientation="vertical">
 
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageButton
+            android:id="@+id/btnPinsBack"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="4dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Back"
+            android:padding="12dp"
+            android:src="@drawable/ic_arrow_left" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:text="Pins"
+            android:textColor="@color/ui_ink"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:padding="16dp">
+        android:paddingStart="16dp"
+        android:paddingTop="4dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="16dp">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
+            <!-- How many the device holds, right now, per Outline "Dizajn
+                 systém" state coding: ink while connected and known,
+                 graphite for a last-known count while the link is down,
+                 gone until the first listing ever comes back. Set in
+                 PinsActivity.render(). -->
             <TextView
-                android:id="@+id/tvPinsState"
+                android:id="@+id/tvPinsPhase"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:paddingBottom="4dp"
-                android:textSize="18sp"
+                android:paddingBottom="8dp"
+                android:textSize="15sp"
                 android:textStyle="bold"
-                android:text="pins" />
+                android:visibility="gone" />
 
             <!-- Red block, same as the one window's: a state the rider has to fix
                  before anything here works. The most common one by far is the
@@ -52,24 +91,46 @@
                 android:visibility="gone" />
 
             <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingBottom="2dp"
-                android:textSize="13sp"
-                android:textStyle="bold"
-                android:text="save a pin" />
+                style="@style/SectionLabel"
+                android:text="SAVE A PIN" />
 
-            <Spinner
-                android:id="@+id/spKind"
+            <!-- The ink-outline box is drawn here, not on the Spinner itself:
+                 the arrow a Spinner normally shows comes from its own default
+                 background, so replacing that background (as every other
+                 control on this screen replaces its own) takes the arrow with
+                 it. Observed here; the exact drawable it lives in was not
+                 chased down. ic_chevron_down restores the affordance as a
+                 non-interactive overlay; touches pass through to the Spinner
+                 underneath because the ImageView has no click handling of its
+                 own to consume them. -->
+            <FrameLayout
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content" />
+                android:layout_height="48dp"
+                android:background="@drawable/bg_button_outline">
+
+                <Spinner
+                    android:id="@+id/spKind"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@null"
+                    android:paddingEnd="36dp" />
+
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_gravity="center_vertical|end"
+                    android:layout_marginEnd="12dp"
+                    android:src="@drawable/ic_chevron_down"
+                    android:contentDescription="@null" />
+            </FrameLayout>
 
             <TextView
                 android:id="@+id/tvPhoneFix"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:fontFamily="@font/ibm_plex_mono_regular"
-                android:paddingTop="4dp"
+                android:paddingTop="8dp"
+                android:textColor="@color/ui_ash"
                 android:textSize="12sp"
                 android:text="phone position: none yet" />
 
@@ -82,7 +143,8 @@
                 android:id="@+id/btnSaveHere"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="16dp"
                 android:text="Save at the phone position" />
 
             <!-- The one thing the device cannot do at all: a place the rider is not
@@ -103,24 +165,23 @@
                 style="@style/AppButton.Primary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="8dp"
                 android:text="Save at those coordinates" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:paddingBottom="12dp"
+                android:layout_marginTop="4dp"
+                android:paddingBottom="4dp"
                 android:textColor="@color/ui_ash"
                 android:textSize="11sp"
                 android:text="Decimal degrees, a geo: link, a Google Maps link, or a share from a maps app. A short maps.app.goo.gl link is opened for you." />
 
+            <View style="@style/HairlineDivider" />
+
             <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingBottom="2dp"
-                android:textSize="13sp"
-                android:textStyle="bold"
-                android:text="on the device" />
+                style="@style/SectionLabel"
+                android:text="ON THE DEVICE" />
 
             <TextView
                 android:id="@+id/tvPinsEmpty"
@@ -131,15 +192,18 @@
                 android:textSize="12sp"
                 android:visibility="gone" />
 
-            <!-- Rows are inflated into this, one per pin the device reported.
-                 Never a row for an empty slot: the save spinner above already
-                 lists every type, and ten rows saying "empty" is what the device's
-                 own Pins list refuses to draw for the same reason. -->
+            <!-- Rows are inflated into this, one per pin the device reported,
+                 separated by the system's one hairline. Never a row for an
+                 empty slot: the save spinner above already lists every type,
+                 and ten rows saying "empty" is what the device's own Pins
+                 list refuses to draw for the same reason. -->
             <LinearLayout
                 android:id="@+id/llPins"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical" />
+                android:divider="@drawable/divider_hairline"
+                android:orientation="vertical"
+                android:showDividers="middle" />
 
             <Button
                 android:id="@+id/btnHistory"
@@ -168,6 +232,8 @@
         </LinearLayout>
     </ScrollView>
 
+    <!-- One quiet action now, not two: Close moved to the app bar's back
+         arrow, the same move About made first. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -179,17 +245,8 @@
         <Button
             android:id="@+id/btnPinsRefresh"
             style="@style/AppButton.Quiet"
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
             android:text="Refresh" />
-
-        <Button
-            android:id="@+id/btnPinsClose"
-            style="@style/AppButton.Quiet"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Close" />
     </LinearLayout>
 </LinearLayout>
