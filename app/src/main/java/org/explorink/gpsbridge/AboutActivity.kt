@@ -51,7 +51,10 @@ class AboutActivity : Activity() {
         ),
         Permission(
             "Internet",
-            "Fetches map tiles over HTTPS from the project's own content delivery network.",
+            "Fetches map tiles over HTTPS from the project's own content delivery network, " +
+                "computes a shared route via a public routing service, and expands a Google " +
+                "Maps short link when you share one. Granted automatically at install, not " +
+                "something you are asked for.",
         ),
     )
 

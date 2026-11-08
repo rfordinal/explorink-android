@@ -104,7 +104,7 @@
 
             <TextView
                 style="@style/AboutBody"
-                android:text="Sends your phone's GPS position to your paired device over Bluetooth, and keeps its map tiles and saved pins up to date. No routing, no turn-by-turn directions." />
+                android:text="Sends your phone's GPS position to your paired device over Bluetooth, and keeps its map tiles and saved pins up to date. The device itself has no turn-by-turn guidance; when you share a route into the app, it is computed by a public routing service." />
 
             <View style="@style/AboutDivider" />
 
@@ -114,7 +114,7 @@
 
             <TextView
                 style="@style/AboutBody"
-                android:text="No analytics, no telemetry, no crash reports, and no account or server login anywhere in this app. Your position goes only to your paired device over Bluetooth. The ride log stays on your phone; sharing it is always your choice, through Android's own share sheet." />
+                android:text="No analytics, no telemetry, no crash reports, and no account or server login anywhere in this app. Your live position goes only to your paired device over Bluetooth. Sharing a route or a multi-stop link sends those coordinates to a public routing service (brouter.de) to compute the route, and a Google Maps short link is expanded with one request to Google. The ride log stays on your phone; sharing it is always your choice, through Android's own share sheet." />
 
             <View style="@style/AboutDivider" />
 
