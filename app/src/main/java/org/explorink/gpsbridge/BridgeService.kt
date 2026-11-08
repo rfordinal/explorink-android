@@ -183,6 +183,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         val tileLog: List<String>,
         /** The transfer happening right now, or null when nothing is in flight. */
         val tileProgress: TileProgress?,
+        /** An unpaired board answered the scan recently (BleLink.discoveredRecently()).
+            Home shows "Device found" instead of staying mute or connecting on its own. */
+        val unpairedDeviceFound: Boolean,
     )
 
     /**
@@ -660,6 +663,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         pointSyncStatus = pointSyncStatus,
         tileLog = tileLog.toList(),
         tileProgress = tileProgress,
+        unpairedDeviceFound = ble.discoveredRecently(),
     )
 
     // --- recording ------------------------------------------------------

@@ -502,6 +502,14 @@ class MainActivity : Activity(), BridgeService.Observer {
      * identical whether the rider is paired with the right X4 or with a
      * stale one from a previous device, and the only way to tell was to
      * tap through to the detail dialog. Reported 2026-11-08.
+     *
+     * NEVER_PAIRED reads [snap.unpairedDeviceFound] to tell "nothing is out
+     * there" from "something answered, go pick it" -- without it the plate
+     * stayed mute even once a board was in range, and the only other option
+     * (connect to it on its own) cannot say *which* board, since every one
+     * of them advertises the same name and UUID (Outline "Obrazovky",
+     * screen 6). Tapping either reading still opens the same system picker.
+     * Reported 2026-11-08.
      */
     private fun renderDevicePlate(snap: BridgeService.Snapshot?, link: LinkState, haltName: String?, addr: String?) {
         val icon: Int
@@ -540,9 +548,16 @@ class MainActivity : Activity(), BridgeService.Observer {
             LinkState.NEVER_PAIRED -> {
                 icon = R.drawable.ic_bluetooth_off
                 background = R.drawable.bg_device_plate_idle
-                nameColor = R.color.ui_ash
-                metaColor = R.color.ui_ash
-                name = "Connect a device"
+                if (snap?.unpairedDeviceFound == true) {
+                    nameColor = R.color.ui_ink
+                    metaColor = R.color.ui_ink
+                    name = "Device found"
+                    meta = "tap to connect"
+                } else {
+                    nameColor = R.color.ui_ash
+                    metaColor = R.color.ui_ash
+                    name = "Connect a device"
+                }
             }
 
             LinkState.RESTING -> {

@@ -198,6 +198,12 @@ class BleLink(
          * the connection.
          */
         const val LINE_BUFFER_CAP = 4096
+
+        /** How long a scan result keeps [discoveredRecently] true, same order
+            as [SCAN_FAST_MS] -- long enough to survive the gap to the next
+            batch, short enough that a board that left the room stops being
+            reported as found. */
+        private const val DISCOVERY_WINDOW_MS = 20_000L
     }
 
     enum class State {
@@ -243,6 +249,22 @@ class BleLink(
         set(value) {
             field = value?.uppercase()
         }
+
+    /**
+     * When a matching device was last seen while unpaired. [handleScanResult]
+     * sets this instead of connecting -- every board advertises the same name
+     * and UUID (see [pinnedAddress]'s doc), so this can only say *something*
+     * answered, never *which* board. [discoveredRecently] is how Home's
+     * device plate turns that into "Device found - tap to connect" instead
+     * of silently connecting to a stranger's device or staying mute.
+     */
+    @Volatile
+    private var lastDiscoveredAtMs: Long = 0L
+
+    fun discoveredRecently(withinMs: Long = DISCOVERY_WINDOW_MS): Boolean =
+        pinnedAddress == null &&
+            lastDiscoveredAtMs != 0L &&
+            System.currentTimeMillis() - lastDiscoveredAtMs < withinMs
 
     private var scanning = false
 
@@ -758,6 +780,23 @@ class BleLink(
         val byName = advName in KNOWN_DEVICE_NAMES || gattName in KNOWN_DEVICE_NAMES
         val byUuid = rec?.serviceUuids?.any { it.uuid == SERVICE_UUID } == true
         if (pinned == null && !byName && !byUuid) return
+
+        if (pinned == null) {
+            // Unpaired: surface it (Home's "Device found - tap to connect")
+            // instead of connecting on its own. This cannot say *which*
+            // board answered -- see pinnedAddress's doc -- only that one
+            // did, so the rider still has to pick it through the system
+            // picker, same as "Connect a device" always required.
+            if (lastDiscoveredAtMs == 0L) {
+                listener.onBleEvent(
+                    "discovered",
+                    advName ?: gattName ?: DEVICE_NAME,
+                    mapOf("address" to result.device.address, "rssi" to result.rssi),
+                )
+            }
+            lastDiscoveredAtMs = System.currentTimeMillis()
+            return
+        }
 
         stopScan()
         val device = result.device
