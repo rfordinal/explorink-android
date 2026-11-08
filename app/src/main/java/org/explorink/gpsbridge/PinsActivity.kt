@@ -20,10 +20,12 @@ import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -58,7 +60,7 @@ class PinsActivity : Activity(), BridgeService.Observer {
         private const val UI_TICK_MS = 1000L
     }
 
-    private lateinit var tvState: TextView
+    private lateinit var tvPhase: TextView
     private lateinit var tvProblem: TextView
     private lateinit var tvStatus: TextView
     private lateinit var tvPhoneFix: TextView
@@ -72,7 +74,6 @@ class PinsActivity : Activity(), BridgeService.Observer {
     private lateinit var btnHistory: Button
     private lateinit var btnHistoryOlder: Button
     private lateinit var btnRefresh: Button
-    private lateinit var btnClose: Button
 
     private val main = Handler(Looper.getMainLooper())
 
@@ -127,7 +128,9 @@ class PinsActivity : Activity(), BridgeService.Observer {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_pins)
 
-        tvState = findViewById(R.id.tvPinsState)
+        findViewById<ImageButton>(R.id.btnPinsBack).setOnClickListener { finish() }
+
+        tvPhase = findViewById(R.id.tvPinsPhase)
         tvProblem = findViewById(R.id.tvPinsProblem)
         tvStatus = findViewById(R.id.tvPinsStatus)
         tvPhoneFix = findViewById(R.id.tvPhoneFix)
@@ -141,7 +144,6 @@ class PinsActivity : Activity(), BridgeService.Observer {
         btnHistory = findViewById(R.id.btnHistory)
         btnHistoryOlder = findViewById(R.id.btnHistoryOlder)
         btnRefresh = findViewById(R.id.btnPinsRefresh)
-        btnClose = findViewById(R.id.btnPinsClose)
 
         btnSaveHere.setOnClickListener { onSaveHere() }
         btnSaveAt.setOnClickListener { onSaveAtCoordinates() }
@@ -163,7 +165,6 @@ class PinsActivity : Activity(), BridgeService.Observer {
                 }
             }
         })
-        btnClose.setOnClickListener { finish() }
 
         // A shared position lands here: "Share to ExplorInk GPS" from a maps app
         // sends text, and the coordinate field is exactly what it is for.
@@ -392,7 +393,7 @@ class PinsActivity : Activity(), BridgeService.Observer {
     private fun render() {
         val snap = service?.pinsSnapshot()
         if (snap == null) {
-            tvState.text = "pins"
+            tvPhase.visibility = View.GONE
             tvProblem.visibility = View.VISIBLE
             tvProblem.text = "The bridge is not running. Open the main screen first."
             renderSpinner(emptySet())
@@ -407,11 +408,25 @@ class PinsActivity : Activity(), BridgeService.Observer {
         }
 
         val pins = snap.pins
-        tvState.text = when {
-            !snap.connected -> "pins: no device"
-            snap.busy -> "pins: asking the device..."
-            pins == null -> "pins"
-            else -> "pins: ${pins.size} on the device"
+        // Ink while the count is live and confirmed, graphite while it is a
+        // last-known number from before the link dropped, gone until the
+        // first listing ever comes back -- per Outline "Dizajn systém" state
+        // coding. tvProblem already explains a dropped link in full, so this
+        // line never repeats "no device".
+        when {
+            snap.busy -> {
+                tvPhase.visibility = View.VISIBLE
+                tvPhase.setTextColor(ContextCompat.getColor(this, R.color.ui_ink))
+                tvPhase.text = "Asking the device"
+            }
+            pins == null -> tvPhase.visibility = View.GONE
+            else -> {
+                tvPhase.visibility = View.VISIBLE
+                tvPhase.setTextColor(
+                    ContextCompat.getColor(this, if (snap.connected) R.color.ui_ink else R.color.ui_graphite),
+                )
+                tvPhase.text = "${pins.size} on device"
+            }
         }
 
         val problems = ArrayList<String>()

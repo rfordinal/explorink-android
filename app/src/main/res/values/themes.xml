@@ -109,10 +109,10 @@
         <item name="android:textColor">@color/button_text_destructive</item>
     </style>
 
-    <!-- About screen only, for now: the "label" degree per Outline "Dizajn
-         systém" (11.5/14sp Sans 600 caps, +0.10em), used there for section
-         headers (WHAT IT DOES, PRIVACY, ...) rather than for navigation. -->
-    <style name="AboutSectionLabel">
+    <!-- Shared across every screen with section headers (About, Map areas,
+         Pins): the "label" degree per Outline "Dizajn systém" (11.5/14sp
+         Sans 600 caps, +0.10em), e.g. WHAT IT DOES, SAVE A PIN. -->
+    <style name="SectionLabel">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_marginBottom">6dp</item>
@@ -124,7 +124,7 @@
     </style>
 
     <!-- The "body" degree (15/23sp Sans 400), for explanatory text. -->
-    <style name="AboutBody">
+    <style name="Body">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:lineSpacingExtra">4sp</item>
@@ -134,7 +134,7 @@
 
     <!-- The one hairline separator, per Outline "Metriky": 1dp, rule, the
          only divider the system uses. -->
-    <style name="AboutDivider">
+    <style name="HairlineDivider">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">1dp</item>
         <item name="android:layout_marginTop">16dp</item>

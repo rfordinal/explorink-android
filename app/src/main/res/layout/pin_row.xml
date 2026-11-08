@@ -1,19 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One pin the device reported. The whole row is the button: Replace and Delete
-     both need a confirmation anyway (the device confirms both on its own screen),
-     so they live in the dialog the row opens rather than as two more taps' worth
-     of buttons per row on a phone. -->
+<!-- One pin the device reported, per Outline "Dizajn systém" "Riadok
+     zoznamu": icon | name + meta | trailing value | chevron. The whole row
+     is the button: Replace and Delete both need a confirmation anyway (the
+     device confirms both on its own screen), so they live in the dialog the
+     row opens rather than as two more taps' worth of buttons per row on a
+     phone. No state badge here, unlike a zone row: a pin the device reports
+     is simply on the device, there is no partial-sync state to show. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="?android:attr/selectableItemBackground"
+    android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingTop="8dp"
-    android:paddingBottom="8dp">
+    android:paddingTop="12dp"
+    android:paddingBottom="12dp">
+
+    <ImageView
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:src="@drawable/ic_map_pin"
+        android:tint="@color/ui_ash"
+        android:contentDescription="@null" />
 
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:layout_marginStart="13dp"
         android:layout_weight="1"
         android:orientation="vertical">
 
@@ -21,6 +33,7 @@
             android:id="@+id/tvRowLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:textColor="@color/ui_ink"
             android:textSize="15sp"
             android:textStyle="bold" />
 
@@ -37,8 +50,16 @@
         android:id="@+id/tvRowDistance"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="center_vertical"
         android:fontFamily="@font/ibm_plex_mono_regular"
         android:paddingStart="8dp"
+        android:textColor="@color/ui_ink"
         android:textSize="14sp" />
+
+    <ImageView
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:layout_marginStart="4dp"
+        android:src="@drawable/ic_chevron_right"
+        android:tint="@color/ui_ash"
+        android:contentDescription="@null" />
 </LinearLayout>

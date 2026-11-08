@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Row badge, "fully on device" state: solid ui_ink fill, per Outline
+     "Dizajn systém" list-row SyncState table. FULLY_SYNCED is the only
+     state that gets the full fill: "najťažší odznak znamená, že každý
+     bajt je potvrdený". Text on this badge is ui_on_ink. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="2dp" />
+    <solid android:color="@color/ui_ink" />
+</shape>
