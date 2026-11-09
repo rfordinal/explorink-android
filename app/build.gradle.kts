@@ -32,7 +32,7 @@ fun gitDescribe(): String {
 // gitignored, so a release build only signs where that file was placed by hand.
 // Everywhere else -- CI, a fresh checkout -- bundleRelease still produces an
 // unsigned artifact instead of failing the build.
-val keystorePropsFile = file("keystore/keystore.properties")
+val keystorePropsFile = rootProject.file("keystore/keystore.properties")
 val keystoreProps = Properties().apply {
     if (keystorePropsFile.exists()) {
         keystorePropsFile.inputStream().use { load(it) }
@@ -54,7 +54,7 @@ android {
     signingConfigs {
         if (keystorePropsFile.exists()) {
             create("release") {
-                storeFile = file(keystoreProps.getProperty("keystore.file"))
+                storeFile = rootProject.file(keystoreProps.getProperty("keystore.file"))
                 storePassword = keystoreProps.getProperty("keystore.password")
                 keyAlias = keystoreProps.getProperty("keystore.alias")
                 keyPassword = keystoreProps.getProperty("key.password")
