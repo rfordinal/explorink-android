@@ -316,23 +316,60 @@ class MainActivity : Activity(), BridgeService.Observer {
             return
         }
         if (!hasBackgroundLocation()) {
-            // On API 30+ this dialog is shown once. After that the only route is
-            // the app's settings page, which is where a second press goes.
-            if (backgroundLocationAsked) {
-                startActivity(
-                    Intent(
-                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                        Uri.fromParts("package", packageName, null),
+            // The disclosure comes first on BOTH routes, not just the first one.
+            // On API 30+ the system prompt is shown once; after that the only way
+            // to grant is the app's settings page. Either way the user is being
+            // asked for background location, so either way the disclosure has to
+            // precede it -- gating it on "first time only" meant a user who
+            // declined once got sent to Settings with no explanation at all.
+            showBackgroundLocationDisclosure {
+                if (backgroundLocationAsked) {
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.fromParts("package", packageName, null),
+                        )
                     )
-                )
-            } else {
-                backgroundLocationAsked = true
-                requestPermissions(
-                    arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
-                    REQ_BACKGROUND_LOCATION,
-                )
+                } else {
+                    backgroundLocationAsked = true
+                    requestPermissions(
+                        arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+                        REQ_BACKGROUND_LOCATION,
+                    )
+                }
             }
         }
+    }
+
+    /**
+     * Google Play's location policy requires a prominent in-app disclosure before
+     * the background-location prompt: it has to name the data, say that it is
+     * collected while the app is in the background, and say what it is for, in the
+     * app itself rather than only in a privacy page. Going straight to
+     * requestPermissions() fails that, and the App content declaration form asks
+     * for a video of this exact screen appearing before the system prompt.
+     *
+     * Dismissing is a real choice, not a dead end: the bridge works without the
+     * permission, it just stops feeding the reader once the phone locks, which is
+     * why the text says so instead of pressing the point.
+     */
+    private fun showBackgroundLocationDisclosure(onContinue: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle("Send your position with the app closed?")
+            .setMessage(
+                "ExplorInk GPS reads your phone's GPS position and sends it to the " +
+                    "ExplorInk reader you paired, over Bluetooth, so the reader can show " +
+                    "where you are on its map.\n\n" +
+                    "To keep doing that on a ride or a hike, with the phone in a pocket " +
+                    "and the screen off, Android needs the \"Allow all the time\" location " +
+                    "permission. Your position is only sent to your own reader. It is not " +
+                    "uploaded anywhere, and there is no account.\n\n" +
+                    "You can say no. The app still works, the reader just stops getting " +
+                    "your position once the phone locks, until you open the app again."
+            )
+            .setPositiveButton("Continue") { _, _ -> onContinue() }
+            .setNegativeButton("Not now", null)
+            .show()
     }
 
     /**
