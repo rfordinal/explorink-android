@@ -10,8 +10,8 @@ plugins {
 // APK came from -- a bare "0.2.0" on a sideloaded debug build tells you nothing
 // about which of six builds is actually on the phone. Same reasoning as the
 // firmware's TRAILINK_VERSION.
-val appVersion = "0.3.13"
-val appVersionCode = 25
+val appVersion = "0.3.14"
+val appVersionCode = 26
 
 fun gitDescribe(): String {
     fun run(vararg cmd: String): String = try {
@@ -28,11 +28,20 @@ fun gitDescribe(): String {
     return "-g$sha$dirty"
 }
 
-// Release signing is local, per-machine state: keystore/keystore.properties is
-// gitignored, so a release build only signs where that file was placed by hand.
-// Everywhere else -- CI, a fresh checkout -- bundleRelease still produces an
-// unsigned artifact instead of failing the build.
-val keystorePropsFile = rootProject.file("keystore/keystore.properties")
+// The upload key lives OUTSIDE any checkout, by default in
+// ~/.config/explorink/android-release/, because losing it means Google has to
+// reset the upload key before the app can be updated again. It first lived in
+// a gitignored keystore/ inside a worktree and was nearly destroyed when that
+// worktree was removed as ordinary post-merge cleanup -- a worktree is
+// disposable and a signing key is not. EXPLORINK_KEYSTORE_PROPS overrides the
+// location; keystore.file is resolved next to the properties file.
+//
+// Where neither exists -- CI, somebody else's clone -- bundleRelease still
+// produces an unsigned artifact instead of failing the build.
+val keystorePropsFile = file(
+    System.getenv("EXPLORINK_KEYSTORE_PROPS")
+        ?: "${System.getProperty("user.home")}/.config/explorink/android-release/keystore.properties"
+)
 val keystoreProps = Properties().apply {
     if (keystorePropsFile.exists()) {
         keystorePropsFile.inputStream().use { load(it) }
@@ -54,7 +63,7 @@ android {
     signingConfigs {
         if (keystorePropsFile.exists()) {
             create("release") {
-                storeFile = rootProject.file(keystoreProps.getProperty("keystore.file"))
+                storeFile = File(keystorePropsFile.parentFile, keystoreProps.getProperty("keystore.file"))
                 storePassword = keystoreProps.getProperty("keystore.password")
                 keyAlias = keystoreProps.getProperty("keystore.alias")
                 keyPassword = keystoreProps.getProperty("key.password")
