@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -26,6 +28,17 @@ fun gitDescribe(): String {
     return "-g$sha$dirty"
 }
 
+// Release signing is local, per-machine state: keystore/keystore.properties is
+// gitignored, so a release build only signs where that file was placed by hand.
+// Everywhere else -- CI, a fresh checkout -- bundleRelease still produces an
+// unsigned artifact instead of failing the build.
+val keystorePropsFile = rootProject.file("keystore/keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) {
+        keystorePropsFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     namespace = "org.explorink.gpsbridge"
     compileSdk = 36
@@ -38,11 +51,27 @@ android {
         versionName = appVersion
     }
 
+    signingConfigs {
+        if (keystorePropsFile.exists()) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProps.getProperty("keystore.file"))
+                storePassword = keystoreProps.getProperty("keystore.password")
+                keyAlias = keystoreProps.getProperty("keystore.alias")
+                keyPassword = keystoreProps.getProperty("key.password")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
             // Debug builds carry the commit they were built from.
             versionNameSuffix = gitDescribe()
+        }
+        release {
+            if (keystorePropsFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
