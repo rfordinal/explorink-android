@@ -23,3 +23,13 @@ after any change. Run the other sections the change actually touches.
 
 Record what you ran and the result — do not just say "tested" with nothing
 behind it.
+
+## Releasing: see docs/release-signing.md
+
+The app is on Google Play since 2026-11-13, and the signing key lives outside
+every checkout. Before building anything a user will install, read
+[`docs/release-signing.md`](docs/release-signing.md): where the key is, how to
+prove a build carries it, why a Play install and an APK install can never update
+each other, and what Play's declarations say about this app. Changing the
+background-location disclosure text also invalidates the video filed with that
+declaration.
