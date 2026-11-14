@@ -20,7 +20,17 @@ way this app degrades in practice. That is what the numbers are for.
 2. Launch the app.
 3. Home screen loads: no crash, no blank screen.
 4. Check installed version: `adb shell dumpsys package org.explorink.gpsbridge
-   | grep -E "versionName|versionCode"` matches what was built.
+   | grep -E "versionName|versionCode"` matches what was built. **Do this
+   before the first reading, not after**, and write it down: a result measured
+   against a build nobody named is worth nothing.
+   Two traps. A **release** build carries no git suffix -- `0.3.14` says
+   nothing about which commit -- so for any test that is not itself a release
+   check, install the debug variant, which appends `-g<sha>`. And a `-dirty`
+   suffix names the commit but not the uncommitted work on top of it, so two
+   different builds can report the same string: commit first when the reading
+   has to be quotable.
+   The board can also answer it: with a phone connected, the serial log prints
+   `[BLEPOS] client: android <versionName>` from the version handshake.
 
 ## 2. Permissions
 
@@ -29,8 +39,20 @@ way this app degrades in practice. That is what the numbers are for.
    (precise location, then background location).
 2. Deny a permission: confirm the app says what is missing, does not crash,
    and the affected feature is visibly gated off (no silent failure).
-3. Grant all permissions: confirm the gated feature comes back without a
-   reinstall.
+   **Revoke the whole permission *group*, not one permission.** Revoking only
+   `BLUETOOTH_SCAN` proves nothing: `BLUETOOTH_CONNECT` is in the same
+   `NEARBY_DEVICES` group, and with it still held the system grants the other
+   one back silently on the app's next request, with no dialog. Measured
+   2026-11-14.
+   And **`pm revoke` straight after `adb install -r` does not take** -- run it
+   on its own and read the state back with
+   `adb shell dumpsys package org.explorink.gpsbridge | grep BLUETOOTH`.
+3. Grant all permissions **from outside the app** -- Settings, or `pm grant` --
+   and confirm the gated feature comes back without a reinstall. Outside the
+   app is the case that matters: after a second denial the permission is
+   `USER_FIXED` and the app's own dialog never appears again, so Settings is
+   the only route a rider has. This is what found T-169, where the plate went
+   back to `Device resting` while nothing was running at all.
 4. Open the Settings route to the disclosure text directly (not only the
    first-run path) and confirm it shows there too.
 5. On Android 13+: confirm the Bluetooth runtime permission is asked
@@ -212,7 +234,16 @@ next to the previous run's, so the comparison is possible at all.
    the reader is not connected, because there would be nothing to ask.
 6. Confirm the row never shows the checker's own wording. `freshness unknown
    (index unreachable, 0 stale found anyway)` is a developer sentence on the
-   first screen a rider sees.
+   first screen a rider sees. Keep an eye on its **length** too: a long value
+   pushes the `Map squares` title onto three lines on a 720 px phone.
+
+**The firmware has its own cooldown, and it will waste your afternoon.** After
+one check the board refuses to ask again for about ten minutes --
+`freshness: cooling down, 594760 ms left` on the serial log. A reconnect does
+not clear it. Reset the board (DTR/RTS pulse) and walk back into the map to
+get a second check. Take the phone offline **by turning Wi-Fi and mobile data
+off, not by airplane mode**, which also kills Bluetooth and tests something
+else entirely.
 
 ## 7. Pins
 
