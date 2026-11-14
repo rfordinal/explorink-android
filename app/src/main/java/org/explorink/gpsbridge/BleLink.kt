@@ -129,6 +129,17 @@ class BleLink(
          */
         const val MAX_PROBE_FAILURES = 2
 
+        /**
+         * How soon to look again when a probe was skipped or refused, rather
+         * than waiting out a whole [LIVENESS_PROBE_MS].
+         *
+         * A skipped probe (the queue was busy) must not mean a link that is
+         * busy at every tick is never checked; a refused one is the case the
+         * whole mechanism exists for, and making its second opinion wait a
+         * full interval puts detection back where T-540 found it.
+         */
+        const val PROBE_RETRY_MS = 5_000L
+
         val SERVICE_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0001")
         val POSITION_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0002")
         val COMMAND_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0003")
@@ -1752,10 +1763,29 @@ class BleLink(
         val tick = object : Runnable {
             override fun run() {
                 if (state != State.CONNECTED) return
+                val idle = SystemClock.uptimeMillis() - lastPeerReplyMs
+                // Re-armed against the last thing the peer said, not on a fixed
+                // grid. A fixed grid doubles the real period: a successful probe
+                // *is* the peer answering, so it resets [lastPeerReplyMs], and
+                // the next tick one interval later then finds the link idle for
+                // one interval minus the probe's own duration and skips. Parked
+                // on an S10 that produced probes two minutes apart from a
+                // one-minute constant (measured 2026-11-14), which would have
+                // put detection back at the four minutes T-540 exists to fix.
+                if (idle < LIVENESS_PROBE_MS) {
+                    main.postDelayed(this, LIVENESS_PROBE_MS - idle)
+                    return
+                }
+                val ch = probeChar
+                if (ch == null || opQueue.busy) {
+                    // Real traffic is a better liveness test than a probe, so
+                    // yielding to it costs nothing -- but look again soon rather
+                    // than in a whole interval, or a link that is busy at every
+                    // tick is never checked at all.
+                    main.postDelayed(this, PROBE_RETRY_MS)
+                    return
+                }
                 main.postDelayed(this, LIVENESS_PROBE_MS)
-                if (SystemClock.uptimeMillis() - lastPeerReplyMs < LIVENESS_PROBE_MS) return
-                val ch = probeChar ?: return
-                if (opQueue.busy) return
                 // Logged, not evented: one line a minute would bury the plate's
                 // own event log, but a probe that silently never fires would
                 // also pass every test for it. `adb logcat -s BleLink` is where
@@ -1767,6 +1797,15 @@ class BleLink(
                     Log.w(TAG, "liveness probe $probeFailures failed: ${error ?: "unknown"}")
                     if (probeFailures >= MAX_PROBE_FAILURES) {
                         handleLinkDead("the device stopped answering (${error ?: "probe failed"})")
+                        return@enqueueRead
+                    }
+                    // A refused probe did not update [lastPeerReplyMs], so the
+                    // second one is owed now rather than an interval away --
+                    // the whole point is that a dead peer is noticed in about a
+                    // minute, not in four.
+                    livenessTick?.let {
+                        main.removeCallbacks(it)
+                        main.postDelayed(it, PROBE_RETRY_MS)
                     }
                 }
             }
