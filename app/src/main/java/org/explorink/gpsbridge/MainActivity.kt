@@ -102,6 +102,22 @@ class MainActivity : Activity(), BridgeService.Observer {
      */
     private var bridgeEverStarted = false
 
+    /**
+     * An address the picker returned that no [BridgeService] existed to take
+     * yet, applied the moment one binds.
+     *
+     * A first pairing starts the bridge and reads the picker's result in the
+     * same `onActivityResult`, so `service` is still null when the address is
+     * known: `service?.bindTo(addr)` silently did nothing, and the service's
+     * own `onStartCommand` then pinned the link from
+     * `CompanionWake.pairedAddress()` -- the association-list read T-162 found
+     * lagging on this phone. An unpinned link connects to the first reader
+     * that advertises, which with two in the room is the wrong one
+     * (BleLink.pinnedAddress: "the one decision where the wrong device means
+     * sending a stranger's position to a stranger's map").
+     */
+    private var pendingBindAddr: String? = null
+
     /** So a second press of the wake button goes to Settings, not to a dialog
      * Android will not show twice. */
     private var backgroundLocationAsked = false
@@ -111,6 +127,12 @@ class MainActivity : Activity(), BridgeService.Observer {
             val s = (b as? BridgeService.LocalBinder)?.service ?: return
             service = s
             s.setObserver(this@MainActivity)
+            // Before the first render, so the plate never draws a link pinned
+            // to the wrong reader -- see [pendingBindAddr].
+            pendingBindAddr?.let {
+                pendingBindAddr = null
+                s.bindTo(it)
+            }
             render()
         }
 
@@ -433,7 +455,13 @@ class MainActivity : Activity(), BridgeService.Observer {
         // list, which is exactly the read T-162 found lagging -- so after a
         // first pairing it pinned nothing, and after a replacement it pinned
         // the reader being replaced. Bind to the address the picker returned.
-        if (addr != null) service?.bindTo(addr)
+        if (addr != null) {
+            val s = service
+            // Held for onServiceConnected when the bridge is still starting --
+            // the first-pairing case, where this used to no-op. See
+            // [pendingBindAddr].
+            if (s != null) s.bindTo(addr) else pendingBindAddr = addr
+        }
         Toast.makeText(
             this,
             if (addr != null) "paired with $addr" else "pairing did not complete",
