@@ -1340,11 +1340,12 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             // pieces of developer vocabulary and a count of nothing. What
             // matters to them is that the squares on the reader were not
             // checked, and that nothing was thrown away.
-            stale < 0 -> if (freshnessUnresolved) {
-                "could not check - no connection"
-            } else {
-                "could not check - $reason"
-            }
+            // Short on purpose: this is a row value next to a title, and on a
+            // 720 px phone "could not check - no connection" pushed `Map
+            // squares` onto three lines (S24, 2026-11-14). The reason string
+            // keeps going to the tile log and the row's own dialog, which is
+            // where a rider who wants the detail is already heading.
+            stale < 0 -> if (freshnessUnresolved) "no connection" else "could not check"
             stale == 0 -> "$examined tiles current"
             else -> "$stale of $examined tiles out of date"
         }
