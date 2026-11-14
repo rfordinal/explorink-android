@@ -133,6 +133,7 @@ class MainActivity : Activity(), BridgeService.Observer {
                 pendingBindAddr = null
                 s.bindTo(it)
             }
+            recoverIfPermissionsReturned()
             render()
         }
 
@@ -213,9 +214,53 @@ class MainActivity : Activity(), BridgeService.Observer {
         // creates it: a service created by a bind alone never went through
         // onStartCommand, so it would sit there not foreground and not sending.
         if (BridgeService.isRunning) bindBridge(create = false)
+        recoverIfPermissionsReturned()
         main.removeCallbacks(uiTick)
         main.postDelayed(uiTick, UI_TICK_MS)
         render()
+    }
+
+    /**
+     * Restarts a link that gave up for a permission the rider has since granted.
+     *
+     * [BleLink.start] answers a missing permission by parking in
+     * `State.NO_PERMISSION` and returning, and **nothing in the app was
+     * watching for the permission coming back**.
+     * [onRequestPermissionsResult] covers only a grant made through this app's
+     * own dialog -- and after a second denial the permission is USER_FIXED, so
+     * that dialog never appears again and Settings is the only route, which
+     * never reaches this activity at all.
+     *
+     * Measured on the S10, 2026-11-14: the OS woke the service through the
+     * companion association while the nearby-devices permission was denied, the
+     * link parked, the permission was granted 50 s later, and the service kept
+     * running with nothing scanning. The plate said `Device resting - wakes
+     * when you follow` with the reader advertising a metre away, because
+     * devicePlateBlocker() had cleared and NO_PERMISSION falls through to
+     * RESTING. Found by section 2 step 3 of the manual checklist, which asks
+     * exactly this and had never been run.
+     *
+     * onStart, because that is when the rider comes back from Settings. Also
+     * called from onServiceConnected, since the binding can land after this.
+     */
+    private fun recoverIfPermissionsReturned() {
+        if (devicePlateBlocker() != null) return
+        val s = service
+        if (s != null) {
+            if (s.snapshot().bleState != BleLink.State.NO_PERMISSION) return
+            Log.i(TAG, "permissions are back; restarting a link that gave up for them")
+            s.retry()
+            return
+        }
+        // No bridge at all, which is the commoner shape: onCreate declines to
+        // start one while a permission is missing, and nothing tried again when
+        // it arrived. `bridgeEverStarted` is what keeps this from resurrecting a
+        // bridge that was stopped on purpose -- an idle stop or the rider's own
+        // Stop service both leave it true, and T-165's plate asks for a tap.
+        if (!bridgeEverStarted && !BridgeService.isRunning) {
+            Log.i(TAG, "permissions are back and no bridge was ever started; starting one")
+            startBridge()
+        }
     }
 
     override fun onStop() {
@@ -581,6 +626,12 @@ class MainActivity : Activity(), BridgeService.Observer {
             // [bridgeEverStarted].
             bridgeEverStarted && !BridgeService.isRunning -> LinkState.STOPPED to null
             snap?.bleState == BleLink.State.FAILED -> LinkState.HALT to "Not reaching the device"
+            // The safety net under recoverIfPermissionsReturned(): a link
+            // parked for a permission is not resting, and "wakes when you
+            // follow" is a promise it cannot keep. Reached only when the
+            // permission is genuinely still missing (devicePlateBlocker wins
+            // above) or for the one frame before the recovery runs.
+            snap?.bleState == BleLink.State.NO_PERMISSION -> LinkState.HALT to "Permission needed"
             addr == null && snap?.deviceName == null -> LinkState.NEVER_PAIRED to null
             else -> LinkState.RESTING to null
         }
