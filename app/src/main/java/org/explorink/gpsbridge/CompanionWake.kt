@@ -63,8 +63,26 @@ object CompanionWake {
         context.getSystemService(CompanionDeviceManager::class.java)
 
     /**
-     * MAC addresses this app is associated with. Normally zero or one: the
-     * association dialog is asked for a single device.
+     * MAC addresses this app is associated with, **each at most once**.
+     * Normally zero or one: the association dialog is asked for a single
+     * device.
+     *
+     * `distinct()` is the whole fix available for same-MAC duplicates below
+     * API 33, and it is enough. Measured on an S10 (SDK 31) 2026-11-14:
+     * picking the same reader twice leaves two association records for it, and
+     * the id-based collapse in [keepOnly] only exists from 33 up. Removing one
+     * of them is **not possible** there -- the only tool is
+     * `disassociate(String)`, and one call with that MAC removed *both* records
+     * (2 -> 0 in one call), which would unpair the rider outright, and nothing
+     * but the system picker can put it back.
+     *
+     * So the records stay and the *consequence* goes instead. The only
+     * observable cost was [startObserving] walking the list and registering
+     * presence twice, which showed up in the rider's own event log as `woken by
+     * the device` twice per wake. One entry per MAC ends that, [pairedAddress]
+     * is unaffected (it took the first either way), and [forget] now issues one
+     * call per reader rather than one per record -- which is also correct,
+     * given that one call clears them all.
      */
     fun associatedAddresses(context: Context): List<String> {
         val cdm = manager(context) ?: return emptyList()
@@ -74,7 +92,7 @@ object CompanionWake {
             } else {
                 @Suppress("DEPRECATION")
                 cdm.associations.map { it.uppercase() }
-            }
+            }.distinct()
         } catch (t: Throwable) {
             Log.w(TAG, "associations", t)
             emptyList()
@@ -246,7 +264,13 @@ object CompanionWake {
         // address-keyed loop afterwards then has only genuinely different
         // readers left to remove. Below API 33 the system hands out bare
         // strings with no id, so duplicates cannot be told apart there and this
-        // step is skipped.
+        // step is skipped -- **measured on an S10 (SDK 31) 2026-11-14**: picking
+        // the same reader twice leaves two associations with that MAC, and the
+        // rider log then shows `woken by the device` twice per wake. Benign --
+        // `pairedAddress` picks that MAC either way and the link is correct --
+        // but it accumulates, and the only tool below 33 is
+        // `disassociate(String)`, which cannot be aimed at one of two identical
+        // records without risking both. Left alone deliberately (T-171).
         if (Build.VERSION.SDK_INT >= 33) {
             runCatching {
                 val sameMac = cdm.myAssociations.filter {
