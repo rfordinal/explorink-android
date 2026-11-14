@@ -67,7 +67,7 @@ object CompanionWake {
         val cdm = manager(context) ?: return emptyList()
         return try {
             if (Build.VERSION.SDK_INT >= 33) {
-                cdm.myAssociations.mapNotNull { it.deviceMacAddress?.toString()?.uppercase() }
+                cdm.myAssociations.mapNotNull { addressOf(it) }
             } else {
                 @Suppress("DEPRECATION")
                 cdm.associations.map { it.uppercase() }
@@ -76,6 +76,34 @@ object CompanionWake {
             Log.w(TAG, "associations", t)
             emptyList()
         }
+    }
+
+    /**
+     * One association's MAC, from whichever field actually carries it.
+     *
+     * **`deviceMacAddress` alone is not enough** (T-170). On a Galaxy S24
+     * running Android 17 (SDK 37), an existing association for this app
+     * reported `mDeviceMacAddress=null` while the MAC sat inside its
+     * `associatedDevice`'s scan result -- and the old `mapNotNull` on that one
+     * field dropped the association outright. The app then believed it had
+     * never been paired: Home drew `Connect a device`, and far worse,
+     * `BleLink.pinnedAddress` went null, which is an unpinned scan that takes
+     * the first reader advertising. `pinnedAddress`'s own doc calls that "the
+     * one decision where the wrong device means sending a stranger's position
+     * to a stranger's map". Measured 2026-11-14 with the association plainly
+     * listed by `dumpsys companiondevice`.
+     *
+     * `associatedDevice` only exists from API 34, so API 33 exactly still has
+     * the one field and nothing to fall back on.
+     */
+    private fun addressOf(info: AssociationInfo): String? {
+        info.deviceMacAddress?.toString()?.uppercase()?.let { return it }
+        if (Build.VERSION.SDK_INT >= 34) {
+            val device = info.associatedDevice ?: return null
+            device.bleDevice?.device?.address?.uppercase()?.let { return it }
+            device.bluetoothDevice?.address?.uppercase()?.let { return it }
+        }
+        return null
     }
 
     /** The one X4 this phone is paired with, or null while unpaired. */
