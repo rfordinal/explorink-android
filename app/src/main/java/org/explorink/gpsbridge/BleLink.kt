@@ -81,8 +81,13 @@ class BleLink(
     companion object {
         private const val TAG = "BleLink"
 
-        /** Default/legacy label -- an X4, still the most common device. */
-        const val DEVICE_NAME = "XteinkX4Map"
+        // There is deliberately no DEVICE_NAME default here any more. It was
+        // "XteinkX4Map", the plain X4's advertised name, and every `?:
+        // DEVICE_NAME` in the app turned "this peer did not say" into "this is
+        // an X4" -- on screen, in the notification and in the ride log. A
+        // constant that exists only to be a fallback gets used as one, so it is
+        // gone rather than discouraged (T-163). [KNOWN_DEVICE_NAMES] below
+        // still lists that name, where it means a board, not a default.
 
         /**
          * Every name the firmware can advertise, one per board
@@ -798,7 +803,7 @@ class BleLink(
             if (lastDiscoveredAtMs == 0L) {
                 listener.onBleEvent(
                     "discovered",
-                    advName ?: gattName ?: DEVICE_NAME,
+                    advName ?: gattName ?: "unnamed device",
                     mapOf("address" to result.device.address, "rssi" to result.rssi),
                 )
             }
@@ -808,11 +813,17 @@ class BleLink(
 
         stopScan()
         val device = result.device
-        connectedName = advName ?: gattName ?: DEVICE_NAME
+        // Null when the peer named itself neither way, and left null on
+        // purpose: this used to fall back to `DEVICE_NAME`, which is one
+        // model's advertised name, so an unnamed -- or differently named --
+        // board was reported to the whole app as a plain X4. Home decides what
+        // to show for "no name" (MainActivity.readerName); down here the honest
+        // answer is that nothing said (T-163).
+        connectedName = advName ?: gattName
         connectedAddress = device.address
         lastAddress = device.address
         lastRssi = result.rssi
-        setState(State.CONNECTING, "${connectedName} (${device.address})")
+        setState(State.CONNECTING, "${connectedName ?: "unnamed device"} (${device.address})")
         listener.onBleEvent(
             "found",
             connectedName,

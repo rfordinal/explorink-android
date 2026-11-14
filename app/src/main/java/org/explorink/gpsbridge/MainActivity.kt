@@ -94,6 +94,14 @@ class MainActivity : Activity(), BridgeService.Observer {
     private var bound = false
     private var permissionsDenied = false
 
+    /**
+     * True once this activity has asked for a bridge at all. It is what makes
+     * "there is no service" mean *stopped* rather than *not started yet*: the
+     * very first [render] runs before [startBridge], and without this the plate
+     * would flash the stopped state on every cold launch. See [LinkState.STOPPED].
+     */
+    private var bridgeEverStarted = false
+
     /** So a second press of the wake button goes to Settings, not to a dialog
      * Android will not show twice. */
     private var backgroundLocationAsked = false
@@ -219,6 +227,7 @@ class MainActivity : Activity(), BridgeService.Observer {
      * permission.
      */
     private fun startBridge(action: String = BridgeService.ACTION_START) {
+        bridgeEverStarted = true
         startForegroundService(Intent(this, BridgeService::class.java).setAction(action))
         // BIND_AUTO_CREATE here only removes a race: the service is being
         // created by the start above either way, and this way the binding lands
@@ -404,7 +413,9 @@ class MainActivity : Activity(), BridgeService.Observer {
             render()
             return
         }
-        val addr = CompanionWake.onAssociationResult(this)
+        // `data`, not a fresh read of the association list -- see
+        // CompanionWake.onAssociationResult's doc (T-162).
+        val addr = CompanionWake.onAssociationResult(this, data)
         Toast.makeText(
             this,
             if (addr != null) "paired with $addr" else "pairing did not complete",
@@ -483,7 +494,7 @@ class MainActivity : Activity(), BridgeService.Observer {
      * can answer by name, but both elements render from this one source of
      * truth, never two separately derived guesses at the same state.
      */
-    private enum class LinkState { CONNECTED, RESTING, NEVER_PAIRED, HALT }
+    private enum class LinkState { CONNECTED, RESTING, NEVER_PAIRED, STOPPED, HALT }
 
     /**
      * BLE state is checked before pairing state, not after: a companion
@@ -500,6 +511,15 @@ class MainActivity : Activity(), BridgeService.Observer {
      * and a devicePlateBlocker() reason map to HALT; every other
      * non-connected, paired state reads as RESTING.
      *
+     * [LinkState.STOPPED] is checked before either, because a stopped service
+     * is not a link state at all: nothing is scanning, so neither RESTING
+     * ("wakes when you follow") nor NEVER_PAIRED ("Connect a device") is true
+     * and both invite the rider to wait for something that cannot happen.
+     * BridgeService stops itself after five idle minutes on purpose, and on
+     * 2026-11-13 the resulting "Connect a device" plate was read as a reader
+     * that was not advertising and chased with a laptop BLE scan -- which
+     * found it advertising fine at -57 dBm (T-165).
+     *
      * Returns the paired address alongside the state (rather than letting
      * renderDevicePlate() read CompanionWake.pairedAddress() a second time)
      * for the same reason render() already computes this once per frame --
@@ -511,6 +531,9 @@ class MainActivity : Activity(), BridgeService.Observer {
         val state = when {
             blocker != null -> LinkState.HALT to blocker
             snap?.bleState == BleLink.State.CONNECTED -> LinkState.CONNECTED to null
+            // Only once this activity has actually asked for a bridge -- see
+            // [bridgeEverStarted].
+            bridgeEverStarted && !BridgeService.isRunning -> LinkState.STOPPED to null
             snap?.bleState == BleLink.State.FAILED -> LinkState.HALT to "Not reaching the device"
             addr == null && snap?.deviceName == null -> LinkState.NEVER_PAIRED to null
             else -> LinkState.RESTING to null
@@ -555,6 +578,20 @@ class MainActivity : Activity(), BridgeService.Observer {
      * banner -- this plate cannot say which board answered. Caught in
      * review (Opus) before this shipped as the ink/singular version.
      */
+    /**
+     * What to call the paired reader on screen (T-163).
+     *
+     * Three steps, most-live first: what the open link says it is, then the
+     * last name this MAC actually advertised
+     * ([CompanionWake.rememberedName]), then nothing model-specific at all.
+     * The old fallback was `BleLink.DEVICE_NAME` -- the plain X4's advertised
+     * name -- so a phone paired to an X4 Pro was told it held an X4 whenever
+     * the link was down, and a rider with two readers had nothing on screen
+     * that told the two apart (S10, 2026-11-13).
+     */
+    private fun readerName(snap: BridgeService.Snapshot?, addr: String?): String =
+        snap?.deviceName ?: CompanionWake.rememberedName(this, addr) ?: "Your reader"
+
     private fun renderDevicePlate(snap: BridgeService.Snapshot?, link: LinkState, haltName: String?, addr: String?) {
         val icon: Int
         val background: Int
@@ -585,7 +622,7 @@ class MainActivity : Activity(), BridgeService.Observer {
                 background = R.drawable.bg_device_plate_connected
                 nameColor = R.color.ui_ink
                 metaColor = R.color.ui_ink
-                name = snap?.deviceName ?: BleLink.DEVICE_NAME
+                name = readerName(snap, addr)
                 meta = if (snap?.rssi != null) "connected - ${snap.rssi} dBm" else "connected"
             }
 
@@ -611,6 +648,20 @@ class MainActivity : Activity(), BridgeService.Observer {
                 } else {
                     "normal - wakes when you follow"
                 }
+            }
+
+            // Named for what it is, and it says what the tap does. The old
+            // plate for this state was "Connect a device" with no subtitle --
+            // indistinguishable from a missing reader, and read as one
+            // (T-165). Nothing is scanning here, so the rider waiting is the
+            // one thing that cannot work.
+            LinkState.STOPPED -> {
+                icon = R.drawable.ic_bluetooth_off
+                background = R.drawable.bg_device_plate_idle
+                nameColor = R.color.ui_ash
+                metaColor = R.color.ui_ash
+                name = "Bridge stopped"
+                meta = "idle for a while · tap to start looking again"
             }
         }
 
@@ -810,6 +861,13 @@ class MainActivity : Activity(), BridgeService.Observer {
         val addr = CompanionWake.pairedAddress(this)
         val snap = service?.snapshot()
         val blocker = devicePlateBlocker()
+        // The plate promised "tap to start looking again", so the tap does
+        // exactly that and nothing else -- no dialog in the way (T-165).
+        if (blocker == null && bridgeEverStarted && !BridgeService.isRunning) {
+            startBridge()
+            render()
+            return
+        }
         // Only jump straight to the system pairing picker when nothing else
         // is standing in the way: the plate's halt state says "tap to fix"
         // for a permission/Bluetooth/GPS blocker, and this used to ignore
@@ -850,7 +908,7 @@ class MainActivity : Activity(), BridgeService.Observer {
         val events = snap?.events?.takeLast(20) ?: emptyList()
         val bodyText = if (events.isEmpty()) header else (listOf(header, "") + events).joinToString("\n")
         showDetailDialog(
-            title = snap?.deviceName ?: BleLink.DEVICE_NAME,
+            title = readerName(snap, addr),
             bodyText = bodyText,
             options = options,
         )
@@ -951,7 +1009,21 @@ class MainActivity : Activity(), BridgeService.Observer {
                 append("\n\n").append(lines.joinToString("\n"))
             }
         }
-        showDetailDialog(title = "Map squares", bodyText = body)
+        // Offered only when it can actually do something: the last check
+        // failed on the network and the reader is connected to re-ask
+        // (T-164). Without it this failure stood until the app was
+        // force-stopped -- there was no way at all to clear it from the UI.
+        val options = mutableListOf<Triple<String, Boolean, () -> Unit>>()
+        if (snap?.freshnessRetryable == true) {
+            options.add(Triple("Check the squares again", false) {
+                val started = service?.retryFreshness() == true
+                if (!started) {
+                    Toast.makeText(this, "cannot check right now", Toast.LENGTH_SHORT).show()
+                }
+                render()
+            })
+        }
+        showDetailDialog(title = "Map squares", bodyText = body, options = options)
     }
 
     /**

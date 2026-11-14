@@ -109,6 +109,61 @@ class FreshnessCheckerTest {
     }
 
     @Test
+    fun `a retry re-checks inside the backoff window the failure opened`() {
+        // T-164: the row said "could not check" until the app was force-stopped,
+        // because only the device could start a check and it had already asked.
+        val h = Harness()
+        h.index.unreachable = true
+        h.check(HeldTile(13, 4482, 2839, slotA))
+        assertEquals(1, h.index.reads.size)
+        assertTrue(h.listener.finishes.last().networkFailure)
+
+        // The network is back, and the clock has not moved: the backoff is the
+        // thing being overridden, so leaving nowMs alone is the point.
+        h.index.unreachable = false
+        h.index.put(13, 4482, 2839, slotB)
+        h.transport.commands.clear()
+        assertTrue(h.checker.retry())
+        assertEquals(1, h.listener.recheckStarts)
+        h.have(HeldTile(13, 4482, 2839, slotA))
+
+        assertEquals(2, h.index.reads.size)
+        assertEquals(listOf("have", "stale 13 4482 2839", "checked 1"), h.transport.commands)
+        assertEquals(false, h.listener.finishes.last().networkFailure)
+    }
+
+    @Test
+    fun `a retry is refused while a check is already running`() {
+        val h = Harness()
+        h.checker.onCommandLine("CHECK_TILES 1")
+        // LISTING: the device's own `have` reply is still owed.
+        assertEquals(false, h.checker.retry())
+        assertEquals(0, h.listener.recheckStarts)
+        assertEquals(listOf("have"), h.transport.commands)
+    }
+
+    @Test
+    fun `only a network failure is flagged as one`() {
+        // What decides whether the row offers a retry. A cancelled check and a
+        // dropped link end the same way on screen and must not invite one --
+        // there is nothing on this side to re-run.
+        val cancelled = Harness()
+        cancelled.checker.onCommandLine("CHECK_TILES 1")
+        cancelled.checker.onCommandLine("FETCH_CANCEL")
+        assertEquals(false, cancelled.listener.finishes.last().networkFailure)
+
+        val dropped = Harness()
+        dropped.checker.onCommandLine("CHECK_TILES 1")
+        dropped.checker.onDisconnected()
+        assertEquals(false, dropped.listener.finishes.last().networkFailure)
+
+        val offline = Harness()
+        offline.index.unreachable = true
+        offline.check(HeldTile(13, 4482, 2839, slotA))
+        assertTrue(offline.listener.finishes.last().networkFailure)
+    }
+
+    @Test
     fun `a device with no viewport says so and gets no verdict`() {
         val h = Harness()
         h.checker.onCommandLine("CHECK_TILES 4")
@@ -388,8 +443,9 @@ class FreshnessCheckerTest {
         val scheduler = FakeScheduler()
         val index = FakeIndex()
         val expected = ExpectedContentIds()
+        val listener = RecordingListener()
         var nowMs = 1_000L
-        val checker = FreshnessChecker(index, expected, transport, scheduler).also {
+        val checker = FreshnessChecker(index, expected, transport, scheduler, listener).also {
             it.nowMs = { nowMs }
         }
 
@@ -407,6 +463,24 @@ class FreshnessCheckerTest {
             checker.onCommandLine("CHECK_TILES ${tiles.size}")
             have(*tiles)
         }
+    }
+
+    /** Every verdict the checker handed up, in order. */
+    private class RecordingListener : FreshnessChecker.Listener {
+        class Finish(val examined: Int, val stale: Int, val reason: String, val networkFailure: Boolean)
+
+        val finishes = mutableListOf<Finish>()
+        var recheckStarts = 0
+
+        override fun onCheckFinished(examined: Int, stale: Int, reason: String, networkFailure: Boolean) {
+            finishes.add(Finish(examined, stale, reason, networkFailure))
+        }
+
+        override fun onRecheckStarted() {
+            recheckStarts++
+        }
+
+        override fun onStaleTilesFound(tiles: List<HeldTile>) {}
     }
 
     /**

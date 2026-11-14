@@ -14,6 +14,10 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -186,6 +190,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         /** An unpaired board answered the scan recently (BleLink.discoveredRecently()).
             Home shows "Device found" instead of staying mute or connecting on its own. */
         val unpairedDeviceFound: Boolean,
+        /** The last freshness check failed on the network and can be run again
+            now -- see BridgeService.retryFreshness (T-164). */
+        val freshnessRetryable: Boolean,
     )
 
     /**
@@ -313,6 +320,14 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private var tileFetchStatus: String? = null
 
     /**
+     * True while the last freshness verdict was `unknown` *because this phone
+     * could not reach the index*, as opposed to any other way a check can end.
+     * It is what [onNetworkAvailable] and [retryFreshness] gate on -- see
+     * [FreshnessChecker.retry] (T-164).
+     */
+    private var freshnessUnresolved = false
+
+    /**
      * Last line about a point-shard sync (T-561), same shape as
      * [tileFetchStatus]. Reuses [tileLog] rather than a log of its own: both
      * describe "what the device asked for and what came of it", and a rider
@@ -428,6 +443,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         isRunning = true
         locationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         ble = BleLink(this, this)
+        registerNetworkCallback()
         // Straight to the CDN. Nothing is kept on the phone: it is the pipe
         // between the CDN and the X4 (TileSource).
         tileSource = CdnTileSource()
@@ -603,6 +619,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             Log.w(TAG, "unregisterReceiver", t)
         }
         stopLocation()
+        unregisterNetworkCallback()
         // Before ble.stop(): the abort frame it may send needs a live link.
         freshness.stop()
         tileFetcher.stop()
@@ -617,6 +634,81 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         stopRecording()
         releaseWakeLock()
         super.onDestroy()
+    }
+
+    // --- connectivity (T-164) ---------------------------------------------
+
+    /**
+     * Watches for the phone getting a usable network back, so a freshness
+     * check that failed offline can be re-run instead of standing as the
+     * answer forever.
+     *
+     * Registered for the service's whole life rather than only while a check
+     * is outstanding: the callback is cheap, and the alternative is a
+     * register/unregister pair driven by a flag that already decides whether
+     * anything happens.
+     */
+    private val netCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            main.post { onNetworkAvailable() }
+        }
+    }
+
+    private var netCallbackRegistered = false
+
+    private fun registerNetworkCallback() {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            // VALIDATED, not just INTERNET: a captive-portal Wi-Fi satisfies
+            // INTERNET and would re-run the check straight into the portal's
+            // own 302, which is the offline case with extra steps.
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            .build()
+        try {
+            cm.registerNetworkCallback(request, netCallback)
+            netCallbackRegistered = true
+        } catch (t: Throwable) {
+            Log.w(TAG, "registerNetworkCallback", t)
+        }
+    }
+
+    private fun unregisterNetworkCallback() {
+        if (!netCallbackRegistered) return
+        netCallbackRegistered = false
+        try {
+            getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(netCallback)
+        } catch (t: Throwable) {
+            Log.w(TAG, "unregisterNetworkCallback", t)
+        }
+    }
+
+    private fun onNetworkAvailable() {
+        if (!freshnessUnresolved) return
+        if (bleState != BleLink.State.CONNECTED) {
+            // Nothing to re-run against. The next link that comes up brings a
+            // CHECK_TILES of its own, which is the ordinary path.
+            addEvent("network back; the squares will be checked when the reader is next up")
+            return
+        }
+        retryFreshness()
+    }
+
+    /**
+     * Re-runs the freshness check now. Also the Home row's tap target, which is
+     * why it says what happened rather than failing silently (T-164).
+     */
+    fun retryFreshness(): Boolean {
+        if (bleState != BleLink.State.CONNECTED) {
+            addEvent("cannot check the squares: the reader is not connected")
+            notifyObserver()
+            return false
+        }
+        val started = freshness.retry()
+        if (!started) addEvent("a check is already running")
+        if (started) freshnessUnresolved = false
+        notifyObserver()
+        return started
     }
 
     fun setObserver(o: Observer?) {
@@ -664,6 +756,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         tileLog = tileLog.toList(),
         tileProgress = tileProgress,
         unpairedDeviceFound = ble.discoveredRecently(),
+        freshnessRetryable = freshnessUnresolved && bleState == BleLink.State.CONNECTED,
     )
 
     // --- recording ------------------------------------------------------
@@ -722,6 +815,12 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         bleState = state
         bleDetail = detail
         val isConnected = state == BleLink.State.CONNECTED
+        // Written from a live link and nowhere else, so Home can name the
+        // paired reader while it is asleep instead of guessing a model
+        // (T-163, CompanionWake.rememberName).
+        if (isConnected) {
+            CompanionWake.rememberName(this, ble.connectedAddress, ble.connectedName)
+        }
         // A fetch in flight is dead the moment the link is: the transfer's
         // offsets and the device's own .part file went with it.
         if (wasConnected && !isConnected) {
@@ -1204,9 +1303,29 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         tileFetcher.pushTiles(tiles.map { MissingTile(it.z, it.col, it.row, 0) }, deviceTileFormat)
     }
 
-    override fun onCheckFinished(examined: Int, stale: Int, reason: String) {
+    override fun onRecheckStarted() {
+        addTileLine("checking the map squares again")
+        notifyObserver()
+    }
+
+    override fun onCheckFinished(examined: Int, stale: Int, reason: String, networkFailure: Boolean) {
+        // Only a network failure leaves something worth retrying. A check the
+        // device cancelled, or one a dropped link ended, is answered by the
+        // next link coming up -- retrying those on a network event would talk
+        // to a device that is not there.
+        freshnessUnresolved = networkFailure
         tileFetchStatus = when {
-            stale < 0 -> "freshness unknown ($reason)"
+            // Rider wording, not the checker's own reason string. This row read
+            // `freshness unknown (index unreachable, 0 stale found anyway)` on
+            // the screen a rider looks at first (T-164, second half): three
+            // pieces of developer vocabulary and a count of nothing. What
+            // matters to them is that the squares on the reader were not
+            // checked, and that nothing was thrown away.
+            stale < 0 -> if (freshnessUnresolved) {
+                "could not check - no connection"
+            } else {
+                "could not check - $reason"
+            }
             stale == 0 -> "$examined tiles current"
             else -> "$stale of $examined tiles out of date"
         }
@@ -2358,7 +2477,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
     private fun notificationContent(): NotificationContent {
         val title = when (bleState) {
-            BleLink.State.CONNECTED -> "Connected to ${ble.connectedName ?: BleLink.DEVICE_NAME}"
+            BleLink.State.CONNECTED -> "Connected to ${ble.connectedName ?: "your reader"}"
             BleLink.State.SCANNING -> "Scanning for map device"
             BleLink.State.CONNECTING -> "Connecting"
             BleLink.State.DISCONNECTED -> "Disconnected, rescanning"

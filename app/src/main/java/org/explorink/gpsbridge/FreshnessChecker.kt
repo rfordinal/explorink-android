@@ -68,8 +68,17 @@ class FreshnessChecker(
     }
 
     interface Listener {
-        /** A check ended. [stale] is -1 when the answer was `unknown`. */
-        fun onCheckFinished(examined: Int, stale: Int, reason: String)
+        /**
+         * A check ended. [stale] is -1 when the answer was `unknown`.
+         *
+         * [networkFailure] separates the one `unknown` worth retrying -- this
+         * phone could not reach the index -- from every other way a check ends
+         * (the device cancelled, the link dropped, the listing was truncated).
+         * It is a flag rather than something read back out of [reason], because
+         * [reason] is a human sentence and matching on its words is a decision
+         * that breaks silently the next time one is reworded (T-164).
+         */
+        fun onCheckFinished(examined: Int, stale: Int, reason: String, networkFailure: Boolean)
 
         /**
          * The device asked whether the [count] squares it holds are still current,
@@ -77,6 +86,13 @@ class FreshnessChecker(
          * ask itself, everything else cares about the verdict.
          */
         fun onCheckStarted(count: Int) {}
+
+        /**
+         * This phone started a check on its own rather than being asked --
+         * [retry]. The count is not known yet at this point; it arrives with
+         * the device's reply.
+         */
+        fun onRecheckStarted() {}
 
         /**
          * These tiles are out of date, and this phone knows which content id
@@ -201,6 +217,39 @@ class FreshnessChecker(
         if (phase == Phase.LISTING) feed(line)
     }
 
+    /**
+     * Re-runs the check on this side's own initiative, instead of waiting for
+     * the device to ask again (T-164).
+     *
+     * **What it fixes.** The check only ever ran on a `CHECK_TILES` from the
+     * device, which arrives when a link comes up. A phone that was offline at
+     * that moment answered `unknown`, and Home then read `freshness unknown
+     * (index unreachable, 0 stale found anyway)` until the app was force-stopped
+     * -- measured 2026-11-13, with the CDN answering 200 the whole time and
+     * Wi-Fi back minutes later. A row that is no longer true, with no way to
+     * clear it, is worse than no row.
+     *
+     * The device does not have to ask for this to be legal: `have` is a
+     * request the phone makes and the device answers whenever the channel is
+     * up, which is the same exchange a device-initiated check performs. The
+     * backoff is cleared because the thing it was protecting against -- a
+     * phone with no network burning a timeout per attempt -- is exactly what
+     * has just changed.
+     *
+     * @return false when a check is already running, so the caller can say so
+     *         rather than silently doing nothing.
+     */
+    fun retry(): Boolean {
+        if (phase != Phase.IDLE) return false
+        blockedUntilMs = 0
+        backoffMs = BACKOFF_START_MS
+        // Same reason [start] bumps it: anything still in flight from an
+        // earlier check must not be able to answer for this one.
+        checkGen++
+        beginListing(null)
+        return true
+    }
+
     fun onDisconnected() {
         if (phase == Phase.IDLE) return
         // The channel any owed reply would have arrived on is gone with the
@@ -252,7 +301,7 @@ class FreshnessChecker(
             // pending flag instead of waiting out a timeout.
             if (hadFastLink) transport.setFastLink(false)
             answerChecked(0)
-            listener?.onCheckFinished(0, 0, "nothing to check")
+            listener?.onCheckFinished(0, 0, "nothing to check", networkFailure = false)
             return
         }
         val wait = blockedUntilMs - nowMs()
@@ -263,15 +312,27 @@ class FreshnessChecker(
             Log.i(TAG, "backing off ${wait}ms more before another check")
             if (hadFastLink) transport.setFastLink(false)
             answerUnknown()
-            listener?.onCheckFinished(0, -1, "backing off")
+            listener?.onCheckFinished(0, -1, "backing off", networkFailure = true)
             return
         }
 
-        Log.i(TAG, "device wants $count tile(s) checked, format ${formatVersion ?: "unstated"}")
-        listener?.onCheckStarted(count)
+        beginListing(count)
+    }
+
+    /**
+     * Asks the device for its held-tile list and starts answering for it.
+     *
+     * [count] is what the device said it holds, or null when this side is
+     * asking on its own ([retry]) and will only learn the number from the
+     * reply.
+     */
+    private fun beginListing(count: Int?) {
+        Log.i(TAG, "checking ${count ?: "an unstated number of"} tile(s), format ${formatVersion ?: "unstated"}")
+        if (count != null) listener?.onCheckStarted(count) else listener?.onRecheckStarted()
         phase = Phase.LISTING
         // For the duration of this check and no longer -- released in
-        // finish(), or just above if this call never reaches here at all.
+        // finish(), or by the count<=0/backoff answers in [start] that never
+        // reach this function at all.
         // Re-asserting true on a restart that continues straight into a new
         // LISTING is a harmless no-op on the link, same as TileFetcher's own
         // restart ([TileFetcher.startListing]).
@@ -503,9 +564,12 @@ class FreshnessChecker(
         transport.setFastLink(false)
         val wasExamined = examined
         val wasStale = if (incomplete) -1 else staleTiles.size
+        // [incomplete] is set only where a span could not be read or a read
+        // hung -- both are this phone's network, not the device's doing.
+        val wasNetwork = incomplete
         reset()
         Log.i(TAG, "check finished: $reason")
-        listener?.onCheckFinished(wasExamined, wasStale, reason)
+        listener?.onCheckFinished(wasExamined, wasStale, reason, wasNetwork)
     }
 
     private fun reset() {
