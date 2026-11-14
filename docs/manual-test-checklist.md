@@ -138,11 +138,16 @@ open, so nothing at the link layer reports anything. Needs a peer whose
 off is **a different test**, the one in 3.4: the ACL does drop there, which is
 the case the stacks already handle.
 
-**The Android simulator app is not the peer**, whatever the original 2026-08-23
-note suggests. Checked on an S24 on 2026-11-14: with its map open, the header
-draws Bluetooth crossed out and a 14 s laptop scan found nothing advertising
-our service UUID. The route that works is the **desktop** simulator with
-`tools/blebridge.py` in front of it -- a real BlueZ peripheral driven by the
+**The Android simulator app did not work as the peer on one phone, and that is
+not the same as it not working.** Checked on an S24 on 2026-11-14: map open,
+Bluetooth crossed out in its own header, 14 s laptop scan finding nothing on
+our service UUID. But `docs/PROGRESS.md` for 2026-08-23 records that same
+program serving GATT and advertising on two phones, and names the likely cause
+of a silent failure -- every `CROSSPOINT_SIM_*` setting is read out of a file
+by `SimulatorAndroidEnv` at the top of `main()`, so a missing file looks
+exactly like this. Check that before concluding. The other route, and the one
+with no such doubt, is the **desktop** simulator with `tools/blebridge.py` in
+front of it -- a real BlueZ peripheral driven by the
 firmware's own BLE code, so killing the bridge kills the peer's process:
 
 ```
@@ -157,7 +162,9 @@ Blocked while **T-2074** stands: `pio run -e simulator` does not build on
 2. Leave both parked, so the app sends nothing: the keepalive is an hour
    (`SendPolicy.KEEPALIVE_INTERVAL_MS`), and the point of the test is that
    there is no traffic to fail on.
-3. `adb shell am force-stop <the peripheral app>` on the other phone.
+3. Kill the peer's **process** -- `pkill -f blebridge.py` on the laptop for
+   the route above. Not a power-off and not a disconnect: the whole point is
+   that the ACL survives.
 4. **Within about two minutes the app must leave the connected state** and go
    back to scanning. Before T-540 it sat on `connected to <name>` for at least
    four minutes with nothing in its own log.
@@ -238,8 +245,8 @@ next to the previous run's, so the comparison is possible at all.
 3. With the phone offline: confirm the device gets `checked unknown`, not a
    false `stale` or `current`.
 4. **The failure has to be clearable without a restart** (T-164). Still in
-   that offline state, Home's map-squares row reads `could not check - no
-   connection`. Turn the phone's network back on with the reader still
+   that offline state, Home's map-squares row reads `no connection` (short on
+   purpose -- a longer value pushes the title onto three lines). Turn the phone's network back on with the reader still
    connected: the row must stop saying that on its own, within seconds of the
    network validating. Before this fix it kept the failure until the app was
    force-stopped.
