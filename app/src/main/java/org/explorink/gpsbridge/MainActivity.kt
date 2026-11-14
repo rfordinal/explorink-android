@@ -625,7 +625,12 @@ class MainActivity : Activity(), BridgeService.Observer {
      * see render()'s comment.
      */
     private fun currentLinkState(snap: BridgeService.Snapshot?): Triple<LinkState, String?, String?> {
+        // Falls back to the reader this phone knows it paired with: the system's
+        // association list can come back empty while the reader is still the
+        // rider's (T-170), and `Connect a device` is then the one thing that is
+        // certainly false -- the app is still reconnecting to that very board.
         val addr = CompanionWake.pairedAddress(this)
+            ?: CompanionWake.lastPairedAddress(this)
         val blocker = devicePlateBlocker()
         val state = when {
             blocker != null -> LinkState.HALT to blocker
@@ -698,6 +703,7 @@ class MainActivity : Activity(), BridgeService.Observer {
      * review (Opus) before this shipped as the ink/singular version.
      */
     private fun renderDevicePlate(snap: BridgeService.Snapshot?, link: LinkState, haltName: String?, addr: String?) {
+        val pairingLost = CompanionWake.pairingRecordLost(this)
         val icon: Int
         val background: Int
         val nameColor: Int
@@ -728,7 +734,10 @@ class MainActivity : Activity(), BridgeService.Observer {
                 nameColor = R.color.ui_ink
                 metaColor = R.color.ui_ink
                 name = readerName(snap, addr)
-                meta = if (snap?.rssi != null) "connected - ${snap.rssi} dBm" else "connected"
+                val live = if (snap?.rssi != null) "connected - ${snap.rssi} dBm" else "connected"
+                // The link is fine and stays the headline; the warning is the
+                // second clause, not a replacement for it (T-170).
+                meta = if (pairingLost) "$live · tap to pair again" else live
             }
 
             LinkState.NEVER_PAIRED -> {
@@ -748,10 +757,12 @@ class MainActivity : Activity(), BridgeService.Observer {
                 nameColor = R.color.ui_ash
                 metaColor = R.color.ui_ash
                 name = "Device resting"
-                meta = if (addr != null) {
-                    "wakes when you follow · paired ..${addr.takeLast(5)}"
-                } else {
-                    "normal - wakes when you follow"
+                // "wakes when you follow" is exactly what stops being true
+                // when the association is gone, so it must not be said then.
+                meta = when {
+                    pairingLost -> "will not wake on its own · tap to pair again"
+                    addr != null -> "wakes when you follow · paired ..${addr.takeLast(5)}"
+                    else -> "normal - wakes when you follow"
                 }
             }
 
@@ -986,6 +997,12 @@ class MainActivity : Activity(), BridgeService.Observer {
         val options = mutableListOf<Triple<String, Boolean, () -> Unit>>()
         if (blocker != null) {
             options.add(Triple("Fix: $blocker", false) { onRetryPressed() })
+        }
+        // Offered whatever the link is doing: the link being up is exactly the
+        // case where the rider would otherwise never hear that auto-start has
+        // stopped working (T-170).
+        if (CompanionWake.pairingRecordLost(this)) {
+            options.add(Triple("Pair again so it wakes on its own", false) { startPairing() })
         }
         if (addr != null && !hasBackgroundLocation()) {
             options.add(Triple("Allow location all the time", false) { onWakePressed() })
@@ -1235,6 +1252,14 @@ class MainActivity : Activity(), BridgeService.Observer {
         // grants it from Settings, which left this returning "Permission
         // needed" forever -- caught by Opus review, 2026-11-07.
         if (missingPermissions().isNotEmpty()) return "Permission needed"
+        // A lost pairing record is deliberately **not** a blocker. A blocker
+        // means "this is what keeps the plate from even trying", and nothing
+        // here does: the link reconnects to the remembered reader and sends
+        // position perfectly well. Making it one swapped `Connect a device`
+        // for `Pairing needs redoing` over a live link -- the same lie
+        // pointing the other way, measured on an S24 2026-11-14. The warning
+        // rides on the plate's meta line instead, where the real link state
+        // stays visible underneath it (T-170).
         val adapter = service?.bluetoothAdapter()
         if (adapter != null && !adapter.isEnabled) return "Bluetooth is off"
         val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager

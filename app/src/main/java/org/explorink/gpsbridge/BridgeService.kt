@@ -532,7 +532,20 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // The paired X4's address, re-read on every start: the rider can pair (or
         // forget) between two starts of this service, and an unpinned link would
         // connect to the first X4 that advertises.
-        ble.pinnedAddress = CompanionWake.pairedAddress(this)
+        //
+        // Falls back to what this phone remembers pairing with. The system's
+        // association list can come back empty while the reader is still the
+        // rider's (T-170), and an empty list is the one case where the pin --
+        // the thing that makes "one owner, one reader" exact -- would otherwise
+        // be dropped. Only ever a board this phone paired with itself; a
+        // deliberate unpair clears it.
+        val paired = CompanionWake.pairedAddress(this)
+        // Recorded here and not only at pairing time, so a phone that paired
+        // before this existed still has the evidence the next time it starts.
+        // Writing it on every start also keeps it honest if the rider pairs
+        // through some path that does not go through MainActivity.
+        CompanionWake.rememberPaired(this, paired)
+        ble.pinnedAddress = paired ?: CompanionWake.lastPairedAddress(this)
 
         goForeground()
         ble.start()
@@ -621,6 +634,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
      */
     fun bindTo(addr: String) {
         ble.pinnedAddress = addr
+        CompanionWake.rememberPaired(this, addr)
         addEvent("bound to $addr")
         logger?.logEvent("pair_bind", addr)
         ble.retry()

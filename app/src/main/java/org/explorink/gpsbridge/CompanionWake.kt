@@ -56,6 +56,9 @@ object CompanionWake {
     /** `device_name_<MAC>` -> the last name that MAC actually advertised. See [rememberName]. */
     private const val PREF_NAME_PREFIX = "device_name_"
 
+    /** The MAC this phone was last paired to. See [rememberPaired]. */
+    private const val PREF_LAST_PAIRED = "last_paired_address"
+
     private fun manager(context: Context): CompanionDeviceManager? =
         context.getSystemService(CompanionDeviceManager::class.java)
 
@@ -196,6 +199,7 @@ object CompanionWake {
         // Without a picked address the previous reader simply stays, which is
         // the old behaviour and loses nothing.
         if (picked != null) keepOnly(context, picked)
+        rememberPaired(context, addr)
         // Observe this address directly as well as re-arming from the list: on
         // the same phone the list can still be empty here, and
         // [startObserving] walking an empty list would observe nothing at all
@@ -328,6 +332,47 @@ object CompanionWake {
         }
     }
 
+    // --- what this phone knows it was paired to (T-170) ---------------------
+
+    /**
+     * Remembers the MAC this phone paired with, independently of the system's
+     * association list.
+     *
+     * **Because that list can come back empty while the pairing is still real
+     * to the rider.** Measured on an S24 on 2026-11-14: an association the app
+     * had made was listed by `dumpsys companiondevice` and returned by neither
+     * `myAssociations` nor the deprecated list, so [pairedAddress] was null and
+     * Home drew `Connect a device` at a rider whose reader was a metre away.
+     * `associatedAddresses`'s own `catch` can produce the same emptiness from a
+     * thrown exception, and it cannot be told apart from "genuinely unpaired".
+     *
+     * This is deliberately *not* a second source of truth for pairing --
+     * [pairedAddress] stays that. It is the evidence that lets the app say "I
+     * know which reader is yours, the system's record of it is gone" instead of
+     * the one thing that is certainly false.
+     */
+    fun rememberPaired(context: Context, addr: String?) {
+        if (addr.isNullOrBlank()) return
+        runCatching {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString(PREF_LAST_PAIRED, addr.uppercase())
+                .apply()
+        }
+    }
+
+    /** The MAC this phone last paired with, whatever the association list says. */
+    fun lastPairedAddress(context: Context): String? = runCatching {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(PREF_LAST_PAIRED, null)
+    }.getOrNull()?.ifBlank { null }
+
+    /**
+     * True when this phone knows its reader but the system no longer lists the
+     * association -- the state T-170 is about.
+     */
+    fun pairingRecordLost(context: Context): Boolean =
+        pairedAddress(context) == null && lastPairedAddress(context) != null
+
     // --- the paired reader's name (T-163) -----------------------------------
 
     /**
@@ -409,6 +454,13 @@ object CompanionWake {
                 Log.w(TAG, "disassociate $addr", t)
             }
             forgetName(context, addr)
+        }
+        // The rider asked for this one, so the evidence goes too -- otherwise
+        // [pairingRecordLost] would report a lost record for a pairing that was
+        // deliberately ended.
+        runCatching {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .remove(PREF_LAST_PAIRED).apply()
         }
     }
 }
