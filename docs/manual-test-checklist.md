@@ -133,11 +133,25 @@ one another by accident.
 ### 3.5 A peer that vanishes without dropping the link
 
 The case the stacks hide: a peripheral whose **process** dies keeps the ACL
-open, so nothing at the link layer reports anything. Needs a peripheral whose
-process can be killed, which a real reader is not -- use a second phone
-running the simulator as the peripheral (the original measurement, 2026-08-23,
-was made this way). Powering a real reader off is **a different test**, the one
-in 3.4, and it does not cover this.
+open, so nothing at the link layer reports anything. Needs a peer whose
+**process** can be killed, which a real reader is not. Powering a real reader
+off is **a different test**, the one in 3.4: the ACL does drop there, which is
+the case the stacks already handle.
+
+**The Android simulator app is not the peer**, whatever the original 2026-08-23
+note suggests. Checked on an S24 on 2026-11-14: with its map open, the header
+draws Bluetooth crossed out and a 14 s laptop scan found nothing advertising
+our service UUID. The route that works is the **desktop** simulator with
+`tools/blebridge.py` in front of it -- a real BlueZ peripheral driven by the
+firmware's own BLE code, so killing the bridge kills the peer's process:
+
+```
+CROSSPOINT_SIM_BLE_PORT=8765 .pio/build/simulator/program
+python3 tools/blebridge.py --sim 127.0.0.1:8765
+```
+
+Blocked while **T-2074** stands: `pio run -e simulator` does not build on
+`develop`.
 
 1. Connect the app to the simulator peripheral.
 2. Leave both parked, so the app sends nothing: the keepalive is an hour
