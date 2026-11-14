@@ -79,22 +79,22 @@ object CompanionWake {
     }
 
     /**
-     * One association's MAC, from whichever field actually carries it.
+     * One association's MAC, from whichever field carries it.
      *
-     * **`deviceMacAddress` alone is not enough** (T-170). On a Galaxy S24
-     * running Android 17 (SDK 37), an existing association for this app
-     * reported `mDeviceMacAddress=null` while the MAC sat inside its
-     * `associatedDevice`'s scan result -- and the old `mapNotNull` on that one
-     * field dropped the association outright. The app then believed it had
-     * never been paired: Home drew `Connect a device`, and far worse,
-     * `BleLink.pinnedAddress` went null, which is an unpinned scan that takes
-     * the first reader advertising. `pinnedAddress`'s own doc calls that "the
-     * one decision where the wrong device means sending a stranger's position
-     * to a stranger's map". Measured 2026-11-14 with the association plainly
-     * listed by `dumpsys companiondevice`.
+     * **Defensive, and not known to be needed.** Measured on a Galaxy S24
+     * (Android 17, SDK 37) on 2026-11-14, a freshly made association reports
+     * `deviceMacAddress` populated, so the first line answers and the fallback
+     * never runs: `id=18 name=LilyGoT5S3Map mac=30:ed:a0:a8:37:75 dev=true
+     * ble=true`. It is kept because the field is documented as nullable and
+     * the cost of it being null is not a missing name -- it is
+     * [pairedAddress] returning null, which leaves `BleLink.pinnedAddress`
+     * null, which is an unpinned scan that takes the first reader
+     * advertising. `pinnedAddress`'s own doc calls that "the one decision
+     * where the wrong device means sending a stranger's position to a
+     * stranger's map".
      *
-     * `associatedDevice` only exists from API 34, so API 33 exactly still has
-     * the one field and nothing to fall back on.
+     * `associatedDevice` only exists from API 34, so API 33 exactly has the
+     * one field and nothing to fall back on.
      */
     private fun addressOf(info: AssociationInfo): String? {
         info.deviceMacAddress?.toString()?.uppercase()?.let { return it }
