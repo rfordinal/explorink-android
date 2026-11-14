@@ -119,13 +119,24 @@ class BleLink(
         const val LIVENESS_PROBE_MS = 60_000L
 
         /**
-         * Probes the peer may refuse outright before the link counts as dead.
+         * Probes the peer may fail before the link counts as dead.
          *
          * Two, not one: a refusal with a real ATT error is a definite answer
-         * from a live stack, so a single one can be a transient (the queue was
-         * pumped at a bad moment, the peer was mid-reboot of its own GATT
-         * table). A probe that gets no answer at all does not come through here
-         * at all -- [GattOpQueue] already calls [handleLinkDead] for that.
+         * from a live stack, so a single one can be a transient -- the peer
+         * mid-reboot of its own GATT table, say.
+         *
+         * **A probe that gets no answer reaches this counter too**, which an
+         * earlier version of this comment denied. [GattOpQueue.onTimeout] calls
+         * the op's `done(false, "timeout")` at `WRITE_TIMEOUT_MS` *before* it
+         * arms the dead timer, so a silent peer lands here at 3 s with
+         * `error == "timeout"`. It cannot reach two that way, though: the
+         * timeout leaves a tombstone, `busy` stays true, and every later tick
+         * yields -- so the no-answer case is finished by
+         * [GattOpQueue.STACK_DEAD_TIMEOUT_MS] calling [handleLinkDead] at 30 s,
+         * and this counter is reached only by outright refusals. Detection of a
+         * peer whose process died is therefore about **90 s**: 60 s of silence,
+         * 3 s to time the probe out, 27 s more before the stack is called dead.
+         * Caught in review (Opus).
          */
         const val MAX_PROBE_FAILURES = 2
 
@@ -286,9 +297,24 @@ class BleLink(
      * model, not one name total -- confirmed on hardware 2026-11-08, an X3
      * and an X4 Pro side by side showed up as "XteinkX3Map" and
      * "XteinkX4ProMap", distinct), so the name/UUID filters below cannot tell
-     * two of the same model apart: unpaired, the app connects to whichever of
-     * them advertises first, which with two of the same model in range is a
-     * coin flip. Pairing removes the guess.
+     * two of the same model apart. Pairing removes the guess.
+     *
+     * **What null actually does, which this comment used to get wrong.** It
+     * claimed the app "connects to whichever advertises first, a coin flip".
+     * It does not: [handleScanResult] returns without connecting while
+     * [pinnedAddress] is null, surfacing a `discovered` event for Home's
+     * "something is advertising - tap to pick it" and leaving the choice to
+     * the rider's system picker. The stale sentence was read as fact by two
+     * independent reviewers and by the author of T-170, and the claim reached
+     * a TODO entry before anybody opened [handleScanResult]. Corrected
+     * 2026-11-14.
+     *
+     * The one path that **does** connect with no pin is [reconnectDirect]: it
+     * falls back to [lastAddress] and does no filtering at all, by design --
+     * see its own comment. That is a return to the board this phone was last
+     * talking to, not to a stranger's, and [clearRememberedAddress] drops it
+     * when the rider unpairs. It is still the place to look first if an
+     * unpinned link ever connects to something unexpected.
      */
     var pinnedAddress: String? = null
         set(value) {
@@ -1022,6 +1048,20 @@ class BleLink(
                         transferChar = null
                         statusChar = null
                         clientInfoChar = null
+                        // Both, and before failAllOps below. Without them an
+                        // ordinary disconnect fails the in-flight liveness read,
+                        // which counts as a refusal and can reach
+                        // MAX_PROBE_FAILURES -- firing handleLinkDead
+                        // re-entrantly inside the disconnect handler, writing
+                        // link_dead *before* disconnected and scheduling two
+                        // reconnects. And a probeChar left over here belongs to
+                        // a gatt that is about to be closed; the next
+                        // connection's tick can fire before exchangeVersions
+                        // replaces it, reading a stale characteristic off a dead
+                        // handle and calling a healthy link dead. Caught in
+                        // review (Opus).
+                        probeChar = null
+                        cancelLiveness()
                         deviceFirmwareVersion = null
                         deviceModel = null
                         tileChannelReady = false
@@ -1777,7 +1817,16 @@ class BleLink(
                     return
                 }
                 val ch = probeChar
-                if (ch == null || opQueue.busy) {
+                if (ch == null) {
+                    // Permanent for this connection, not transient: firmware
+                    // with no Device Information Service has nothing readable to
+                    // probe, and [exchangeVersions] has already said so once
+                    // with `liveness_unavailable`. Stop, rather than wake every
+                    // PROBE_RETRY_MS for the life of the link doing nothing --
+                    // the tick is re-armed by the next connect.
+                    return
+                }
+                if (opQueue.busy) {
                     // Real traffic is a better liveness test than a probe, so
                     // yielding to it costs nothing -- but look again soon rather
                     // than in a whole interval, or a link that is busy at every
@@ -1802,7 +1851,10 @@ class BleLink(
                     // A refused probe did not update [lastPeerReplyMs], so the
                     // second one is owed now rather than an interval away --
                     // the whole point is that a dead peer is noticed in about a
-                    // minute, not in four.
+                    // minute and a half, not in four (see [MAX_PROBE_FAILURES]
+                    // for where the 90 s comes from). Only outright refusals
+                    // get here fast; a silent peer is finished by the queue's
+                    // own dead timer instead.
                     livenessTick?.let {
                         main.removeCallbacks(it)
                         main.postDelayed(it, PROBE_RETRY_MS)

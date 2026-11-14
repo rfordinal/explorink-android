@@ -53,7 +53,7 @@ object CompanionWake {
      */
     private const val PREFS = "bridge"
 
-    /** `name_<MAC>` -> the last name that MAC actually advertised. See [rememberName]. */
+    /** `device_name_<MAC>` -> the last name that MAC actually advertised. See [rememberName]. */
     private const val PREF_NAME_PREFIX = "device_name_"
 
     private fun manager(context: Context): CompanionDeviceManager? =
@@ -182,11 +182,20 @@ object CompanionWake {
      * @return the paired address, or null if the rider cancelled.
      */
     fun onAssociationResult(context: Context, data: Intent? = null): String? {
-        val addr = addressFromResult(data) ?: pairedAddress(context) ?: return null
-        // Exactly one reader, always -- see [keepOnly] (T-168). Done before
-        // observing, so a replaced reader stops waking this app immediately
-        // rather than at the next launch.
-        keepOnly(context, addr)
+        val picked = addressFromResult(data)
+        val addr = picked ?: pairedAddress(context) ?: return null
+        // **Only ever the picker's own address.** [keepOnly] drops every other
+        // association, so handing it a *fallback* address would be destructive:
+        // the fallback is `associatedAddresses().firstOrNull()`, read from the
+        // list this file's own doc above documents as lagging right after the
+        // picker returns, in an order Android does not specify. Replacing
+        // reader B with reader A, with `addressFromResult` returning null and
+        // the list still reading `[B, ...]`, would disassociate **A -- the one
+        // the rider just chose** -- keep B, and pin the link to B while the
+        // toast said otherwise. Caught in review (Opus) before this shipped.
+        // Without a picked address the previous reader simply stays, which is
+        // the old behaviour and loses nothing.
+        if (picked != null) keepOnly(context, picked)
         // Observe this address directly as well as re-arming from the list: on
         // the same phone the list can still be empty here, and
         // [startObserving] walking an empty list would observe nothing at all

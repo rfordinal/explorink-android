@@ -254,9 +254,17 @@ class MainActivity : Activity(), BridgeService.Observer {
         }
         // No bridge at all, which is the commoner shape: onCreate declines to
         // start one while a permission is missing, and nothing tried again when
-        // it arrived. `bridgeEverStarted` is what keeps this from resurrecting a
-        // bridge that was stopped on purpose -- an idle stop or the rider's own
-        // Stop service both leave it true, and T-165's plate asks for a tap.
+        // it arrived.
+        //
+        // `bridgeEverStarted` guards it **within this activity instance only**,
+        // which is all that is needed: an idle stop leaves the instance alive
+        // with the flag true, so T-165's plate gets its tap instead of a silent
+        // restart. It is not a guard across instances and must not be read as
+        // one -- `onStopPressed` calls `finish()`, and the next launch's
+        // `onCreate` starts a bridge unconditionally once permissions allow.
+        // That is the pre-existing behaviour of a cold launch, not something
+        // this check decides. Caught in review (Opus), which read the earlier
+        // comment as claiming more than the code does.
         if (!bridgeEverStarted && !BridgeService.isRunning) {
             Log.i(TAG, "permissions are back and no bridge was ever started; starting one")
             startBridge()
@@ -639,6 +647,20 @@ class MainActivity : Activity(), BridgeService.Observer {
     }
 
     /**
+     * What to call the paired reader on screen (T-163).
+     *
+     * Three steps, most-live first: what the open link says it is, then the
+     * last name this MAC actually advertised
+     * ([CompanionWake.rememberedName]), then nothing model-specific at all.
+     * The old fallback was `BleLink.DEVICE_NAME` -- the plain X4's advertised
+     * name -- so a phone paired to an X4 Pro was told it held an X4 whenever
+     * the link was down, and a rider with two readers had nothing on screen
+     * that told the two apart (S10, 2026-11-13).
+     */
+    private fun readerName(snap: BridgeService.Snapshot?, addr: String?): String =
+        snap?.deviceName ?: CompanionWake.rememberedName(this, addr) ?: "Your reader"
+
+    /**
      * The device plate's four states, per Outline "Dizajn systém" ("Plocha
      * zariadenia") and the device-plate component sheet: connected (solid
      * ink border), resting (dashed, "normal - wakes when you follow"),
@@ -675,20 +697,6 @@ class MainActivity : Activity(), BridgeService.Observer {
      * banner -- this plate cannot say which board answered. Caught in
      * review (Opus) before this shipped as the ink/singular version.
      */
-    /**
-     * What to call the paired reader on screen (T-163).
-     *
-     * Three steps, most-live first: what the open link says it is, then the
-     * last name this MAC actually advertised
-     * ([CompanionWake.rememberedName]), then nothing model-specific at all.
-     * The old fallback was `BleLink.DEVICE_NAME` -- the plain X4's advertised
-     * name -- so a phone paired to an X4 Pro was told it held an X4 whenever
-     * the link was down, and a rider with two readers had nothing on screen
-     * that told the two apart (S10, 2026-11-13).
-     */
-    private fun readerName(snap: BridgeService.Snapshot?, addr: String?): String =
-        snap?.deviceName ?: CompanionWake.rememberedName(this, addr) ?: "Your reader"
-
     private fun renderDevicePlate(snap: BridgeService.Snapshot?, link: LinkState, haltName: String?, addr: String?) {
         val icon: Int
         val background: Int

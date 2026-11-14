@@ -328,6 +328,18 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private var freshnessUnresolved = false
 
     /**
+     * Uptime of the last check started by [onNetworkAvailable], so a flapping
+     * network cannot keep clearing the checker's own backoff.
+     *
+     * `onAvailable` fires on every transition to a validated network -- a
+     * Wi-Fi reconnect, a Wi-Fi/cellular handover, a VPN coming up -- and
+     * [FreshnessChecker.retry] resets the backoff by design, which is right for
+     * a rider's tap and wrong on a loop. Caught in review (Opus). The rider's
+     * own tap is never throttled.
+     */
+    private var lastAutoRetryMs = 0L
+
+    /**
      * Last line about a point-shard sync (T-561), same shape as
      * [tileFetchStatus]. Reuses [tileLog] rather than a log of its own: both
      * describe "what the device asked for and what came of it", and a rider
@@ -702,15 +714,23 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         }
     }
 
+    /** Shortest gap between two checks started by the network coming back. */
+    private val autoRetryGapMs = 60_000L
+
     private fun onNetworkAvailable() {
         if (!freshnessUnresolved) return
+        val now = SystemClock.uptimeMillis()
+        if (lastAutoRetryMs != 0L && now - lastAutoRetryMs < autoRetryGapMs) {
+            Log.i(TAG, "network back again inside the auto-retry gap; leaving the check alone")
+            return
+        }
         if (bleState != BleLink.State.CONNECTED) {
             // Nothing to re-run against. The next link that comes up brings a
             // CHECK_TILES of its own, which is the ordinary path.
             addEvent("network back; the squares will be checked when the reader is next up")
             return
         }
-        retryFreshness()
+        if (retryFreshness()) lastAutoRetryMs = now
     }
 
     /**

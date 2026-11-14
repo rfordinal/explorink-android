@@ -229,10 +229,6 @@ class GattOpQueue(
     }
 
     /**
-     * True if an op for [ch] is queued or in flight. What the position channel
-     * needs: a fix waiting behind another fix is stale by the time it goes out.
-     */
-    /**
      * True while anything is in flight or waiting -- including a tombstone, so
      * a timed-out op still counts as the stack being occupied (see the class
      * doc). Callers that only want to add optional work use this to stay out of
@@ -240,6 +236,10 @@ class GattOpQueue(
      */
     val busy: Boolean get() = inFlight != null || ops.isNotEmpty()
 
+    /**
+     * True if an op for [ch] is queued or in flight. What the position channel
+     * needs: a fix waiting behind another fix is stale by the time it goes out.
+     */
     fun hasPendingFor(ch: BluetoothGattCharacteristic): Boolean =
         inFlight?.characteristic === ch || ops.any { it.characteristic === ch }
 

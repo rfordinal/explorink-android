@@ -129,6 +129,17 @@ class FreshnessChecker(
     private var incomplete = false
 
     /**
+     * True once a span of this check failed **on the network** -- unreachable,
+     * or a read that hung. A strict subset of [incomplete], which is also set
+     * when bytes arrive fine but a slot will not parse: that is a short or
+     * truncated index, a content problem, and reporting it as a network
+     * failure made Home say `no connection` on a phone with a perfect one and
+     * then retry forever on every network event, never clearing. Caught in
+     * review (Opus).
+     */
+    private var networkIncomplete = false
+
+    /**
      * The `.tib` format version the device reads, stated on the most recent
      * `CHECK_TILES` or `NEED_TILES`, whichever was last. The index lives under
      * the same `/v<N>/` prefix as the tiles it describes, so a device on an
@@ -312,6 +323,12 @@ class FreshnessChecker(
             Log.i(TAG, "backing off ${wait}ms more before another check")
             if (hadFastLink) transport.setFastLink(false)
             answerUnknown()
+            // `networkFailure = true` even though this attempt never touched
+            // the network, and deliberately: the window only exists because a
+            // real attempt failed on it, nothing has changed since, and the
+            // flag is what keeps the retry offered and lets a returning network
+            // clear it. Saying `false` here would retire the affordance in the
+            // one state that most needs it.
             listener?.onCheckFinished(0, -1, "backing off", networkFailure = true)
             return
         }
@@ -462,6 +479,7 @@ class FreshnessChecker(
             is IndexSource.Result.Unreachable -> {
                 Log.w(TAG, "could not read ${span.relPath()}: ${result.why}")
                 incomplete = true
+                networkIncomplete = true
             }
         }
         readNextSpan()
@@ -533,7 +551,10 @@ class FreshnessChecker(
                 // same honest exit as one: report what is certain, say unknown,
                 // back off.
                 Phase.READING -> {
+                    // A hung HTTP read is the offline case wearing a different
+                    // hat, so it counts for [networkIncomplete] too.
                     incomplete = true
+                    networkIncomplete = true
                     pending.clear()
                     report()
                 }
@@ -564,9 +585,7 @@ class FreshnessChecker(
         transport.setFastLink(false)
         val wasExamined = examined
         val wasStale = if (incomplete) -1 else staleTiles.size
-        // [incomplete] is set only where a span could not be read or a read
-        // hung -- both are this phone's network, not the device's doing.
-        val wasNetwork = incomplete
+        val wasNetwork = networkIncomplete
         reset()
         Log.i(TAG, "check finished: $reason")
         listener?.onCheckFinished(wasExamined, wasStale, reason, wasNetwork)
@@ -580,6 +599,7 @@ class FreshnessChecker(
         staleTiles.clear()
         examined = 0
         incomplete = false
+        networkIncomplete = false
     }
 }
 
