@@ -90,11 +90,12 @@ object CompanionWake {
      * never runs: `id=18 name=LilyGoT5S3Map mac=30:ed:a0:a8:37:75 dev=true
      * ble=true`. It is kept because the field is documented as nullable and
      * the cost of it being null is not a missing name -- it is
-     * [pairedAddress] returning null, which leaves `BleLink.pinnedAddress`
-     * null, which is an unpinned scan that takes the first reader
-     * advertising. `pinnedAddress`'s own doc calls that "the one decision
-     * where the wrong device means sending a stranger's position to a
-     * stranger's map".
+     * [pairedAddress] returning null, and everything that hangs off knowing
+     * which reader is the rider's: the plate, the pin, and whether this app
+     * believes it was ever paired at all. See [BleLink.pinnedAddress] for what
+     * an unpinned link actually does. An earlier version of this comment said
+     * it "takes the first reader advertising" and cited that doc as the
+     * authority; the doc was stale and now repudiates the sentence by name.
      *
      * `associatedDevice` only exists from API 34, so API 33 exactly has the
      * one field and nothing to fall back on.

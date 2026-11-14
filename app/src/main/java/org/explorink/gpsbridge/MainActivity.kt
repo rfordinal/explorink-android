@@ -111,10 +111,11 @@ class MainActivity : Activity(), BridgeService.Observer {
      * known: `service?.bindTo(addr)` silently did nothing, and the service's
      * own `onStartCommand` then pinned the link from
      * `CompanionWake.pairedAddress()` -- the association-list read T-162 found
-     * lagging on this phone. An unpinned link connects to the first reader
-     * that advertises, which with two in the room is the wrong one
-     * (BleLink.pinnedAddress: "the one decision where the wrong device means
-     * sending a stranger's position to a stranger's map").
+     * lagging on this phone, which on a first pairing leaves the link pinned
+     * to nothing at all. See [BleLink.pinnedAddress] for what an unpinned link
+     * does and does not do; an earlier version of this comment claimed it
+     * connects to whichever reader advertises first, and that was already
+     * false when it was written.
      */
     private var pendingBindAddr: String? = null
 
@@ -475,7 +476,16 @@ class MainActivity : Activity(), BridgeService.Observer {
      * finds out days later when a ride starts with no position on the panel.
      */
     private fun onForgetPressed() {
-        val addr = CompanionWake.pairedAddress(this) ?: return
+        // The remembered address counts, not just the system's association.
+        // T-170 made "the list is empty" survivable -- the app keeps the MAC
+        // and keeps reconnecting to it -- and that turned this `?: return`
+        // into a trap: in exactly that state Forget did nothing at all, no
+        // dialog and no toast, while `forgetPairing()` is the only thing that
+        // clears the remembered address. The rider had no way to stop the app
+        // returning to that reader. Caught in review (Opus) before merge.
+        val addr = CompanionWake.pairedAddress(this)
+            ?: CompanionWake.lastPairedAddress(this)
+            ?: return
         AlertDialog.Builder(this)
             .setTitle("Forget $addr?")
             .setMessage(
@@ -483,8 +493,18 @@ class MainActivity : Activity(), BridgeService.Observer {
                     "will stop connecting to anything until you pair again."
             )
             .setPositiveButton("Forget") { _, _ ->
-                service?.forgetPairing()
-                Toast.makeText(this, "unpaired", Toast.LENGTH_SHORT).show()
+                val s = service
+                if (s != null) {
+                    s.forgetPairing()
+                    Toast.makeText(this, "unpaired", Toast.LENGTH_SHORT).show()
+                } else {
+                    // Same reason the toast exists at all: it must not report
+                    // something that did not happen. With no service there is
+                    // nothing to clear the association or the remembered
+                    // address, so say that rather than "unpaired".
+                    CompanionWake.forget(this)
+                    Toast.makeText(this, "unpaired - start the app again to stop the link", Toast.LENGTH_LONG).show()
+                }
                 render()
             }
             .setNegativeButton("Keep", null)
