@@ -220,10 +220,46 @@ object CompanionWake {
      *
      * If a rider ever needs to carry two, that is a deliberate feature with a
      * UI of its own, not a side effect of this function being absent.
+     *
+     * **"Exactly one" is what this aims at, not what it can always deliver.**
+     * An association [addressOf] cannot resolve is invisible to
+     * [associatedAddresses] and therefore cannot be dropped here either -- the
+     * S24 carries one such dead record from 2026-11-09 that survives every
+     * call (T-170, T-171). Same-MAC duplicates *are* handled, by id, from
+     * API 33 up.
      */
     fun keepOnly(context: Context, addr: String) {
         val cdm = manager(context) ?: return
         val keep = addr.uppercase()
+        // **Same-MAC duplicates are the common case, not an edge one.** Picking
+        // the same reader twice makes the system create a *second* association
+        // for it, and the address-only loop below treats both as "the one to
+        // keep" and drops neither: measured on an S24 on 2026-11-14, re-pairing
+        // one T5 S3 left ids 18 and 19 both holding 30:ed:a0:a8:37:75, each
+        // with its own presence observer. Where the ids are visible (API 33+),
+        // keep the newest and disassociate the rest by id first; the
+        // address-keyed loop afterwards then has only genuinely different
+        // readers left to remove. Below API 33 the system hands out bare
+        // strings with no id, so duplicates cannot be told apart there and this
+        // step is skipped.
+        if (Build.VERSION.SDK_INT >= 33) {
+            runCatching {
+                val sameMac = cdm.myAssociations.filter {
+                    addressOf(it)?.equals(keep, ignoreCase = true) == true
+                }
+                if (sameMac.size > 1) {
+                    val newest = sameMac.maxByOrNull { it.id }
+                    for (dup in sameMac) {
+                        if (dup.id == newest?.id) continue
+                        runCatching {
+                            @Suppress("DEPRECATION")
+                            cdm.disassociate(dup.id)
+                            Log.i(TAG, "dropped duplicate association ${dup.id} for $keep")
+                        }
+                    }
+                }
+            }.onFailure { Log.w(TAG, "de-duplicating associations for $keep", it) }
+        }
         for (other in associatedAddresses(context)) {
             if (other.equals(keep, ignoreCase = true)) continue
             try {
