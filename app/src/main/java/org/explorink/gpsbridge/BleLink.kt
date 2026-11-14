@@ -309,12 +309,18 @@ class BleLink(
      * a TODO entry before anybody opened [handleScanResult]. Corrected
      * 2026-11-14.
      *
-     * The one path that **does** connect with no pin is [reconnectDirect]: it
-     * falls back to [lastAddress] and does no filtering at all, by design --
-     * see its own comment. That is a return to the board this phone was last
-     * talking to, not to a stranger's, and [clearRememberedAddress] drops it
-     * when the rider unpairs. It is still the place to look first if an
-     * unpinned link ever connects to something unexpected.
+     * The one path that **does** connect with no pin is [reconnectDirect], and
+     * that is the product rule rather than a gap: one owner, one reader, and
+     * the link comes back silently every time with no prompt and no tap
+     * (maintainer, 2026-11-14 -- `docs/ble-app-wake.md`, "One owner, one
+     * reader, and no questions on the way back"). It filters nothing because
+     * a scan is throttled to nothing with the screen off, so the cautious
+     * option is the one that leaves the rider with a dead link.
+     *
+     * The safety sits upstream of it: [lastAddress] only ever holds a board
+     * this phone has itself connected to, a pin overrides it, and
+     * [clearRememberedAddress] drops it on an unpair. A reader this phone was
+     * never paired to cannot get into it.
      */
     var pinnedAddress: String? = null
         set(value) {
