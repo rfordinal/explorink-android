@@ -597,6 +597,25 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         notifyObserver()
     }
 
+    /**
+     * Pins the link to one address and starts looking for it, without going
+     * through the association list.
+     *
+     * [resumeLink] reads `CompanionWake.pairedAddress()`, which is the read
+     * T-162 found lagging right after the companion picker returns. Called
+     * there, it pinned nothing after a first pairing and pinned the *previous*
+     * reader after a replacement (T-168). The picker's result carries the
+     * address, so the caller passes it in rather than asking the system again.
+     */
+    fun bindTo(addr: String) {
+        ble.pinnedAddress = addr
+        addEvent("bound to $addr")
+        logger?.logEvent("pair_bind", addr)
+        ble.retry()
+        armIdleStop()
+        notifyObserver()
+    }
+
     /** Re-reads the paired address and starts looking again. */
     fun resumeLink() {
         ble.pinnedAddress = CompanionWake.pairedAddress(this)

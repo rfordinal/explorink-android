@@ -976,6 +976,22 @@ class BleLink(
             main.post {
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> {
+                        // A direct reconnect never scans, so there is no
+                        // advertisement to take a name from and [connectedName]
+                        // is still null here -- which is every connect to a
+                        // pinned address, i.e. the normal case once a reader is
+                        // paired. The stack's own cached name for the peer is
+                        // the only name available on this path, and without it
+                        // Home has nothing to call the reader even while the
+                        // link is up (T-163, seen on the S10 2026-11-14: the
+                        // plate dialog said "Your reader" over a live link).
+                        if (connectedName == null) {
+                            connectedName = try {
+                                g.device?.name?.takeIf { it.isNotBlank() }
+                            } catch (t: Throwable) {
+                                null
+                            }
+                        }
                         listener.onBleEvent(
                             "connected",
                             connectedName,
@@ -1740,6 +1756,11 @@ class BleLink(
                 if (SystemClock.uptimeMillis() - lastPeerReplyMs < LIVENESS_PROBE_MS) return
                 val ch = probeChar ?: return
                 if (opQueue.busy) return
+                // Logged, not evented: one line a minute would bury the plate's
+                // own event log, but a probe that silently never fires would
+                // also pass every test for it. `adb logcat -s BleLink` is where
+                // a tester counts them (manual-test-checklist.md, 3.7).
+                Log.i(TAG, "liveness probe")
                 enqueueRead("liveness", ch) { ok, error ->
                     if (ok) return@enqueueRead
                     probeFailures++

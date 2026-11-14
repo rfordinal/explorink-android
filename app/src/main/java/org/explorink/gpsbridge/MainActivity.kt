@@ -305,23 +305,36 @@ class MainActivity : Activity(), BridgeService.Observer {
      * Two steps, in this order because the second is pointless without the first:
      * pair the X4, then grant background location.
      */
+    /**
+     * Opens the system companion picker.
+     *
+     * Pulled out of [onWakePressed] so pairing is reachable with a reader
+     * already paired, which is what switching readers needs (T-168). The
+     * picker is the same either way: it lists what is advertising, and
+     * whatever the rider picks becomes the one paired reader
+     * ([CompanionWake.keepOnly]).
+     */
+    private fun startPairing() {
+        // The link has to go first. A connected reader stops advertising, and
+        // the pairing dialog can only list what it sees advertising -- with the
+        // bridge up the dialog stays empty forever. Restored in
+        // onActivityResult, whichever way the dialog ends.
+        service?.pauseLinkForPairing()
+        CompanionWake.requestAssociation(this) { error ->
+            main.post {
+                Toast.makeText(
+                    this,
+                    "pairing failed: ${error ?: "no device found -- open the map screen on it"}",
+                    Toast.LENGTH_LONG,
+                ).show()
+                resumeLinkOrStart()
+            }
+        }
+    }
+
     private fun onWakePressed() {
         if (!CompanionWake.isPaired(this)) {
-            // The link has to go first. A connected X4 stops advertising, and the
-            // pairing dialog can only list what it sees advertising -- with the
-            // bridge up the dialog stays empty forever. Restored in
-            // onActivityResult, whichever way the dialog ends.
-            service?.pauseLinkForPairing()
-            CompanionWake.requestAssociation(this) { error ->
-                main.post {
-                    Toast.makeText(
-                        this,
-                        "pairing failed: ${error ?: "no device found -- open the map screen on it"}",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    resumeLinkOrStart()
-                }
-            }
+            startPairing()
             return
         }
         if (!hasBackgroundLocation()) {
@@ -416,6 +429,11 @@ class MainActivity : Activity(), BridgeService.Observer {
         // `data`, not a fresh read of the association list -- see
         // CompanionWake.onAssociationResult's doc (T-162).
         val addr = CompanionWake.onAssociationResult(this, data)
+        // resumeLinkOrStart() above re-pinned the link from the association
+        // list, which is exactly the read T-162 found lagging -- so after a
+        // first pairing it pinned nothing, and after a replacement it pinned
+        // the reader being replaced. Bind to the address the picker returned.
+        if (addr != null) service?.bindTo(addr)
         Toast.makeText(
             this,
             if (addr != null) "paired with $addr" else "pairing did not complete",
@@ -887,6 +905,13 @@ class MainActivity : Activity(), BridgeService.Observer {
         }
         if (blocker == null && snap?.bleState != BleLink.State.CONNECTED) {
             options.add(Triple("Connect now", false) { onRetryPressed() })
+        }
+        // Switching readers used to mean Forget, then pair -- two steps, the
+        // first red, under a confirm, and worded as a loss. This is the one
+        // step it should have been: pick the other reader, and it replaces
+        // this one (T-168).
+        if (blocker == null && addr != null) {
+            options.add(Triple("Pair a different reader", false) { startPairing() })
         }
         // Starting a recording from here too, not only the app bar's
         // ellipsis: the device plate is the natural place to ask for it,

@@ -155,6 +155,10 @@ object CompanionWake {
      */
     fun onAssociationResult(context: Context, data: Intent? = null): String? {
         val addr = addressFromResult(data) ?: pairedAddress(context) ?: return null
+        // Exactly one reader, always -- see [keepOnly] (T-168). Done before
+        // observing, so a replaced reader stops waking this app immediately
+        // rather than at the next launch.
+        keepOnly(context, addr)
         // Observe this address directly as well as re-arming from the list: on
         // the same phone the list can still be empty here, and
         // [startObserving] walking an empty list would observe nothing at all
@@ -162,6 +166,44 @@ object CompanionWake {
         observe(context, addr)
         startObserving(context)
         return addr
+    }
+
+    /**
+     * Makes [addr] the one association this app holds, dropping any other.
+     *
+     * **Why the app holds exactly one.** `CompanionDeviceManager` can hold
+     * several, and nothing above it chose between them: [pairedAddress] was
+     * `firstOrNull()` of a system-ordered list, and `BleLink.pinnedAddress`
+     * takes that single value. A second association would therefore have
+     * decided which reader the phone follows by an order no rider can see.
+     * Rather than invent a picker for a set nobody asked for, pairing a reader
+     * now *replaces* the previous one -- which is also what the rider means
+     * when they pair a second reader, and it makes "switch to the other one"
+     * a single action instead of Forget-then-pair (T-168).
+     *
+     * If a rider ever needs to carry two, that is a deliberate feature with a
+     * UI of its own, not a side effect of this function being absent.
+     */
+    fun keepOnly(context: Context, addr: String) {
+        val cdm = manager(context) ?: return
+        val keep = addr.uppercase()
+        for (other in associatedAddresses(context)) {
+            if (other.equals(keep, ignoreCase = true)) continue
+            try {
+                @Suppress("DEPRECATION")
+                cdm.stopObservingDevicePresence(other)
+            } catch (t: Throwable) {
+                Log.w(TAG, "stopObservingDevicePresence $other", t)
+            }
+            try {
+                @Suppress("DEPRECATION")
+                cdm.disassociate(other)
+                Log.i(TAG, "replaced by $keep: dropped $other")
+            } catch (t: Throwable) {
+                Log.w(TAG, "disassociate $other", t)
+            }
+            forgetName(context, other)
+        }
     }
 
     /**

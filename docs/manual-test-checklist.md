@@ -7,7 +7,7 @@ touches, plus 1 and 2 always.
 
 Record a run as: date, phone model, Android version **and SDK level**, app
 version (`versionName-g<sha>`), paired device model **and firmware build**,
-which sections run, pass/fail per section, and the measurements section 3.6
+which sections run, pass/fail per section, and the measurements section 3.7
 asks for. Keep that record in the session's own notes or `docs/PROGRESS.md` in
 the parent repo, not in this file. This file is the steps, not the log.
 
@@ -40,7 +40,7 @@ way this app degrades in practice. That is what the numbers are for.
 
 This section is the one that decays quietly. A link that takes twice as long
 to come up, or drops twice as often, still passes a yes/no check. **So every
-run writes down the numbers in 3.6, not just a tick.** A run with no numbers
+run writes down the numbers in 3.7, not just a tick.** A run with no numbers
 cannot be compared to the next one.
 
 Run the whole section after any change to `BleLink`, `CompanionWake`,
@@ -131,7 +131,27 @@ in 3.4, and it does not cover this.
    `liveness_unavailable` event at connect time instead, and no probe. That is
    a stated limit, not a failure -- but say which firmware the run used.
 
-### 3.6 Numbers to write down
+### 3.6 Swapping to a second reader
+
+The app holds **exactly one** reader. Pairing a second one replaces the first
+(`CompanionWake.keepOnly`), so this is a switch, not a second pairing.
+
+1. With reader A paired and working, pick up reader B and open its map screen
+   so it advertises.
+2. Tap the device plate, then `Pair a different reader`. The system picker
+   lists both readers.
+3. Pick B. **No Forget anywhere in this.** The toast names B's address, and
+   the plate goes to B.
+4. After switching, Home names **B** -- the plate, the plate dialog's title
+   and the `paired ..<suffix>` line all agree, and none of them still says A.
+5. **A's association is gone, not merely unused.**
+   `adb shell dumpsys companiondevice | grep explorink` must list one address
+   and it must be B's. Two addresses means the replacement did not happen,
+   and which reader the phone follows is then decided by the system's list
+   order, which no rider can see.
+6. Switch back to A the same way and confirm it is the same three taps.
+
+### 3.7 Numbers to write down
 
 Measured with the reader's map screen open and the phone next to it, unless a
 line says otherwise. Take each one three times and record the median.
@@ -143,7 +163,7 @@ line says otherwise. Take each one three times and record the median.
 | RSSI at one metre | plate's `connected - N dBm` | a big change means the advertisement or the scan changed |
 | Dropped links in 10 min parked | plate dialog event log, count `disconnected` | should be zero; anything else is new |
 | `sent ok / failed` after a 10 min walk | instrument row dialog | failures were rare before; a ratio that moved is a regression |
-| Liveness probes in 10 min parked | event log, count `liveness` reads | roughly one a minute while nothing else talks, and none at all while a transfer runs |
+| Liveness probes in 10 min parked | `adb logcat -s BleLink` and count `liveness probe` | roughly one a minute while nothing else talks, and none at all while a transfer runs. Deliberately not in the plate's event log -- one line a minute would bury it |
 
 Write these into the session's notes or `docs/PROGRESS.md` in the parent repo,
 next to the previous run's, so the comparison is possible at all.
