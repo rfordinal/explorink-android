@@ -95,7 +95,7 @@ object WalletCrypto {
     // --- assets: AES-256-CTR -----------------------------------------------
 
     /**
-     * The 16-byte CTR IV of one asset.
+     * The 16-byte CTR IV of one asset, the **legacy** assetId form.
      *
      *     assetId raw bytes (8) || u32 version little endian || u32 zero
      *
@@ -103,6 +103,13 @@ object WalletCrypto {
      * 128-bit block, which is the same thing as incrementing that last word until
      * it would carry -- and it cannot: the biggest asset here is a page image of a
      * few hundred thousand bytes, tens of thousands of blocks.
+     *
+     * **Nothing writes this form any more** (2026-11-23). An assetId is a hash of
+     * the recipe -- panel, item, page, type, index, version -- with no content in
+     * it, and `version` was a constant 1, so re-importing a document under the same
+     * title and the same source filenames encrypted different bytes under the same
+     * keystream. Reading a card written before the change still needs it, which is
+     * why it is here rather than deleted.
      */
     fun assetIv(assetId: String, version: Int): ByteArray {
         require(assetId.length == 16) { "assetId must be 8 bytes of hex, got '$assetId'" }
@@ -110,6 +117,29 @@ object WalletCrypto {
         for (i in 0 until 8) {
             iv[i] = ((hexDigit(assetId[2 * i]) shl 4) or hexDigit(assetId[2 * i + 1])).toByte()
         }
+        for (i in 0 until 4) iv[8 + i] = ((version ushr (8 * i)) and 0xff).toByte()
+        // 12..15 stay zero: the block counter.
+        return iv
+    }
+
+    /**
+     * The 16-byte CTR IV an asset's own header asks for.
+     *
+     *     content form:  sha256(payload)[0:8] || u32 version LE || u32 zero
+     *     legacy form:   assetId raw bytes (8) || u32 version LE || u32 zero
+     *
+     * The header is cleartext and carries both the hash and the version, so the
+     * device rebuilds this before it has decrypted a byte. The content form is what
+     * makes a re-render safe: different bytes, different keystream, with the
+     * assetId unchanged so delta sync still falls out of the ledger arithmetic.
+     */
+    fun assetIvFromHeader(assetId: String, header: ByteArray): ByteArray {
+        val version = WalletFormat.versionOfHeader(header)
+        if ((WalletFormat.flagsOfHeader(header) and WalletFormat.FLAG_CONTENT_IV) == 0) {
+            return assetIv(assetId, version)
+        }
+        val iv = ByteArray(16)
+        System.arraycopy(WalletFormat.shaPrefixOfHeader(header), 0, iv, 0, 8)
         for (i in 0 until 4) iv[8 + i] = ((version ushr (8 * i)) and 0xff).toByte()
         // 12..15 stay zero: the block counter.
         return iv
@@ -282,8 +312,9 @@ object WalletCrypto {
  * they are an integrity check after decryption and **not a MAC** -- they do not
  * authenticate the ciphertext, and only the manifest is authenticated.
  *
- * The IV needs the asset's `version`, and the header already carries it at offset
- * 16, so nothing above this has to pass it twice.
+ * The IV needs the asset's `version` and its payload hash, and the header already
+ * carries both -- offset 16 and offset 24 -- so nothing above this has to pass
+ * either one twice.
  *
  * **No sidecar.** An encrypted tree writes no `.rle` at all: ciphertext does not
  * compress (measured 3.89x down to 0.99x, `docs/wallet-format.md` section 12), so
@@ -293,16 +324,14 @@ class Aes256CtrCipher(key: ByteArray) : AssetCipher {
 
     private val key = WalletCrypto.requireKey(key.copyOf())
 
-    override val flags: Int get() = WalletFormat.FLAG_ENCRYPTED
+    override val flags: Int get() = WalletFormat.FLAG_ENCRYPTED or WalletFormat.FLAG_CONTENT_IV
 
     override val encrypted: Boolean get() = true
 
     override val writesSidecar: Boolean get() = false
 
-    override fun seal(assetId: String, header: ByteArray, payload: ByteArray): ByteArray {
-        val version = WalletFormat.versionOfHeader(header)
-        return WalletCrypto.ctrCrypt(key, WalletCrypto.assetIv(assetId, version), payload)
-    }
+    override fun seal(assetId: String, header: ByteArray, payload: ByteArray): ByteArray =
+        WalletCrypto.ctrCrypt(key, WalletCrypto.assetIvFromHeader(assetId, header), payload)
 
     /**
      * Never called on an encrypted tree, because no sidecar is written. Kept honest

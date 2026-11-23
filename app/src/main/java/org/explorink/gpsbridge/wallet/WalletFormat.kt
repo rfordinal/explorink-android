@@ -66,6 +66,14 @@ object WalletFormat {
      */
     const val FLAG_ENCRYPTED = 0x01
 
+    /**
+     * The asset's CTR IV comes from its own `sha256_prefix`, not from its assetId
+     * ([WalletCrypto.assetIvFromHeader]). Set on every encrypted asset written
+     * since 2026-11-23; an encrypted card written before that carries only
+     * [FLAG_ENCRYPTED] and is still read with the old derivation.
+     */
+    const val FLAG_CONTENT_IV = 0x02
+
     /** Document upright with the device held landscape; payload not rotated. */
     const val PRESENTATION_LANDSCAPE = 0
 
@@ -233,6 +241,18 @@ object WalletFormat {
      * needs it for the CTR IV and the header already carries it, so nothing above has
      * to pass it a second time.
      */
+    /** `sha256(payload)[0:8]` out of a built header (offset 24). The IV seam needs it. */
+    fun shaPrefixOfHeader(header: ByteArray): ByteArray {
+        require(header.size >= ASSET_HEADER_LEN) { "not an asset header" }
+        return header.copyOfRange(24, 32)
+    }
+
+    /** The `flags` byte out of a built header (offset 20). */
+    fun flagsOfHeader(header: ByteArray): Int {
+        require(header.size >= ASSET_HEADER_LEN) { "not an asset header" }
+        return header[20].toInt() and 0xff
+    }
+
     fun versionOfHeader(header: ByteArray): Int {
         require(header.size >= ASSET_HEADER_LEN) { "not an asset header" }
         var v = 0
