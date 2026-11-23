@@ -70,7 +70,7 @@ object TransferFrames {
     }
 
     /**
-     * `base/<z>/<col>/<row>.tib` -- relative to `/trailink` on the card, the
+     * `base/<z>/<col>/<row>.tib` -- relative to `/explorink` on the card, the
      * layout `MapTileSource::buildPath()` reads and the CDN's `out_dir` mirrors
      * (`mapbuilder/tilegen/tiles.py`).
      */

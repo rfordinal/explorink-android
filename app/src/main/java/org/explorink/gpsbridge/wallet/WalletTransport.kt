@@ -107,7 +107,7 @@ interface WalletTransport {
     }
 }
 
-/** One file to put on the card. [relPath] is relative to `/trailink`. */
+/** One file to put on the card. [relPath] is relative to `/explorink`. */
 class SendJob(
     val relPath: String,
     val bytes: ByteArray,

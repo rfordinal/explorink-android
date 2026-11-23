@@ -200,14 +200,14 @@ class WalletBleTransportTest {
 
         assertNull(r.failed)
         assertTrue(r.confirmed!!.startsWith("OK 1000 "))
-        // Relative to /trailink, which is what a begin frame wants -- and that means
-        // **no** "trailink/" of our own. The receiver prepends its root:
+        // Relative to the card root, which is what a begin frame wants -- and that means
+        // **no** root of our own. The receiver prepends its own:
         // MapTransferReceiver.cpp does `snprintf(finalPath_, ..., "%s/%s", rootDir_, rel)`
-        // with rootDir_ = "/trailink".
+        // with rootDir_ = "/explorink".
         //
-        // This assertion used to expect "trailink/wallet/..." and passed, because the
+        // This assertion used to expect the root in the path and passed, because the
         // transport agreed with it. On hardware 2026-08-19 that shipped a 25-file sync
-        // whose every file landed at /trailink/trailink/wallet/... The device answered
+        // whose every file landed at <root>/<root>/wallet/... The device answered
         // `OK <bytes> <crc32>` for each one -- it had written and verified exactly what
         // it was asked for -- and the wallet stayed invisible. A test that agrees with
         // the code proves nothing about the other end of the wire.
@@ -432,7 +432,7 @@ class WalletBleTransportTest {
         assertTrue(q.pending().isEmpty())
         assertEquals(q.plan.size, landed.size)
         for (a in q.plan) {
-            // No "trailink/" prefix: the begin frame's path is relative to the
+            // No card-root prefix: the begin frame's path is relative to the
             // receiver's own root (see the wire-path assertion above).
             val bytes = landed[a.relPath]!!
             assertEquals(a.sha256, WalletFormat.sha256Hex(bytes))

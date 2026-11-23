@@ -127,7 +127,7 @@ class WalletSyncPlanTest {
     }
 
     @Test
-    fun the_card_path_is_relative_to_trailink_and_shard_sharded() {
+    fun the_card_path_is_relative_to_the_card_root_and_shard_sharded() {
         val store = SyncFixtures.store()
         SyncFixtures.addItem(store, "Passport")
         val plan = WalletSyncPlan.build(store.load(), store.treeDir)
@@ -135,7 +135,7 @@ class WalletSyncPlanTest {
         assertEquals("wallet/${a.key.substring(0, 2)}/${a.key}.dat", a.relPath)
         assertEquals("wallet/manifest.json", plan.first { it.isManifest }.relPath)
         // The device's own path rules, so a doomed transfer is never begun.
-        assertTrue(plan.all { org.explorink.gpsbridge.TransferFrames.isSafeRelPath("trailink/${it.relPath}") })
+        assertTrue(plan.all { org.explorink.gpsbridge.TransferFrames.isSafeRelPath("explorink/${it.relPath}") })
     }
 
     @Test

@@ -31,7 +31,7 @@ class WalletWifiTransportTest {
     fun setUp() {
         device = WifiDeviceDouble().start()
         transport = WalletWifiTransport(device.host, device.port)
-        File(device.cardRoot, "trailink").mkdirs()
+        File(device.cardRoot, "explorink").mkdirs()
     }
 
     @After
@@ -66,7 +66,7 @@ class WalletWifiTransportTest {
         return r
     }
 
-    private fun card(rel: String): File = File(device.cardRoot, "trailink/$rel")
+    private fun card(rel: String): File = File(device.cardRoot, "explorink/$rel")
 
     @Test
     fun the_device_answers_a_probe() {
@@ -121,7 +121,7 @@ class WalletWifiTransportTest {
             val parts = it.split(' ')
             if (parts[1] == "/delete") "/delete ${parts.getOrNull(2)}" else parts[1].substringBefore('?')
         }
-        val abs = "/trailink/$path"
+        val abs = "/explorink/$path"
         val uploadAt = ops.indexOfFirst { it == "/upload" }
         val hashAt = ops.indexOfFirst { it == "/api/hash" }
         val renameAt = ops.indexOfLast { it == "/rename" }
@@ -309,7 +309,7 @@ class WalletWifiTransportTest {
 
         assertEquals(1, device.requests.count { it.startsWith("POST /upload") })
         assertTrue(delta.pending().isEmpty())
-        val onCard = File(device.cardRoot, "trailink/wallet/manifest.json").readText()
+        val onCard = File(device.cardRoot, "explorink/wallet/manifest.json").readText()
         assertTrue(onCard.contains("Passport (renewed)"))
     }
 
@@ -320,7 +320,7 @@ class WalletWifiTransportTest {
     // --- the card's manifest kind ------------------------------------------
 
     private fun cardWallet(): File =
-        File(device.cardRoot, "trailink/wallet").also { it.mkdirs() }
+        File(device.cardRoot, "explorink/wallet").also { it.mkdirs() }
 
     @Test
     fun an_empty_card_reports_no_wallet() {

@@ -70,8 +70,10 @@ class WalletWifiTransport(
     private val executor: Executor = Executor { it.run() },
     /** Where callbacks land. `MainThread.post` in the app, direct in tests. */
     private val poster: (Runnable) -> Unit = { it.run() },
-    /** Card root the wallet tree lives under. `/trailink`, per the naming rules. */
-    private val cardRoot: String = "/trailink",
+    /** Card root the wallet tree lives under. `/explorink` since the 2026-10-31
+     *  card-root rename (firmware `src/CardRootMigration.h`); a card still holding
+     *  the old `/trailink` is renamed by the device on its next boot. */
+    private val cardRoot: String = "/explorink",
 ) : WalletTransport {
 
     override val name: String get() = "wifi"
@@ -252,7 +254,7 @@ class WalletWifiTransport(
     /**
      * Create every component under the card root, parent first.
      *
-     * The card root itself is never created -- `/trailink` is the firmware's own
+     * The card root itself is never created -- `/explorink` is the firmware's own
      * directory and always there. Each component is remembered, so a wallet with 20
      * shards issues one `/mkdir` for `wallet` and one per shard, not 20 pairs.
      */

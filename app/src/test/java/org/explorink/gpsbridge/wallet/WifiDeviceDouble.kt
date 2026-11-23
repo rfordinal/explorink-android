@@ -35,9 +35,9 @@ import java.security.MessageDigest
  * purpose and stated as a drift risk in `docs/android-wallet.md`.
  */
 class WifiDeviceDouble(
-    /** Stands in for `/trailink` on the card. */
+    /** Stands in for `/explorink` on the card. */
     val cardRoot: File = Files.createTempDirectory("card").toFile().also {
-        File(it, "trailink").mkdirs()
+        File(it, "explorink").mkdirs()
     },
 ) {
 

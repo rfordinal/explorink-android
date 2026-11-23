@@ -18,7 +18,7 @@ import java.io.File
  * to rebuild is a queue in name only.
  *
  * One file per route, named by the path it is destined for under
- * `/trailink/trips/`. The name is decided once, when the route is built, and is
+ * `/explorink/trips/`. The name is decided once, when the route is built, and is
  * never reused -- overwriting a route the map has open stops it drawing with no
  * error and no banner (`firmware/explorink/docs/route-layer.md`, "Do not
  * overwrite a route the map has open").
@@ -27,7 +27,7 @@ class RouteOutbox(private val dir: File) {
 
     /** One queued route: the bytes and the file name they go to. */
     data class Entry(val fileName: String, val bytes: ByteArray) {
-        /** Relative to `/trailink`, which is what the transfer channel takes. */
+        /** Relative to `/explorink`, which is what the transfer channel takes. */
         val relPath: String get() = "$TRIPS_DIR/$fileName"
 
         // Data class with a ByteArray: equals/hashCode would compare the array

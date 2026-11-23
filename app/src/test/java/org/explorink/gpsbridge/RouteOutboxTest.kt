@@ -20,7 +20,7 @@ class RouteOutboxTest {
         assertTrue(box.add("zahorie-20261027.tir", byteArrayOf(1, 2, 3)))
         val entry = box.next()!!
         assertEquals("zahorie-20261027.tir", entry.fileName)
-        // Relative to /trailink, and under the directory the device's picker
+        // Relative to /explorink, and under the directory the device's picker
         // lists (MapRouteStore.h, kTripsDir).
         assertEquals("trips/zahorie-20261027.tir", entry.relPath)
         assertEquals(3, entry.bytes.size)

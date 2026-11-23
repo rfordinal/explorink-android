@@ -61,7 +61,7 @@ data class SyncAsset(
     val itemId: String?,
     val pageId: String?,
     val cls: SyncClass,
-    /** Path relative to `/trailink` on the card, which is what a BLE begin frame wants. */
+    /** Path relative to `/explorink` on the card, which is what a BLE begin frame wants. */
     val relPath: String,
     val bytes: Int,
     val sha256: String,
@@ -85,7 +85,7 @@ data class SyncAsset(
  */
 object WalletSyncPlan {
 
-    /** Where the wallet tree lives on the card, relative to `/trailink`. */
+    /** Where the wallet tree lives on the card, relative to `/explorink`. */
     const val CARD_DIR = "wallet"
 
     /**
@@ -179,7 +179,7 @@ object WalletSyncPlan {
         else -> throw IllegalArgumentException("unknown level '$levelName'")
     }
 
-    /** `wallet/<2 hex>/<16 hex>.dat`, relative to `/trailink`. */
+    /** `wallet/<2 hex>/<16 hex>.dat`, relative to `/explorink`. */
     fun relPathOf(assetId: String): String =
         "$CARD_DIR/${WalletFormat.shardOf(assetId)}/$assetId.dat"
 
