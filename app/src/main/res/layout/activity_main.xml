@@ -537,5 +537,40 @@
                 android:textSize="11.5sp"
                 android:textStyle="bold" />
         </LinearLayout>
+
+        <!-- Wallet, the fourth place. Left out on 2026-11-07 because the screen
+             it would open did not exist in this app yet; WalletActivity landed
+             with the feat/wallet merge on 2026-11-23, so the reason is spent.
+             Same Lucide mark the device's own Home row carries. -->
+        <LinearLayout
+            android:id="@+id/navWallet"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?attr/selectableItemBackground"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_wallet"
+                android:tint="@color/ui_ash"
+                android:contentDescription="@null" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Wallet"
+                android:textAllCaps="true"
+                android:textColor="@color/ui_ash"
+                android:textSize="11.5sp"
+                android:textStyle="bold" />
+        </LinearLayout>
     </LinearLayout>
 </LinearLayout>

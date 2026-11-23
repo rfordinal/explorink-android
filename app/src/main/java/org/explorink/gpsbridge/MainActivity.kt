@@ -147,6 +147,7 @@ class MainActivity : Activity(), BridgeService.Observer {
         transferTilesRow.setOnClickListener { onTransferTilesPressed() }
         val navMapAreas = findViewById<View>(R.id.navMapAreas)
         val navPins = findViewById<View>(R.id.navPins)
+        val navWallet = findViewById<View>(R.id.navWallet)
         val btnOverflow = findViewById<View>(R.id.btnOverflow)
 
         devicePlate.setOnClickListener { onDevicePlatePressed() }
@@ -158,6 +159,15 @@ class MainActivity : Activity(), BridgeService.Observer {
         // Map data labels, which name screens this app does not have.
         navMapAreas.setOnClickListener { startActivity(Intent(this, TileQueueActivity::class.java)) }
         navPins.setOnClickListener { startActivity(Intent(this, PinsActivity::class.java)) }
+        // Wallet is the fourth place the bottom nav leads to. It was left out on
+        // 2026-11-07 for one reason -- the screen did not exist here -- and the
+        // feat/wallet merge on 2026-11-23 ended that. It needs neither BLE, GPS nor
+        // the service, which is why it is a destination rather than a Home row:
+        // Home's vertical budget is closed (Outline, "Obrazovky", "Zvisly rozpocet
+        // Home je uzavrety").
+        navWallet.setOnClickListener {
+            startActivity(Intent(this, org.explorink.gpsbridge.wallet.WalletActivity::class.java))
+        }
         // Retry scan / Share log / Stop service: not one of the Outline
         // composition's seven Home elements. Lives only in the app bar's
         // ellipsis, not duplicated into a bottom-nav "More" too -- the
@@ -971,14 +981,6 @@ class MainActivity : Activity(), BridgeService.Observer {
             options.add(Triple("Start recording", false) { onRecordPressed() })
         }
         options.add(Triple("Retry scan", false) { onRetryPressed() })
-        // The wallet is a separate screen and needs neither BLE, GPS nor the
-        // service, so it is not one of Home's instrument rows. It lost its
-        // permanent button in the 2026-11-07 UI rewrite and lives here until
-        // the companion design says where it belongs (Outline, "Dizajn
-        // companion aplikacie").
-        options.add(Triple("Wallet", false) {
-            startActivity(Intent(this, org.explorink.gpsbridge.wallet.WalletActivity::class.java))
-        })
         options.add(Triple("Share log", false) { shareLog() })
         options.add(Triple("About", false) { startActivity(Intent(this, AboutActivity::class.java)) })
         options.add(Triple("Stop service", true) { onStopPressed() })
