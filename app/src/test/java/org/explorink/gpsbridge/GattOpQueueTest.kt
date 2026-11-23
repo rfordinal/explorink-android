@@ -417,6 +417,81 @@ class GattOpQueueTest {
     }
 
     @Test
+    fun aReadIsCompletedByItsOwnCharacteristic() {
+        val f = Fixture()
+        val dis = char()
+        val other = char()
+        val read = Outcome()
+
+        f.queue.enqueue(GattOpQueue.Op.read("firmware revision", dis, done = read.done))
+        f.queue.onReadComplete(other, true, null)
+        assertEquals(0, read.calls)
+
+        f.queue.onReadComplete(dis, true, null)
+        assertEquals(true, read.ok)
+    }
+
+    @Test
+    fun aReadHoldsTheStackUntilItAnswersJustLikeAWrite() {
+        val f = Fixture()
+        val dis = char()
+        val target = char()
+        val read = Outcome()
+        val write = Outcome()
+
+        f.queue.enqueue(GattOpQueue.Op.read("model number", dis, done = read.done))
+        f.queue.enqueue(GattOpQueue.Op.write("client info", target, byteArrayOf(1), done = write.done))
+        // The write must not have gone out: Android takes one op at a time and
+        // a read holds the busy flag exactly like a write does.
+        assertEquals(listOf("model number"), f.stack.labels())
+
+        f.queue.onReadComplete(dis, true, null)
+        assertEquals(listOf("model number", "client info"), f.stack.labels())
+        assertEquals(0, write.calls)
+    }
+
+    @Test
+    fun aTimedOutReadIsClearedByTheNextWriteCallback() {
+        val f = Fixture()
+        val dis = char()
+        val target = char()
+        val read = Outcome()
+        val write = Outcome()
+
+        f.queue.enqueue(GattOpQueue.Op.read("firmware revision", dis, done = read.done))
+        f.scheduler.advance(GattOpQueue.WRITE_TIMEOUT_MS)
+        assertEquals(false, read.ok)
+
+        // The tombstone holds the slot: the stack still owes a callback.
+        f.queue.enqueue(GattOpQueue.Op.write("client info", target, byteArrayOf(1), done = write.done))
+        assertEquals(listOf("firmware revision"), f.stack.labels())
+
+        // A write callback frees it. Reads and writes are one family for this:
+        // the point is that the stack answered something, not which one it was.
+        f.queue.onWriteComplete(target, true, null)
+        assertEquals(listOf("firmware revision", "client info"), f.stack.labels())
+        assertTrue(f.events.any { it.startsWith("gatt_late") })
+    }
+
+    @Test
+    fun anUnsolicitedMtuDoesNotClearATimedOutRead() {
+        val f = Fixture()
+        val dis = char()
+        val target = char()
+        val read = Outcome()
+        val write = Outcome()
+
+        f.queue.enqueue(GattOpQueue.Op.read("firmware revision", dis, done = read.done))
+        f.scheduler.advance(GattOpQueue.WRITE_TIMEOUT_MS)
+        f.queue.enqueue(GattOpQueue.Op.write("client info", target, byteArrayOf(1), done = write.done))
+
+        // The peer can start an MTU exchange itself. Taking one as the answer
+        // to the pending read would free the slot while the stack is busy.
+        f.queue.onMtuComplete(true, null)
+        assertEquals(listOf("firmware revision"), f.stack.labels())
+    }
+
+    @Test
     fun aRefusedOpFailsAtOnceAndTheNextGoesOut() {
         val f = Fixture()
         val a = char()

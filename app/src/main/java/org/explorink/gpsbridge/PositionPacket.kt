@@ -17,8 +17,9 @@ import kotlin.math.roundToLong
  *   [14]     heading    0-15, 16 sectors, 0 = North, clockwise
  *   [15]     seq        rolling counter
  *   [16]     flags      bit0 = off-route warning (always 0 here, no route),
- *                       bit1 = altitude present
- *   [17]     accuracy   metres, saturating
+ *                       bit1 = altitude present,
+ *                       bits 2-3 = heading quality, see [DirTrust]
+ *   [17]     accuracy   metres, saturating; 0 = no figure
  *   [18]     speed      km/h, saturating
  *   [19..20] altitude   int16, metres above sea level; only meaningful if
  *                       flags bit1 is set. Zero is a real altitude (sea
@@ -32,6 +33,36 @@ import kotlin.math.roundToLong
 object PositionPacket {
 
     const val SIZE = 21
+
+    /**
+     * How much the device's position marker may claim about the heading in this
+     * packet, carried in flags bits 2-3.
+     *
+     * **[UNSTATED] is zero on purpose.** A build of this app from before these
+     * bits existed writes no bits at all, lands on UNSTATED, and keeps
+     * producing exactly the marker it always did. So the meaning of zero can
+     * never be "bad" -- a client that says nothing about quality must not look
+     * like a client reporting a fault.
+     *
+     * The device turns these into a shape: GOOD draws today's arrow, COARSE
+     * draws a wedge one heading step either side, UNKNOWN draws no heading mark
+     * at all. See the firmware's `MapFixTrust.h` and `docs/marker-fix-trust.md`
+     * -- and note that the device, not this app, owns what each state looks
+     * like.
+     */
+    object DirTrust {
+        const val UNSTATED = 0
+        const val GOOD = 1
+        const val COARSE = 2
+        const val UNKNOWN = 3
+
+        const val FLAG_SHIFT = 2
+        const val FLAG_MASK = 0x0C
+    }
+
+    /** [dirTrust] packed into flags bits 2-3, merged with [flags]. */
+    fun withDirTrust(flags: Int, dirTrust: Int): Int =
+        (flags and DirTrust.FLAG_MASK.inv()) or ((dirTrust and 0x03) shl DirTrust.FLAG_SHIFT)
 
     fun build(
         latDeg: Double,

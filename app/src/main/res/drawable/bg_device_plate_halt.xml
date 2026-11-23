@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Device plate, "Not reaching the device" state per Outline "Dizajn
+     systém" state coding: 2dp ui_ink border plus a 135deg ui_rule hatch
+     fill, same recipe as the "halt" line-state coding. The hatch tile is
+     drawable-nodpi/pattern_hatch_rule.png (16x16, one diagonal stripe) so
+     it tiles at a fixed pixel density rather than stretching per screen
+     density. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <bitmap
+            android:src="@drawable/pattern_hatch_rule"
+            android:tileModeX="repeat"
+            android:tileModeY="repeat" />
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <stroke android:width="2dp" android:color="@color/ui_ink" />
+            <corners android:radius="2dp" />
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+</layer-list>

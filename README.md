@@ -26,7 +26,9 @@ phone's GPS and that device:
 0. Starts itself when the rider opens the map screen on the paired device.
    The OS watches for that device over a companion association and wakes this
    app, with the app swiped away and nothing tapped.
-1. Scans for a BLE device named `XteinkX4Map`, connects, no pairing.
+1. Scans for a BLE device advertising one of five known names (an X4, X3,
+   X4 Pro or LilyGo T5S3, or a generic fallback -- `BleLink.KNOWN_DEVICE_NAMES`),
+   connects, no pairing.
 2. Sends the phone's GPS position to the device over BLE whenever the
    position has actually moved meaningfully — a distance-driven send policy,
    not a fixed interval. See "Send policy" below.
@@ -66,6 +68,7 @@ speed the policy behaves like a plain fixed-interval timer.
 | in between, send when | the position moved **50 m** from the last sent one (no upper bound on the fix's own accuracy yet, so a very bad fix can still clear an inflated threshold) |
 | move threshold, once the device has said its screen diagonal (`DIAG_M`) | `diagonal_m * 0.008` instead of the flat 50 m — one constant cannot fit every zoom rung on the device, and the ratio itself is a starting point, not a measured one |
 | also send when | the 16-sector heading changed **and** at least 10 m was covered |
+| also send when | the heading has gone stale while parked, once per stop (`reason: heading_lost`) — see "Telling the device how much to trust the heading" |
 | also send when | parked, the last packet actually sent carried a fix worse than 20 m accuracy, and the phone has since settled on 3 fixes in a row at ≤10 m (`reason: correction`) |
 | always send once | on every new link, `reason: first` — the state above is per-link and resets when the link comes up. It waits for a fix accepted on that link, so it never sends the previous ride's position. Before 2026-08-17 the state survived the disconnect, so a parked rider opening the map screen got no packet at all and the device kept showing the fix off its own SD card until the rider covered 50 m. |
 
@@ -75,6 +78,56 @@ break-even point; 5 km/h hiking sends about one every 18 s; parked at lunch,
 one an hour, or none at all if nothing needed correcting. The heading rule
 needs real movement behind it because a stationary phone's bearing wanders
 across all 16 sectors on GPS noise alone.
+
+### Telling the device how much to trust the heading
+
+The packet's flags byte carries a two-bit heading quality
+(`PositionPacket.DirTrust`), and the device draws it: a sharp arrow, a wedge
+one heading step either side, or no heading mark at all. The firmware's
+`docs/marker-fix-trust.md` owns what each state looks like; this app only says
+which one is true.
+
+**This app sends only two of the four states: `good` and `unknown`.**
+
+The heading here is not a reading, it is a **conclusion**. `HeadingTrend` only
+returns one when a window of recent fixes covered real ground and its legs
+agreed with the overall trend; anything less returns nothing at all. So a
+heading that exists has already passed the app's own test and is worth a sharp
+arrow. There is no half-believed heading to report, and sending `coarse` would
+be inventing a doubt the app does not hold.
+
+`coarse` stays a real wire state for the **device's own receiver**, where the
+course is an instantaneous reading rather than a conclusion and can genuinely
+be half-trusted.
+
+That is also why `Location.getBearingAccuracyDegrees()` is not used: the
+heading sent is not the fix's own bearing at all — the phone rides in a
+backpack and its orientation says nothing about direction of travel — so a
+bearing accuracy would describe a number this app does not send.
+
+What is left is **staleness**. When the window stops being a confident trend
+the app keeps the last bearing rather than snapping to north. That is right
+while the rider is briefly stopped and wrong once they have been standing a
+while: at that point there is effectively no heading. `STALE_HEADING_MS` is
+where one becomes the other, currently **90 s**, a first cut that has **not
+been judged on a ride**. It sits between two failures — an arrow still pointing
+somewhere long after the rider parked, and an arrow that vanishes at every
+traffic light, each change costing the device a panel refresh it pays in full,
+~500 ms on an X4 and ~1,081 ms on a T5 S3 Pro. The
+trend itself disappears within about 5 s of stopping, so the timer measures
+from "stopped moving", not from "stopped sending".
+
+**A lost heading gets its own send reason** (`reason: heading_lost`). Every
+other trigger in the table above is driven by movement, and a parked phone
+sends nothing until the hourly keepalive — so without this the device would
+keep the last arrow on screen for up to an hour after the timer behind it
+expired, and the timer would be decorative. It fires at most once per stop,
+never bypasses the send floor, and never wins over `moved`, which carries the
+same new state anyway.
+
+**Zero means "said nothing", never "bad".** A build of this app from before
+these bits existed writes no bits, and the device draws exactly the marker it
+always did. That is what makes the change safe to ship on one side at a time.
 
 `DIAG_M <metres>` arrives unprompted on the same command channel as the
 tile-fetch conversation below (`MissingList.parseDiagonalM`) — the ground
@@ -90,7 +143,7 @@ different cadence from the raw fixes. Whether it asks at all is a separate
 question, answered under "Battery" below.
 
 Every packet line in the recording carries why it went out (`reason`:
-`first` / `moved` / `heading` / `keepalive` / `correction`), how far the phone
+`first` / `moved` / `heading` / `keepalive` / `correction` / `heading_lost`), how far the phone
 had moved (`moved_m`), and how long it had been quiet (`since_last_ms`).
 `SendPolicy` itself has no Android types in it — it is the part with the
 reasoning, so it is the part with unit tests on it.
@@ -157,6 +210,18 @@ version, and the format-version check happens before a single byte goes out.
 A mismatch is a distinct `skip ... fmt<found>` rather than a plain miss,
 because "no tile here" and "wrong tile here" want different fixes.
 
+**Every failure says which one it was** (2026-11-05). The reason word is
+`nosource` only for a definite 404, `unreachable` for a link that never got
+an answer (no signal, a timeout, a 5xx, a body over the transfer cap),
+`wrongcrc` for a tile the CDN served twice at a content ID the freshness
+index did not promise, and `fmt<found>` for the format mismatch above. One
+word for all of them is what made a content-ID bug take an afternoon: the
+device reported every tile out of date, the app answered `nosource` for every
+one, and the obvious reading — "the CDN does not have these" — was wrong. The
+tiles were there the whole time and a plain `curl` fetched them. `TileSource`
+answers a `Result` rather than a nullable byte array, the same shape
+`PointSync.ReadResult` already used for point shards.
+
 **Nothing is cached on the phone.** A tile lives on the X4 or on the CDN;
 the phone holds one in memory for the length of its transfer and drops it
 the moment it lands, then a static file fetch — no API, a miss is a 404.
@@ -166,6 +231,38 @@ position was deleted off the X4's card, the map reopened, and the app
 fetched and delivered it — a 317 KB tile landed at roughly 9 kB/s over BLE,
 and the device redrew itself with it. See "One GATT operation at a time"
 below for why that ceiling is what it is.
+
+## Pushing a route the rider shared
+
+Planned, half built. The rider's ask is a route typed in Google Maps, shared
+into this app, ridden on the device — `docs/route-share-plan.md` in the xteink
+repo has the whole chain and its phases.
+
+What is here today, host tested and **never yet run against a device**:
+
+- `RouteWriter.kt` builds the `.tir` file. Byte-for-byte equal to the laptop
+  writer that has fed the device since 2026-08-06 — a golden file from it sits
+  in `app/src/test/resources/route/` and the test asserts equality. Regenerate
+  those with `mapbuilder/tools/make_route_goldens.py`, never by hand.
+- `FilePusher.kt` carries any file to any safe relative path under `/trailink`.
+  It is the loop `TileFetcher` used to own; the fetcher now drives it instead,
+  with no behaviour change — the 35 race tests in `TileFetcherTest` are what
+  says so.
+
+The whole chain is built as of 2026-10-27 and **has never run end to end**: a
+share resolves, parses, shows its stops, routes through BRouter, builds the file
+and queues it, and the queue drains at the next connection. What it needs is a
+real share on a real phone against a real device.
+
+Two things are still true after it:
+
+- **The device must be on its map or sync screen** for a route to land. The
+  transfer receiver lives on those two screens only, so a share from the sofa
+  waits in the queue, which is what the queue is for (`T-2033` in the xteink
+  repo gives the route picker its own receiver).
+- **The router is a public BRouter instance**, whose usage terms are not stated
+  anywhere, and it learns the rider's stops. Our own instance is the shipped
+  answer (`T-325`).
 
 ## Checking freshness: is what the device already has still current?
 
@@ -212,8 +309,10 @@ the tile path does not change when a tile is rebuilt, and the CDN's edge
 caches a path for seven days with no purge mechanism, so without the query
 a re-fetch would get back the exact stale copy it is meant to replace. The
 app verifies the arriving tile's content ID independently before writing it,
-retries once past the cache, then gives up with `skip` rather than push a
-tile it cannot vouch for.
+retries once past the cache, then gives up with `skip ... wrongcrc` rather
+than push a tile it cannot vouch for. The retry's own verdict is deliberately
+not forwarded: a second read that 404s does not change what is known, which
+is that a body for this tile exists and it is the wrong one.
 
 **Run against real hardware.** The device's tile-sync screen asked, this app
 answered from the CDN index, and a stale tile came down and afterwards matched
@@ -376,6 +475,21 @@ Shown small and grey at the bottom of the one window, and written into every
 recording's header as `app_version` — on a sideloaded debug build, "which of
 several builds is on the phone" is otherwise unanswerable.
 
+## The two hosts this app talks to
+
+**The tile CDN**, for everything map: tiles, the freshness index, the built-area
+list (`CdnTileSource`, `CdnIndexSource`, `CdnMapsetSource`).
+
+**A maps shortener**, once, and only when the rider has just shared a link. A
+Google Maps share hands over `https://maps.app.goo.gl/<id>` with no coordinates
+anywhere in the text, so neither the pre-trip area picker nor the pins screen can
+finish without expanding it. `MapsShortLink` sends one HEAD request, reads the
+`Location` header and does not follow it, so no Google page is ever fetched. It
+never runs in the background and never on a schedule, only on the rider's own
+press of Send or Save.
+
+Nothing else. There is no analytics, no crash reporter and no update check.
+
 ## Files
 
 ```
@@ -418,8 +532,30 @@ app/src/main/java/org/explorink/gpsbridge/
   TileFetcher.kt       the whole fetch conversation as a state machine. BLE
                         behind a Transport interface, time behind a Scheduler
                         interface, so it is unit-tested without either.
+  FilePusher.kt        one file's bytes to one relative path: begin, chunks,
+                        verdict, timeout, and every guard that keeps a dead
+                        transfer's late reply off the next one. Knows nothing
+                        about tiles — a route file goes out the same way.
   TransferFrames.kt    the transfer wire format: frames, CRC32, chunk sizing,
                         path rules, status lines. Pure.
+  RouteWriter.kt       the `.tir` route writer: Mercator projection, Douglas-
+                        Peucker, both CRC32s. A port of the laptop's
+                        `mapbuilder/route_file.py`, asserted byte-for-byte
+                        equal to it. Pure.
+  RouteLink.kt         the stops out of a shared Google Maps directions link:
+                        path segments walked in order, each named one taking
+                        the next coordinate group from the `data=` blob. Pure.
+  ShareRouting.kt      which of the three destinations a piece of shared text
+                        belongs to: a route, a place, or resolve-it-first. Pure.
+  ShareRouteActivity.kt the share window. Resolves, parses, geocodes what has
+                        to be, shows the stops for confirmation, routes, builds
+                        the file and queues it.
+  RouteService.kt      the routing interface. A shared link carries stops and
+                        no line, so the line is ours.
+  BRouterService.kt    one implementation, a BRouter HTTP server. Longitude
+                        first, which is the opposite of everywhere else here.
+  RouteOutbox.kt       routes built but not yet on the device, on disk. The
+                        device is usually absent when one is shared.
   FreshnessChecker.kt  the CHECK_TILES conversation as a state machine, and
                         the offline backoff. Same no-BLE-no-Android contract
                         as TileFetcher, unit-tested too.
@@ -433,6 +569,20 @@ app/src/main/java/org/explorink/gpsbridge/
                         sync screen so panel and phone cannot disagree.
   TileSource.kt        the CDN seam: tiles, with ?crc= and verification.
   IndexSource.kt       the CDN seam for index byte ranges.
+  IndexScanner.kt      a TilePlan.Reading for a whole tile list, one byte-range
+                        read per (block, zoom), sequenced and cancellable.
+  MapsetSource.kt      the CDN's built-area list, which is what tells "nobody
+                        has built this yet" from "this tile never exists".
+  TileBox.kt           centre plus a box side in km -> the tiles that cover it,
+                        coarse zoom first, centre tile first. Pure.
+  TilePlan.kt          index slots -> counts, exact bytes and an ETA, and the
+                        built-ground test behind the three outcomes. Pure.
+  TileOutbox.kt        the pre-trip queue: the receipt ledger, the three
+                        outcomes, the build backoff. Pure, no clock.
+  OutboxStore.kt       that queue on disk, versioned and written atomically.
+                        Format: docs/tile-outbox-format.md in the parent repo.
+  Json.kt              JSON both ways. org.json is a stub under
+                        unitTests.isReturnDefaultValues, so it cannot be used.
   MainThread.kt        hands async work (tile reads, HTTP) back to the main
                         thread, where BleLink and TileFetcher keep their
                         single-threaded state.
@@ -442,10 +592,21 @@ app/src/test/java/org/explorink/gpsbridge/
   TileHeaderTest, TileFormatTest, FreshnessCheckerTest, GattOpQueueTest,
   ScanRetryPolicyTest, BleLineAssemblerTest, BridgeForegroundTest,
   BridgeProgressThrottleTest, PinListTest, PinGeoTest, PinCoordinatesTest,
-  PinManagerTest — 246 tests, pure JVM, no emulator needed.
+  PinManagerTest, TileBoxTest, TilePlanTest, TileOutboxTest, MapsetTest,
+  IndexScannerTest, OutboxStoreTest, JsonTest — 348 tests, pure JVM, no
+  emulator needed.
 ```
 
 ## Build
+
+**`org.json` cannot be used for anything a test must check.**
+`unitTests.isReturnDefaultValues = true` (`app/build.gradle.kts`) stubs it:
+`JSONObject("{\"a\":1}").getInt("a")` returns **0** in a unit test and throws
+nothing. Anything parsed with it is unverifiable off the device, which is the
+opposite of what a documented on-disk format needs. Use `Json.kt`. This has cost
+two features their afternoon now -- the wallet's `state.json` and the tile
+outbox.
+
 
 From the repo root:
 

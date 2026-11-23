@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The one hairline separator, per Outline "Metriky": 1dp, ui_rule. Used as
+     android:divider on a LinearLayout of inflated rows (tile_zone_row,
+     pin_row) with android:showDividers="middle", so rows get it without each
+     row drawing its own edge. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/ui_rule" />
+    <size android:height="1dp" />
+</shape>

@@ -31,7 +31,11 @@
     <!-- Partial wake lock only: keeps the 5 s send timer firing in Doze. The
          screen is never held on. -->
     <!-- Tiles come from the public CDN over HTTPS (TileSource / CdnTileSource).
-         Nothing else in the app talks to the network. -->
+         One other host, and only one: a Google Maps share hands over a
+         `maps.app.goo.gl` short link with no coordinates in it, so expanding it
+         is the only way that flow can finish (MapsShortLink). One HEAD request,
+         the Location header read and the redirect not followed, and only when
+         the rider has just shared a link, never in the background. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
@@ -48,6 +52,19 @@
     <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
     <uses-permission
         android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+
+    <!-- Package visibility, and it is load-bearing rather than cosmetic. Since
+         Android 11 an app sees only what it declares, so without this
+         `resolveActivity()` on a geo: URI answers null even with Google Maps
+         installed, and the map-picker button refuses itself. Measured on a
+         Galaxy S24 Ultra 2026-09-02: the button did nothing and said nothing.
+         Declaring the intent, not the package, so any maps app qualifies. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+    </queries>
 
     <uses-feature
         android:name="android.hardware.bluetooth_le"
@@ -80,14 +97,58 @@
             </intent-filter>
         </activity>
 
-        <!-- The pins window. exported=true only for the share filter below: a
-             maps app hands over shared text, which lands in the coordinate field
-             and is never saved without the rider choosing a type and confirming
-             (PinsActivity.prefillFromIntent). -->
+        <!-- The pins window. No share filter of its own any more: shared text
+             lands in ShareRouteActivity below, which forwards it here with the
+             same ACTION_SEND and EXTRA_TEXT this screen already reads
+             (PinsActivity.prefillFromIntent), so nothing in it changed. Still
+             never a silent save: the rider picks a type and confirms. -->
         <activity
             android:name=".PinsActivity"
-            android:exported="true"
+            android:exported="false"
             android:label="ExplorInk pins"
+            android:launchMode="singleTop"
+            android:parentActivityName=".MainActivity"
+            android:screenOrientation="portrait" />
+
+        <!-- The map-area window. Its share filter moved to
+             ShareRouteActivity for the same reason the pins one did; it is
+             started with the same action and extra it always read
+             (TileQueueActivity.prefillFromIntent), and nothing is queued until
+             the rider has seen the plan and confirmed it. -->
+        <activity
+            android:name=".TileQueueActivity"
+            android:exported="false"
+            android:label="ExplorInk map area"
+            android:launchMode="singleTop"
+            android:parentActivityName=".MainActivity"
+            android:screenOrientation="portrait" />
+
+        <!-- App identity, the in-app privacy disclosure and the permission
+             list, reached from the app bar's "More" overflow. -->
+        <activity
+            android:name=".AboutActivity"
+            android:exported="false"
+            android:label="About ExplorInk"
+            android:launchMode="singleTop"
+            android:parentActivityName=".MainActivity"
+            android:screenOrientation="portrait" />
+
+        <!-- The one share entry, and the reason it is one.
+             There used to be two, one per destination, because a shared *place*
+             is either a pin or an area to cache and only the rider knows which.
+             That choice is still theirs: this screen asks it, with both options
+             named and explained, instead of the share sheet asking it with two
+             labels. What the share sheet could never do is tell a route from a
+             place, and a route is the third destination (docs/route-share-plan.md),
+             so a third row would have made the sheet a list to read every time.
+
+             exported=true is what a share filter requires. Nothing here acts on
+             the shared text on its own: a route is built only after the rider
+             has seen its stops and pressed Send. -->
+        <activity
+            android:name=".ShareRouteActivity"
+            android:exported="true"
+            android:label="ExplorInk"
             android:launchMode="singleTop"
             android:parentActivityName=".MainActivity"
             android:screenOrientation="portrait">

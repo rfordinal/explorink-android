@@ -93,6 +93,18 @@ object SendPolicy {
 
         /** Parked on a bad fix; the GPS has since settled on a good one. */
         CORRECTION,
+
+        /**
+         * The rider has been standing long enough that the heading we last
+         * sent has stopped describing the present, so the device is told to
+         * stop drawing one.
+         *
+         * Needed because everything else here is driven by movement, and a
+         * parked phone sends nothing until the hourly keepalive. Without this
+         * the device would keep the last arrow on screen for up to an hour
+         * after the timer behind it expired, which makes the timer decorative.
+         */
+        HEADING_LOST,
         ;
 
         /** Lower-case name, which is what goes in the log line. */
@@ -134,6 +146,9 @@ object SendPolicy {
      * @param consecutivePreciseFixCount how many fixes in a row have been at or
      *   under [PRECISE_ACCURACY_M]
      * @param diagonalM see [moveThresholdM]
+     * @param headingLost the heading quality has dropped to unknown since the
+     *   last packet went out. Defaults false, so a caller that does not track
+     *   it behaves exactly as before.
      * @return why to send now, or null to stay quiet
      */
     fun decide(
@@ -145,6 +160,7 @@ object SendPolicy {
         lastSentAccuracyM: Double = 0.0,
         consecutivePreciseFixCount: Int = 0,
         diagonalM: Double? = null,
+        headingLost: Boolean = false,
     ): Reason? {
         if (!hasSent) return Reason.FIRST
 
@@ -164,6 +180,10 @@ object SendPolicy {
         if (sinceLastMs < floorMs) return null
         if (movedM >= moveThresholdM(accuracyM, diagonalM)) return Reason.MOVED
         if (headingChanged && movedM >= HEADING_MIN_MOVE_M) return Reason.HEADING
+        // After MOVED and HEADING on purpose: if the rider is moving, one of
+        // those fires and carries the new quality anyway, so this only ever
+        // sends the packet that would otherwise never go out.
+        if (headingLost) return Reason.HEADING_LOST
         if (sinceLastMs >= KEEPALIVE_INTERVAL_MS) return Reason.KEEPALIVE
         return null
     }

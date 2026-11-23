@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light status bar icons on the light paper background. Split from
+         themes.xml so AppTheme stays one definition instead of a duplicated
+         values-night copy that would drift the moment a new theme item is
+         added to only one of them. -->
+    <bool name="window_light_status_bar">true</bool>
+</resources>

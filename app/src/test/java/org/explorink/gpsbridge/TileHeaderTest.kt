@@ -16,23 +16,54 @@ import org.junit.Test
  * The fixed vectors are the ones `mapbuilder/tilegen/test_tile_index.py` asserts, and
  * the real-tile vector is `region1`'s z13 4482/2839, byte for byte off the
  * mirror.
+ *
+ * **They were not, until 2026-11-05.** This file pinned the values the fold
+ * produced over six slots, which mapbuilder abandoned on 2026-08-26 when it
+ * froze the fold at fifteen. Its own test file lists those six-slot numbers as
+ * superseded, and they are exactly what was asserted here, so both suites
+ * passed while the two implementations disagreed about every tile in
+ * existence. A vector copied once and never compared again is not a pin.
+ *
+ * What it cost: `TileSource.readVerified` refuses a tile whose content id is
+ * not the one the index promised, so the freshness path answered `skip
+ * nosource` for every stale tile and never replaced one. Only the missing-tile
+ * path worked, because that one passes no expected id and skips the check.
+ * Found on a T5 S3 Pro whose street names never arrived after the area was
+ * rebuilt, 2026-11-05.
  */
 class TileHeaderTest {
 
     @Test
     fun `fixed vectors match mapbuilder`() {
-        assertEquals(0xA3C1CA20L, contentIdOf(emptyMap()))
-        assertEquals(0x22E4AF07L, contentIdOf(mapOf(1 to 0x00000001L)))
-        assertEquals(0x1B7DAD45L, contentIdOf(mapOf(6 to 0x00000001L)))
+        // CONTENT_ID_VECTORS in mapbuilder/tilegen/test_tile_index.py, case for
+        // case and in its order. Copy them from there rather than from a
+        // previous version of this file.
+        assertEquals(0x04128908L, contentIdOf(emptyMap()))
+        assertEquals(0xCEC10787L, contentIdOf(mapOf(1 to 0x00000001L)))
+        assertEquals(0xAB561B4FL, contentIdOf(mapOf(6 to 0x00000001L)))
+        assertEquals(0x91625D9DL, contentIdOf(mapOf(7 to 0x00000001L)))
         assertEquals(
-            0x1653D850L,
+            0x431DA58CL,
             contentIdOf(
                 mapOf(
                     1 to 0xAABBCCDDL, 2 to 0x11223344L, 3 to 0xDEADBEEFL,
                     4 to 0x00000000L, 5 to 0xFFFFFFFFL, 6 to 0x12345678L,
+                    7 to 0x0BADC0DEL,
                 ),
             ),
         )
+    }
+
+    @Test
+    fun `a layer past the ones in use leaves content id alone until it has bytes`() {
+        // The property the frozen fold exists for, and the one this side got
+        // wrong: slots past the layers in use are zero, so a new layer costs no
+        // re-download until it actually carries something. With a fold that
+        // followed the layer list, adding layer 8 would have moved the identity
+        // of every tile on every card.
+        val base = (1..8).associateWith { 0x1000L + it }
+        assertEquals(contentIdOf(base), contentIdOf(base + (9 to 0L)))
+        assertEquals(true, contentIdOf(base) != contentIdOf(base + (9 to 0xABCD1234L)))
     }
 
     @Test
@@ -62,8 +93,10 @@ class TileHeaderTest {
         )
         assertEquals(162, head.size)
         assertEquals(3, TileHeader.formatVersion(head))
-        // The same number mapbuilder wrote into the index slot for this tile.
-        assertEquals(0xABB60454L, TileHeader.contentId(head))
+        // The same number mapbuilder wrote into the index slot for this tile,
+        // recomputed under the frozen fold: this tile carries layers 1..6 only,
+        // and slots 7..15 are zero.
+        assertEquals(0x6C346A7AL, TileHeader.contentId(head))
     }
 
     @Test

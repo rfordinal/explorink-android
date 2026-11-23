@@ -1,4 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#FF202124</color>
+
+    <!-- Outline "Dizajn systém" token table, light theme. Eight neutrals and
+         two signals, full contrast on purpose: it borrows e-ink's visual
+         language (monochrome, hairlines, flat fills), not its weak
+         contrast. Never a third accent: warn/stop are the whole color
+         budget. Source of truth is the Outline doc, not this file:
+         https://wiki.comsultia.com/doc/dizajn-system-i82dz3W2tt -->
+    <color name="ui_paper">#FAFAF7</color>
+    <color name="ui_paper_sub">#F2F2EC</color>
+    <color name="ui_ink">#111111</color>
+    <color name="ui_graphite">#55554E</color>
+    <color name="ui_ash">#70706A</color>
+    <color name="ui_rule">#C9C9C0</color>
+    <color name="ui_tint">#E9E9E1</color>
+    <color name="ui_warn">#8A5A00</color>
+    <color name="ui_stop">#8E2A16</color>
+    <color name="ui_on_ink">#FAFAF7</color>
 </resources>

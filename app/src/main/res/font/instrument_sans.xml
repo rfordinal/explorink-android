@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Instrument Sans ships as one variable TTF (fvar axes wdth 75-100,
+     wght 400-700, instrument_sans_variable.ttf). Without this font-family,
+     every android:textStyle="bold" in the app resolved against the single
+     default instance (wght 400) and got Android's synthetic, faked bold
+     instead of the font's own 700; caught by an Opus review of the
+     branch, 2026-11-07. Pinning both named instances here via
+     fontVariationSettings is what makes android:textStyle="bold" actually
+     select the real weight. -->
+<font-family xmlns:android="http://schemas.android.com/apk/res/android">
+    <font
+        android:font="@font/instrument_sans_variable"
+        android:fontStyle="normal"
+        android:fontWeight="400"
+        android:fontVariationSettings="'wght' 400, 'wdth' 100" />
+    <font
+        android:font="@font/instrument_sans_variable"
+        android:fontStyle="normal"
+        android:fontWeight="700"
+        android:fontVariationSettings="'wght' 700, 'wdth' 100" />
+</font-family>

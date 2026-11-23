@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lucide "flag-triangle-right", firmware/explorink/freeink-sdk/libs/assets/Icons/lucide/icons/flag-triangle-right.svg,
+     hand-converted per the ic_house.xml convention: stroke-only path, same
+     24dp box, 2dp stroke, round caps/joins as the source. This is the
+     "dest" pin kind's glyph, matching firmware/explorink/src/components/icons/pins.icons.txt
+     ("pin_dest = flag-triangle-right"). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="@color/ui_ink"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M6 22V2.8a.8.8 0 0 1 1.17-.71l11.38 5.69a.8.8 0 0 1 0 1.44L6 15.5" />
+</vector>

@@ -91,7 +91,10 @@ class SessionLogger(private val dir: File, private val appVersion: String) {
                 h.put("app_version", appVersion)
                 h.put("packet_encoding", PACKET_ENCODING)
                 h.put("packet_bytes", PositionPacket.SIZE)
-                h.put("target_device_name", BleLink.DEVICE_NAME)
+                // Every name the scan targets, not one fixed string -- the firmware
+                // advertises a different name per board (BleLink.KNOWN_DEVICE_NAMES),
+                // so there is no single "the" target any more.
+                h.put("target_device_name", BleLink.KNOWN_DEVICE_NAMES.joinToString(","))
                 h.put("service_uuid", BleLink.SERVICE_UUID.toString())
                 h.put("position_characteristic_uuid", BleLink.POSITION_CHAR_UUID.toString())
                 h.put("streams", "fix|packet|event")

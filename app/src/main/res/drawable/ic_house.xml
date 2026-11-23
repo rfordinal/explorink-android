@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lucide "house", firmware/explorink/freeink-sdk/libs/assets/Icons/lucide/icons/house.svg,
+     hand-converted: one Android path per source SVG path/circle element
+     (fixed 2026-11-07: concatenating multiple source "d" strings into one
+     pathData is wrong: each source path's relative commands restart from
+     its own implicit (0,0), and gluing them together makes the second
+     piece continue from the first piece's end point instead, which is
+     what broke this icon's shape the first time). Circles become two-arc
+     path data since VectorDrawable has no &lt;circle&gt; tag. Same 24dp
+     box, 2dp stroke, round caps/joins as the source. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="@color/ui_ink"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" />
+    <path
+        android:strokeColor="@color/ui_ink"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+</vector>

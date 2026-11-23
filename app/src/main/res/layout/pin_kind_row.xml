@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One row of the pin-kind picker (PinKindAdapter.kt): icon or glyph, then
+     label. Used for both the spinner's own collapsed box and its dropdown
+     list, a save picker is a short list of kinds, not a disclosure menu,
+     so one row shape serves both. ivKindIcon and tvKindGlyph share the one
+     24dp slot the same way pin_row.xml's ivRowIcon/tvRowGlyph do, and for
+     the same reason: a kind with no Lucide source (parking's "P", #1-#5's
+     digits) shows the text glyph instead. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?android:attr/selectableItemBackground"
+    android:gravity="center_vertical"
+    android:minHeight="48dp"
+    android:orientation="horizontal"
+    android:paddingStart="12dp"
+    android:paddingEnd="12dp">
+
+    <FrameLayout
+        android:layout_width="24dp"
+        android:layout_height="24dp">
+
+        <ImageView
+            android:id="@+id/ivKindIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:tint="@color/ui_ink"
+            android:contentDescription="@null" />
+
+        <TextView
+            android:id="@+id/tvKindGlyph"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fontFamily="@font/ibm_plex_mono_regular"
+            android:gravity="center"
+            android:textColor="@color/ui_ink"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/tvKindLabel"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="13dp"
+        android:layout_weight="1"
+        android:textColor="@color/ui_ink"
+        android:textSize="15sp" />
+</LinearLayout>
