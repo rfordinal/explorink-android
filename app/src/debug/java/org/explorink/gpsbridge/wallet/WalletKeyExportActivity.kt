@@ -12,8 +12,8 @@ import java.security.SecureRandom
  * **Debug builds only. Prints the wallet key in the clear.**
  *
  * The other half of a test seam that already exists on the device side: the firmware's
- * `CMD:WALLETPROVISION <keyhex64> <pin> <salthex32> <iters>` (`src/main.cpp:1091`) takes
- * K as an argument and wraps it under PBKDF2(PIN || deviceSecret) -- the device does
+ * `CMD:WALLETPROVISION <keyhex64> <pattern> <salthex32> <iters>` takes
+ * K as an argument and wraps it under PBKDF2(pattern || deviceSecret) -- the device does
  * **not** derive K, it stores whatever it is given
  * (`src/activities/wallet/WalletKeyStore.h:34`). So a phone-encrypted wallet is readable
  * on a device only if the device was provisioned with **this phone's** K.
@@ -26,9 +26,9 @@ import java.security.SecureRandom
  *     adb shell am start -n org.explorink.gpsbridge/.wallet.WalletKeyExportActivity
  *     adb logcat -d -s WalletKeyExport
  *
- * `--es pin 1234` and `--es salt <32 hex>` shape the printed command; without a salt one
- * is generated, because the salt is the device's to keep and any value works as long as
- * the same one is used for every unlock of that provisioning.
+ * `--es pattern 567ba98c` and `--es salt <32 hex>` shape the printed command; without a
+ * salt one is generated, because the salt is the device's to keep and any value works as
+ * long as the same one is used for every unlock of that provisioning.
  *
  * The key it prints is the app's **real** wallet key -- the one every imported document
  * is encrypted under -- so a logcat of this run is as sensitive as the wallet itself.
@@ -39,11 +39,21 @@ class WalletKeyExportActivity : Activity() {
 
     companion object {
         private const val TAG = "WalletKeyExport"
-        // The device's PIN is entered on four buttons, so its alphabet is U/D/L/R and
-        // its length 6..10 (`src/activities/wallet/WalletCrypto.h`). A numeric PIN is
-        // refused by the firmware with `WALLETPROVISION_ERR pin must be 6-10 of U/D/L/R`
-        // -- measured, this default was 1234 first.
-        private const val DEFAULT_PIN = "UUDDLR"
+        // The device's secret is a walk on its 4x4 grid, entered on four direction
+        // buttons: 8 to 12 cells of 0-9a-f, start cell first, each step one cell
+        // orthogonally (`src/activities/wallet/WalletCrypto.h`, kPatternMinPoints).
+        // "567ba98c" is right, right, down, left, left, left, down from cell 5.
+        //
+        // **Legal hex is not enough and the firmware says so separately**: a diagonal
+        // or a jump gets `WALLETPROVISION_ERR pattern is not a walk on the 4x4 grid`,
+        // a wrong alphabet or length gets `...pattern must be 8-12 cells of 0-9a-f`.
+        // So a hand-passed `--es pattern` can be refused for two different reasons and
+        // the message says which.
+        //
+        // This default was `1234` first (refused: not the alphabet), then `UUDDLR`
+        // under the directional PIN the gate replaced on 2026-11-24. Each change was a
+        // round trip, which is why the rule is written down rather than remembered.
+        private const val DEFAULT_PATTERN = "567ba98c"
         private const val ITERATIONS = 18000
     }
 
@@ -80,12 +90,12 @@ class WalletKeyExportActivity : Activity() {
             // (`WalletStore.applyDefaultEncryption`). Import a document first.
             say("no key on this phone -- import a document, then run this again")
         } else {
-            val pin = intent.getStringExtra("pin") ?: DEFAULT_PIN
+            val pattern = intent.getStringExtra("pattern") ?: DEFAULT_PATTERN
             val salt = intent.getStringExtra("salt") ?: hex(ByteArray(16).also { SecureRandom().nextBytes(it) })
             say("key: ${key.size} bytes")
             say("keyhex: ${hex(key)}")
             say("provision the device with:")
-            say("CMD:WALLETPROVISION ${hex(key)} $pin $salt $ITERATIONS force")
+            say("CMD:WALLETPROVISION ${hex(key)} $pattern $salt $ITERATIONS force")
             key.fill(0)
         }
 
