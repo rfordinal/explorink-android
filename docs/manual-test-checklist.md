@@ -155,8 +155,9 @@ CROSSPOINT_SIM_BLE_PORT=8765 .pio/build/simulator/program
 python3 tools/blebridge.py --sim 127.0.0.1:8765
 ```
 
-Blocked while **T-2074** stands: `pio run -e simulator` does not build on
-`develop`.
+The desktop simulator did not build on `develop` when this was written; it was
+repaired the same day (parent repo, T-2085), so this route is open and untried
+rather than blocked.
 
 1. Connect the app to the simulator peripheral.
 2. Leave both parked, so the app sends nothing: the keepalive is an hour
