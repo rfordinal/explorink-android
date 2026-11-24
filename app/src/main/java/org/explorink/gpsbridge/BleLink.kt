@@ -81,8 +81,13 @@ class BleLink(
     companion object {
         private const val TAG = "BleLink"
 
-        /** Default/legacy label -- an X4, still the most common device. */
-        const val DEVICE_NAME = "XteinkX4Map"
+        // There is deliberately no DEVICE_NAME default here any more. It was
+        // "XteinkX4Map", the plain X4's advertised name, and every `?:
+        // DEVICE_NAME` in the app turned "this peer did not say" into "this is
+        // an X4" -- on screen, in the notification and in the ride log. A
+        // constant that exists only to be a fallback gets used as one, so it is
+        // gone rather than discouraged (T-163). [KNOWN_DEVICE_NAMES] below
+        // still lists that name, where it means a board, not a default.
 
         /**
          * Every name the firmware can advertise, one per board
@@ -99,6 +104,53 @@ class BleLink(
             "LilyGoT5S3Map",
             "ExplorInkMap", // fallback name for a board the firmware doesn't recognise
         )
+        /**
+         * How long the peer may say nothing before this side asks whether it is
+         * still there ([armLiveness]).
+         *
+         * One minute is chosen against the only traffic a parked phone
+         * generates: [SendPolicy.KEEPALIVE_INTERVAL_MS] is an hour, so without
+         * a probe the app can hold a dead link for an hour before a write fails
+         * on it -- measured as four minutes of "connected to Galaxy S10" with
+         * the peripheral already force-stopped, and nothing in the log (T-540).
+         * A probe costs one ATT read request, which is cheaper than the ACL it
+         * is checking.
+         */
+        const val LIVENESS_PROBE_MS = 60_000L
+
+        /**
+         * Probes the peer may fail before the link counts as dead.
+         *
+         * Two, not one: a refusal with a real ATT error is a definite answer
+         * from a live stack, so a single one can be a transient -- the peer
+         * mid-reboot of its own GATT table, say.
+         *
+         * **A probe that gets no answer reaches this counter too**, which an
+         * earlier version of this comment denied. [GattOpQueue.onTimeout] calls
+         * the op's `done(false, "timeout")` at `WRITE_TIMEOUT_MS` *before* it
+         * arms the dead timer, so a silent peer lands here at 3 s with
+         * `error == "timeout"`. It cannot reach two that way, though: the
+         * timeout leaves a tombstone, `busy` stays true, and every later tick
+         * yields -- so the no-answer case is finished by
+         * [GattOpQueue.STACK_DEAD_TIMEOUT_MS] calling [handleLinkDead] at 30 s,
+         * and this counter is reached only by outright refusals. Detection of a
+         * peer whose process died is therefore about **90 s**: 60 s of silence,
+         * 3 s to time the probe out, 27 s more before the stack is called dead.
+         * Caught in review (Opus).
+         */
+        const val MAX_PROBE_FAILURES = 2
+
+        /**
+         * How soon to look again when a probe was skipped or refused, rather
+         * than waiting out a whole [LIVENESS_PROBE_MS].
+         *
+         * A skipped probe (the queue was busy) must not mean a link that is
+         * busy at every tick is never checked; a refused one is the case the
+         * whole mechanism exists for, and making its second opinion wait a
+         * full interval puts detection back where T-540 found it.
+         */
+        const val PROBE_RETRY_MS = 5_000L
+
         val SERVICE_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0001")
         val POSITION_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0002")
         val COMMAND_CHAR_UUID: UUID = UUID.fromString("5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0003")
@@ -245,9 +297,30 @@ class BleLink(
      * model, not one name total -- confirmed on hardware 2026-11-08, an X3
      * and an X4 Pro side by side showed up as "XteinkX3Map" and
      * "XteinkX4ProMap", distinct), so the name/UUID filters below cannot tell
-     * two of the same model apart: unpaired, the app connects to whichever of
-     * them advertises first, which with two of the same model in range is a
-     * coin flip. Pairing removes the guess.
+     * two of the same model apart. Pairing removes the guess.
+     *
+     * **What null actually does, which this comment used to get wrong.** It
+     * claimed the app "connects to whichever advertises first, a coin flip".
+     * It does not: [handleScanResult] returns without connecting while
+     * [pinnedAddress] is null, surfacing a `discovered` event for Home's
+     * "something is advertising - tap to pick it" and leaving the choice to
+     * the rider's system picker. The stale sentence was read as fact by two
+     * independent reviewers and by the author of T-170, and the claim reached
+     * a TODO entry before anybody opened [handleScanResult]. Corrected
+     * 2026-11-14.
+     *
+     * The one path that **does** connect with no pin is [reconnectDirect], and
+     * that is the product rule rather than a gap: one owner, one reader, and
+     * the link comes back silently every time with no prompt and no tap
+     * (maintainer, 2026-11-14 -- `docs/ble-app-wake.md`, "One owner, one
+     * reader, and no questions on the way back"). It filters nothing because
+     * a scan is throttled to nothing with the screen off, so the cautious
+     * option is the one that leaves the rider with a dead link.
+     *
+     * The safety sits upstream of it: [lastAddress] only ever holds a board
+     * this phone has itself connected to, a pin overrides it, and
+     * [clearRememberedAddress] drops it on an unpair. A reader this phone was
+     * never paired to cannot get into it.
      */
     var pinnedAddress: String? = null
         set(value) {
@@ -288,6 +361,23 @@ class BleLink(
     private var transferChar: BluetoothGattCharacteristic? = null
     private var statusChar: BluetoothGattCharacteristic? = null
     private var clientInfoChar: BluetoothGattCharacteristic? = null
+
+    /**
+     * A readable characteristic kept aside purely to ask the peer whether it is
+     * still there -- see [armLiveness]. The Device Information Service's model
+     * number, because it is read-only, tiny, answered by the peer's own GATT
+     * server, and already read once per connection anyway.
+     */
+    private var probeChar: BluetoothGattCharacteristic? = null
+
+    /** Uptime of the last thing the peer answered or sent. See [peerAnswered]. */
+    private var lastPeerReplyMs = 0L
+
+    /** Consecutive liveness probes the peer refused. See [armLiveness]. */
+    private var probeFailures = 0
+
+    /** The repeating liveness check, kept so teardown can stop it. */
+    private var livenessTick: Runnable? = null
 
     /**
      * The firmware revision the connected device reported (DIS 0x2A26), or null
@@ -532,6 +622,8 @@ class BleLink(
         transferChar = null
         statusChar = null
         clientInfoChar = null
+        probeChar = null
+        cancelLiveness()
         // Both belong to the connection that stated them, same as the MTU below.
         // The next device may be a different board running a different build,
         // and a stale pair here would be read as its answer.
@@ -604,6 +696,8 @@ class BleLink(
         transferChar = null
         statusChar = null
         clientInfoChar = null
+        probeChar = null
+        cancelLiveness()
         // Both belong to the connection that stated them, same as the MTU below.
         // The next device may be a different board running a different build,
         // and a stale pair here would be read as its answer.
@@ -798,7 +892,7 @@ class BleLink(
             if (lastDiscoveredAtMs == 0L) {
                 listener.onBleEvent(
                     "discovered",
-                    advName ?: gattName ?: DEVICE_NAME,
+                    advName ?: gattName ?: "unnamed device",
                     mapOf("address" to result.device.address, "rssi" to result.rssi),
                 )
             }
@@ -808,11 +902,17 @@ class BleLink(
 
         stopScan()
         val device = result.device
-        connectedName = advName ?: gattName ?: DEVICE_NAME
+        // Null when the peer named itself neither way, and left null on
+        // purpose: this used to fall back to `DEVICE_NAME`, which is one
+        // model's advertised name, so an unnamed -- or differently named --
+        // board was reported to the whole app as a plain X4. Home decides what
+        // to show for "no name" (MainActivity.readerName); down here the honest
+        // answer is that nothing said (T-163).
+        connectedName = advName ?: gattName
         connectedAddress = device.address
         lastAddress = device.address
         lastRssi = result.rssi
-        setState(State.CONNECTING, "${connectedName} (${device.address})")
+        setState(State.CONNECTING, "${connectedName ?: "unnamed device"} (${device.address})")
         listener.onBleEvent(
             "found",
             connectedName,
@@ -919,6 +1019,22 @@ class BleLink(
             main.post {
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> {
+                        // A direct reconnect never scans, so there is no
+                        // advertisement to take a name from and [connectedName]
+                        // is still null here -- which is every connect to a
+                        // pinned address, i.e. the normal case once a reader is
+                        // paired. The stack's own cached name for the peer is
+                        // the only name available on this path, and without it
+                        // Home has nothing to call the reader even while the
+                        // link is up (T-163, seen on the S10 2026-11-14: the
+                        // plate dialog said "Your reader" over a live link).
+                        if (connectedName == null) {
+                            connectedName = try {
+                                g.device?.name?.takeIf { it.isNotBlank() }
+                            } catch (t: Throwable) {
+                                null
+                            }
+                        }
                         listener.onBleEvent(
                             "connected",
                             connectedName,
@@ -938,6 +1054,20 @@ class BleLink(
                         transferChar = null
                         statusChar = null
                         clientInfoChar = null
+                        // Both, and before failAllOps below. Without them an
+                        // ordinary disconnect fails the in-flight liveness read,
+                        // which counts as a refusal and can reach
+                        // MAX_PROBE_FAILURES -- firing handleLinkDead
+                        // re-entrantly inside the disconnect handler, writing
+                        // link_dead *before* disconnected and scheduling two
+                        // reconnects. And a probeChar left over here belongs to
+                        // a gatt that is about to be closed; the next
+                        // connection's tick can fire before exchangeVersions
+                        // replaces it, reading a stale characteristic off a dead
+                        // handle and calling a healthy link dead. Caught in
+                        // review (Opus).
+                        probeChar = null
+                        cancelLiveness()
                         deviceFirmwareVersion = null
                         deviceModel = null
                         tileChannelReady = false
@@ -1016,6 +1146,11 @@ class BleLink(
                 // just the address.
                 setState(State.CONNECTED, connectedAddress)
                 listener.onBleEvent("ready", "position characteristic found", null)
+                // From here on this side has something to lose by not noticing
+                // the peer leave -- see armLiveness (T-540). Armed before the
+                // subscriptions rather than after, because the handshake that
+                // follows them is itself peer traffic and will reset the timer.
+                armLiveness()
                 // Queues the subscriptions, and the version handshake behind
                 // them -- see subscribeTileChannels for why the handshake
                 // cannot be enqueued from here.
@@ -1051,7 +1186,10 @@ class BleLink(
             status: Int,
         ) {
             val copy = characteristic.value?.copyOf() ?: ByteArray(0)
-            main.post { handleRead(characteristic, copy, status) }
+            main.post {
+                if (status == BluetoothGatt.GATT_SUCCESS) peerAnswered()
+                handleRead(characteristic, copy, status)
+            }
         }
 
         // The pre-Android-13 form, where the value lives on the characteristic
@@ -1063,7 +1201,10 @@ class BleLink(
             characteristic: BluetoothGattCharacteristic,
         ) {
             val copy = characteristic.value?.copyOf() ?: return
-            main.post { handleIndication(characteristic.uuid, copy) }
+            main.post {
+                peerAnswered()
+                handleIndication(characteristic.uuid, copy)
+            }
         }
 
         override fun onDescriptorWrite(
@@ -1073,6 +1214,7 @@ class BleLink(
         ) {
             main.post {
                 val ok = status == BluetoothGatt.GATT_SUCCESS
+                if (ok) peerAnswered()
                 opQueue.onDescriptorComplete(
                     descriptor,
                     ok,
@@ -1085,6 +1227,7 @@ class BleLink(
             main.post {
                 val ok = status == BluetoothGatt.GATT_SUCCESS
                 if (ok) {
+                    peerAnswered()
                     // Recorded before the op is completed: completing it pumps
                     // the next operation, and a transfer frame sizes itself off
                     // [mtu].
@@ -1112,6 +1255,7 @@ class BleLink(
                 // characteristic alone does not identify the op (every transfer
                 // frame shares one).
                 val ok = status == BluetoothGatt.GATT_SUCCESS
+                if (ok) peerAnswered()
                 opQueue.onWriteComplete(
                     characteristic,
                     ok,
@@ -1303,6 +1447,19 @@ class BleLink(
     @SuppressLint("MissingPermission")
     private fun exchangeVersions(g: BluetoothGatt) {
         val dis = g.getService(DEVICE_INFO_SERVICE_UUID)
+        // Kept for the liveness probe (T-540, [armLiveness]). Model number
+        // first, firmware revision as the fallback -- either one proves the
+        // peer's GATT server is still answering, which is the whole question.
+        probeChar = dis?.getCharacteristic(MODEL_NUMBER_CHAR_UUID)
+            ?: dis?.getCharacteristic(FIRMWARE_REVISION_CHAR_UUID)
+        if (probeChar == null) {
+            listener.onBleEvent(
+                "liveness_unavailable",
+                "no readable device-information characteristic; a peer that dies " +
+                    "without dropping the link cannot be detected on this firmware",
+                null,
+            )
+        }
         val reads = listOfNotNull(
             dis?.getCharacteristic(FIRMWARE_REVISION_CHAR_UUID)?.let { "firmware revision" to it },
             dis?.getCharacteristic(MODEL_NUMBER_CHAR_UUID)?.let { "model number" to it },
@@ -1606,6 +1763,121 @@ class BleLink(
      * is gone whether or not Android says so. Pumping more operations into it
      * would only produce refusals.
      */
+    // --- liveness (T-540) ---------------------------------------------------
+
+    /**
+     * Records that the peer is demonstrably alive right now.
+     *
+     * Called from every GATT callback that only a live peer can produce -- a
+     * completed read, write, descriptor write or MTU exchange, and any
+     * indication. [armLiveness] probes only when this has gone quiet, so an
+     * app that is already talking to the device never pays for a probe.
+     */
+    private fun peerAnswered() {
+        lastPeerReplyMs = SystemClock.uptimeMillis()
+        probeFailures = 0
+    }
+
+    /**
+     * Starts asking, once a minute, whether the peer is still answering.
+     *
+     * **Why this exists at all.** A peripheral whose process dies does not drop
+     * the ACL: both Bluetooth stacks keep the connection open, and
+     * `BluetoothGattServer.cancelConnection` from the peripheral cannot tear it
+     * down while the central holds it. So nothing at the link layer ever says
+     * the peer is gone -- no supervision timeout, because the radio link is
+     * genuinely still up. Only an operation against the peer's *attribute
+     * table* can tell, which is why the probe is a GATT read and not
+     * `readRemoteRssi()`: RSSI is answered by the local controller off the
+     * still-live ACL and would report a dead peer as healthy.
+     *
+     * **Why a timer and not better error handling.** Measured 2026-08-23: the
+     * app's recovery path already works end to end -- `disconnected: gatt
+     * status 135`, `reconnect_direct`, rescan, reconnect -- it is simply never
+     * triggered, because a parked phone issues no GATT operation for up to
+     * [SendPolicy.KEEPALIVE_INTERVAL_MS] (an hour) and there is nothing to
+     * fail. The missing piece was the detection, not the recovery, so this adds
+     * the one thing that was absent: traffic.
+     *
+     * Skipped while the queue has work of its own -- that work is a better
+     * liveness test than the probe, and queueing behind a tile transfer would
+     * time the probe out for reasons that have nothing to do with the peer.
+     */
+    private fun armLiveness() {
+        cancelLiveness()
+        peerAnswered()
+        val tick = object : Runnable {
+            override fun run() {
+                if (state != State.CONNECTED) return
+                val idle = SystemClock.uptimeMillis() - lastPeerReplyMs
+                // Re-armed against the last thing the peer said, not on a fixed
+                // grid. A fixed grid doubles the real period: a successful probe
+                // *is* the peer answering, so it resets [lastPeerReplyMs], and
+                // the next tick one interval later then finds the link idle for
+                // one interval minus the probe's own duration and skips. Parked
+                // on an S10 that produced probes two minutes apart from a
+                // one-minute constant (measured 2026-11-14), which would have
+                // put detection back at the four minutes T-540 exists to fix.
+                if (idle < LIVENESS_PROBE_MS) {
+                    main.postDelayed(this, LIVENESS_PROBE_MS - idle)
+                    return
+                }
+                val ch = probeChar
+                if (ch == null) {
+                    // Permanent for this connection, not transient: firmware
+                    // with no Device Information Service has nothing readable to
+                    // probe, and [exchangeVersions] has already said so once
+                    // with `liveness_unavailable`. Stop, rather than wake every
+                    // PROBE_RETRY_MS for the life of the link doing nothing --
+                    // the tick is re-armed by the next connect.
+                    return
+                }
+                if (opQueue.busy) {
+                    // Real traffic is a better liveness test than a probe, so
+                    // yielding to it costs nothing -- but look again soon rather
+                    // than in a whole interval, or a link that is busy at every
+                    // tick is never checked at all.
+                    main.postDelayed(this, PROBE_RETRY_MS)
+                    return
+                }
+                main.postDelayed(this, LIVENESS_PROBE_MS)
+                // Logged, not evented: one line a minute would bury the plate's
+                // own event log, but a probe that silently never fires would
+                // also pass every test for it. `adb logcat -s BleLink` is where
+                // a tester counts them (manual-test-checklist.md, 3.7).
+                Log.i(TAG, "liveness probe")
+                enqueueRead("liveness", ch) { ok, error ->
+                    if (ok) return@enqueueRead
+                    probeFailures++
+                    Log.w(TAG, "liveness probe $probeFailures failed: ${error ?: "unknown"}")
+                    if (probeFailures >= MAX_PROBE_FAILURES) {
+                        handleLinkDead("the device stopped answering (${error ?: "probe failed"})")
+                        return@enqueueRead
+                    }
+                    // A refused probe did not update [lastPeerReplyMs], so the
+                    // second one is owed now rather than an interval away --
+                    // the whole point is that a dead peer is noticed in about a
+                    // minute and a half, not in four (see [MAX_PROBE_FAILURES]
+                    // for where the 90 s comes from). Only outright refusals
+                    // get here fast; a silent peer is finished by the queue's
+                    // own dead timer instead.
+                    livenessTick?.let {
+                        main.removeCallbacks(it)
+                        main.postDelayed(it, PROBE_RETRY_MS)
+                    }
+                }
+            }
+        }
+        livenessTick = tick
+        main.postDelayed(tick, LIVENESS_PROBE_MS)
+    }
+
+    private fun cancelLiveness() {
+        livenessTick?.let { main.removeCallbacks(it) }
+        livenessTick = null
+        probeFailures = 0
+    }
+
     private fun handleLinkDead(reason: String) {
         listener.onBleEvent("link_dead", reason, null)
         teardown()

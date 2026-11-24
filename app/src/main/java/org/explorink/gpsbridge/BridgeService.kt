@@ -14,6 +14,10 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -186,6 +190,9 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         /** An unpaired board answered the scan recently (BleLink.discoveredRecently()).
             Home shows "Device found" instead of staying mute or connecting on its own. */
         val unpairedDeviceFound: Boolean,
+        /** The last freshness check failed on the network and can be run again
+            now -- see BridgeService.retryFreshness (T-164). */
+        val freshnessRetryable: Boolean,
     )
 
     /**
@@ -313,6 +320,26 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
     private var tileFetchStatus: String? = null
 
     /**
+     * True while the last freshness verdict was `unknown` *because this phone
+     * could not reach the index*, as opposed to any other way a check can end.
+     * It is what [onNetworkAvailable] and [retryFreshness] gate on -- see
+     * [FreshnessChecker.retry] (T-164).
+     */
+    private var freshnessUnresolved = false
+
+    /**
+     * Uptime of the last check started by [onNetworkAvailable], so a flapping
+     * network cannot keep clearing the checker's own backoff.
+     *
+     * `onAvailable` fires on every transition to a validated network -- a
+     * Wi-Fi reconnect, a Wi-Fi/cellular handover, a VPN coming up -- and
+     * [FreshnessChecker.retry] resets the backoff by design, which is right for
+     * a rider's tap and wrong on a loop. Caught in review (Opus). The rider's
+     * own tap is never throttled.
+     */
+    private var lastAutoRetryMs = 0L
+
+    /**
      * Last line about a point-shard sync (T-561), same shape as
      * [tileFetchStatus]. Reuses [tileLog] rather than a log of its own: both
      * describe "what the device asked for and what came of it", and a rider
@@ -428,6 +455,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         isRunning = true
         locationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         ble = BleLink(this, this)
+        registerNetworkCallback()
         // Straight to the CDN. Nothing is kept on the phone: it is the pipe
         // between the CDN and the X4 (TileSource).
         tileSource = CdnTileSource()
@@ -504,7 +532,20 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         // The paired X4's address, re-read on every start: the rider can pair (or
         // forget) between two starts of this service, and an unpinned link would
         // connect to the first X4 that advertises.
-        ble.pinnedAddress = CompanionWake.pairedAddress(this)
+        //
+        // Falls back to what this phone remembers pairing with. The system's
+        // association list can come back empty while the reader is still the
+        // rider's (T-170), and an empty list is the one case where the pin --
+        // the thing that makes "one owner, one reader" exact -- would otherwise
+        // be dropped. Only ever a board this phone paired with itself; a
+        // deliberate unpair clears it.
+        val paired = CompanionWake.pairedAddress(this)
+        // Recorded here and not only at pairing time, so a phone that paired
+        // before this existed still has the evidence the next time it starts.
+        // Writing it on every start also keeps it honest if the rider pairs
+        // through some path that does not go through MainActivity.
+        CompanionWake.rememberPaired(this, paired)
+        ble.pinnedAddress = paired ?: CompanionWake.lastPairedAddress(this)
 
         goForeground()
         ble.start()
@@ -581,6 +622,26 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         notifyObserver()
     }
 
+    /**
+     * Pins the link to one address and starts looking for it, without going
+     * through the association list.
+     *
+     * [resumeLink] reads `CompanionWake.pairedAddress()`, which is the read
+     * T-162 found lagging right after the companion picker returns. Called
+     * there, it pinned nothing after a first pairing and pinned the *previous*
+     * reader after a replacement (T-168). The picker's result carries the
+     * address, so the caller passes it in rather than asking the system again.
+     */
+    fun bindTo(addr: String) {
+        ble.pinnedAddress = addr
+        CompanionWake.rememberPaired(this, addr)
+        addEvent("bound to $addr")
+        logger?.logEvent("pair_bind", addr)
+        ble.retry()
+        armIdleStop()
+        notifyObserver()
+    }
+
     /** Re-reads the paired address and starts looking again. */
     fun resumeLink() {
         ble.pinnedAddress = CompanionWake.pairedAddress(this)
@@ -603,6 +664,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
             Log.w(TAG, "unregisterReceiver", t)
         }
         stopLocation()
+        unregisterNetworkCallback()
         // Before ble.stop(): the abort frame it may send needs a live link.
         freshness.stop()
         tileFetcher.stop()
@@ -617,6 +679,89 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         stopRecording()
         releaseWakeLock()
         super.onDestroy()
+    }
+
+    // --- connectivity (T-164) ---------------------------------------------
+
+    /**
+     * Watches for the phone getting a usable network back, so a freshness
+     * check that failed offline can be re-run instead of standing as the
+     * answer forever.
+     *
+     * Registered for the service's whole life rather than only while a check
+     * is outstanding: the callback is cheap, and the alternative is a
+     * register/unregister pair driven by a flag that already decides whether
+     * anything happens.
+     */
+    private val netCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            main.post { onNetworkAvailable() }
+        }
+    }
+
+    private var netCallbackRegistered = false
+
+    private fun registerNetworkCallback() {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            // VALIDATED, not just INTERNET: a captive-portal Wi-Fi satisfies
+            // INTERNET and would re-run the check straight into the portal's
+            // own 302, which is the offline case with extra steps.
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            .build()
+        try {
+            cm.registerNetworkCallback(request, netCallback)
+            netCallbackRegistered = true
+        } catch (t: Throwable) {
+            Log.w(TAG, "registerNetworkCallback", t)
+        }
+    }
+
+    private fun unregisterNetworkCallback() {
+        if (!netCallbackRegistered) return
+        netCallbackRegistered = false
+        try {
+            getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(netCallback)
+        } catch (t: Throwable) {
+            Log.w(TAG, "unregisterNetworkCallback", t)
+        }
+    }
+
+    /** Shortest gap between two checks started by the network coming back. */
+    private val autoRetryGapMs = 60_000L
+
+    private fun onNetworkAvailable() {
+        if (!freshnessUnresolved) return
+        val now = SystemClock.uptimeMillis()
+        if (lastAutoRetryMs != 0L && now - lastAutoRetryMs < autoRetryGapMs) {
+            Log.i(TAG, "network back again inside the auto-retry gap; leaving the check alone")
+            return
+        }
+        if (bleState != BleLink.State.CONNECTED) {
+            // Nothing to re-run against. The next link that comes up brings a
+            // CHECK_TILES of its own, which is the ordinary path.
+            addEvent("network back; the squares will be checked when the reader is next up")
+            return
+        }
+        if (retryFreshness()) lastAutoRetryMs = now
+    }
+
+    /**
+     * Re-runs the freshness check now. Also the Home row's tap target, which is
+     * why it says what happened rather than failing silently (T-164).
+     */
+    fun retryFreshness(): Boolean {
+        if (bleState != BleLink.State.CONNECTED) {
+            addEvent("cannot check the squares: the reader is not connected")
+            notifyObserver()
+            return false
+        }
+        val started = freshness.retry()
+        if (!started) addEvent("a check is already running")
+        if (started) freshnessUnresolved = false
+        notifyObserver()
+        return started
     }
 
     fun setObserver(o: Observer?) {
@@ -664,6 +809,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         tileLog = tileLog.toList(),
         tileProgress = tileProgress,
         unpairedDeviceFound = ble.discoveredRecently(),
+        freshnessRetryable = freshnessUnresolved && bleState == BleLink.State.CONNECTED,
     )
 
     // --- recording ------------------------------------------------------
@@ -722,6 +868,12 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         bleState = state
         bleDetail = detail
         val isConnected = state == BleLink.State.CONNECTED
+        // Written from a live link and nowhere else, so Home can name the
+        // paired reader while it is asleep instead of guessing a model
+        // (T-163, CompanionWake.rememberName).
+        if (isConnected) {
+            CompanionWake.rememberName(this, ble.connectedAddress, ble.connectedName)
+        }
         // A fetch in flight is dead the moment the link is: the transfer's
         // offsets and the device's own .part file went with it.
         if (wasConnected && !isConnected) {
@@ -1204,9 +1356,30 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
         tileFetcher.pushTiles(tiles.map { MissingTile(it.z, it.col, it.row, 0) }, deviceTileFormat)
     }
 
-    override fun onCheckFinished(examined: Int, stale: Int, reason: String) {
+    override fun onRecheckStarted() {
+        addTileLine("checking the map squares again")
+        notifyObserver()
+    }
+
+    override fun onCheckFinished(examined: Int, stale: Int, reason: String, networkFailure: Boolean) {
+        // Only a network failure leaves something worth retrying. A check the
+        // device cancelled, or one a dropped link ended, is answered by the
+        // next link coming up -- retrying those on a network event would talk
+        // to a device that is not there.
+        freshnessUnresolved = networkFailure
         tileFetchStatus = when {
-            stale < 0 -> "freshness unknown ($reason)"
+            // Rider wording, not the checker's own reason string. This row read
+            // `freshness unknown (index unreachable, 0 stale found anyway)` on
+            // the screen a rider looks at first (T-164, second half): three
+            // pieces of developer vocabulary and a count of nothing. What
+            // matters to them is that the squares on the reader were not
+            // checked, and that nothing was thrown away.
+            // Short on purpose: this is a row value next to a title, and on a
+            // 720 px phone "could not check - no connection" pushed `Map
+            // squares` onto three lines (S24, 2026-11-14). The reason string
+            // keeps going to the tile log and the row's own dialog, which is
+            // where a rider who wants the detail is already heading.
+            stale < 0 -> if (freshnessUnresolved) "no connection" else "could not check"
             stale == 0 -> "$examined tiles current"
             else -> "$stale of $examined tiles out of date"
         }
@@ -2358,7 +2531,7 @@ class BridgeService : Service(), BleLink.Listener, LocationListener, TileFetcher
 
     private fun notificationContent(): NotificationContent {
         val title = when (bleState) {
-            BleLink.State.CONNECTED -> "Connected to ${ble.connectedName ?: BleLink.DEVICE_NAME}"
+            BleLink.State.CONNECTED -> "Connected to ${ble.connectedName ?: "your reader"}"
             BleLink.State.SCANNING -> "Scanning for map device"
             BleLink.State.CONNECTING -> "Connecting"
             BleLink.State.DISCONNECTED -> "Disconnected, rescanning"

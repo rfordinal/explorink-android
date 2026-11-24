@@ -24,6 +24,13 @@ after any change. Run the other sections the change actually touches.
 Record what you ran and the result — do not just say "tested" with nothing
 behind it.
 
+**Section 3 (pairing and the BLE link) ends in a table of numbers, and the
+numbers are the point.** Time to connect, time to reconnect, RSSI, dropped
+links per ten minutes parked, the sent/failed ratio, liveness probes per ten
+minutes. A link that got slower or flakier passes every yes/no check in the
+list, so a run of section 3 that records only pass/fail cannot be compared to
+the previous one and has not really tested anything.
+
 ## Releasing: see docs/release-signing.md
 
 The app is on Google Play since 2026-11-13, and the signing key lives outside

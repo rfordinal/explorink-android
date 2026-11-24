@@ -94,6 +94,31 @@ class MainActivity : Activity(), BridgeService.Observer {
     private var bound = false
     private var permissionsDenied = false
 
+    /**
+     * True once this activity has asked for a bridge at all. It is what makes
+     * "there is no service" mean *stopped* rather than *not started yet*: the
+     * very first [render] runs before [startBridge], and without this the plate
+     * would flash the stopped state on every cold launch. See [LinkState.STOPPED].
+     */
+    private var bridgeEverStarted = false
+
+    /**
+     * An address the picker returned that no [BridgeService] existed to take
+     * yet, applied the moment one binds.
+     *
+     * A first pairing starts the bridge and reads the picker's result in the
+     * same `onActivityResult`, so `service` is still null when the address is
+     * known: `service?.bindTo(addr)` silently did nothing, and the service's
+     * own `onStartCommand` then pinned the link from
+     * `CompanionWake.pairedAddress()` -- the association-list read T-162 found
+     * lagging on this phone, which on a first pairing leaves the link pinned
+     * to nothing at all. See [BleLink.pinnedAddress] for what an unpinned link
+     * does and does not do; an earlier version of this comment claimed it
+     * connects to whichever reader advertises first, and that was already
+     * false when it was written.
+     */
+    private var pendingBindAddr: String? = null
+
     /** So a second press of the wake button goes to Settings, not to a dialog
      * Android will not show twice. */
     private var backgroundLocationAsked = false
@@ -103,6 +128,13 @@ class MainActivity : Activity(), BridgeService.Observer {
             val s = (b as? BridgeService.LocalBinder)?.service ?: return
             service = s
             s.setObserver(this@MainActivity)
+            // Before the first render, so the plate never draws a link pinned
+            // to the wrong reader -- see [pendingBindAddr].
+            pendingBindAddr?.let {
+                pendingBindAddr = null
+                s.bindTo(it)
+            }
+            recoverIfPermissionsReturned()
             render()
         }
 
@@ -183,9 +215,61 @@ class MainActivity : Activity(), BridgeService.Observer {
         // creates it: a service created by a bind alone never went through
         // onStartCommand, so it would sit there not foreground and not sending.
         if (BridgeService.isRunning) bindBridge(create = false)
+        recoverIfPermissionsReturned()
         main.removeCallbacks(uiTick)
         main.postDelayed(uiTick, UI_TICK_MS)
         render()
+    }
+
+    /**
+     * Restarts a link that gave up for a permission the rider has since granted.
+     *
+     * [BleLink.start] answers a missing permission by parking in
+     * `State.NO_PERMISSION` and returning, and **nothing in the app was
+     * watching for the permission coming back**.
+     * [onRequestPermissionsResult] covers only a grant made through this app's
+     * own dialog -- and after a second denial the permission is USER_FIXED, so
+     * that dialog never appears again and Settings is the only route, which
+     * never reaches this activity at all.
+     *
+     * Measured on the S10, 2026-11-14: the OS woke the service through the
+     * companion association while the nearby-devices permission was denied, the
+     * link parked, the permission was granted 50 s later, and the service kept
+     * running with nothing scanning. The plate said `Device resting - wakes
+     * when you follow` with the reader advertising a metre away, because
+     * devicePlateBlocker() had cleared and NO_PERMISSION falls through to
+     * RESTING. Found by section 2 step 3 of the manual checklist, which asks
+     * exactly this and had never been run.
+     *
+     * onStart, because that is when the rider comes back from Settings. Also
+     * called from onServiceConnected, since the binding can land after this.
+     */
+    private fun recoverIfPermissionsReturned() {
+        if (devicePlateBlocker() != null) return
+        val s = service
+        if (s != null) {
+            if (s.snapshot().bleState != BleLink.State.NO_PERMISSION) return
+            Log.i(TAG, "permissions are back; restarting a link that gave up for them")
+            s.retry()
+            return
+        }
+        // No bridge at all, which is the commoner shape: onCreate declines to
+        // start one while a permission is missing, and nothing tried again when
+        // it arrived.
+        //
+        // `bridgeEverStarted` guards it **within this activity instance only**,
+        // which is all that is needed: an idle stop leaves the instance alive
+        // with the flag true, so T-165's plate gets its tap instead of a silent
+        // restart. It is not a guard across instances and must not be read as
+        // one -- `onStopPressed` calls `finish()`, and the next launch's
+        // `onCreate` starts a bridge unconditionally once permissions allow.
+        // That is the pre-existing behaviour of a cold launch, not something
+        // this check decides. Caught in review (Opus), which read the earlier
+        // comment as claiming more than the code does.
+        if (!bridgeEverStarted && !BridgeService.isRunning) {
+            Log.i(TAG, "permissions are back and no bridge was ever started; starting one")
+            startBridge()
+        }
     }
 
     override fun onStop() {
@@ -219,6 +303,7 @@ class MainActivity : Activity(), BridgeService.Observer {
      * permission.
      */
     private fun startBridge(action: String = BridgeService.ACTION_START) {
+        bridgeEverStarted = true
         startForegroundService(Intent(this, BridgeService::class.java).setAction(action))
         // BIND_AUTO_CREATE here only removes a race: the service is being
         // created by the start above either way, and this way the binding lands
@@ -296,23 +381,36 @@ class MainActivity : Activity(), BridgeService.Observer {
      * Two steps, in this order because the second is pointless without the first:
      * pair the X4, then grant background location.
      */
+    /**
+     * Opens the system companion picker.
+     *
+     * Pulled out of [onWakePressed] so pairing is reachable with a reader
+     * already paired, which is what switching readers needs (T-168). The
+     * picker is the same either way: it lists what is advertising, and
+     * whatever the rider picks becomes the one paired reader
+     * ([CompanionWake.keepOnly]).
+     */
+    private fun startPairing() {
+        // The link has to go first. A connected reader stops advertising, and
+        // the pairing dialog can only list what it sees advertising -- with the
+        // bridge up the dialog stays empty forever. Restored in
+        // onActivityResult, whichever way the dialog ends.
+        service?.pauseLinkForPairing()
+        CompanionWake.requestAssociation(this) { error ->
+            main.post {
+                Toast.makeText(
+                    this,
+                    "pairing failed: ${error ?: "no device found -- open the map screen on it"}",
+                    Toast.LENGTH_LONG,
+                ).show()
+                resumeLinkOrStart()
+            }
+        }
+    }
+
     private fun onWakePressed() {
         if (!CompanionWake.isPaired(this)) {
-            // The link has to go first. A connected X4 stops advertising, and the
-            // pairing dialog can only list what it sees advertising -- with the
-            // bridge up the dialog stays empty forever. Restored in
-            // onActivityResult, whichever way the dialog ends.
-            service?.pauseLinkForPairing()
-            CompanionWake.requestAssociation(this) { error ->
-                main.post {
-                    Toast.makeText(
-                        this,
-                        "pairing failed: ${error ?: "no device found -- open the map screen on it"}",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    resumeLinkOrStart()
-                }
-            }
+            startPairing()
             return
         }
         if (!hasBackgroundLocation()) {
@@ -378,7 +476,16 @@ class MainActivity : Activity(), BridgeService.Observer {
      * finds out days later when a ride starts with no position on the panel.
      */
     private fun onForgetPressed() {
-        val addr = CompanionWake.pairedAddress(this) ?: return
+        // The remembered address counts, not just the system's association.
+        // T-170 made "the list is empty" survivable -- the app keeps the MAC
+        // and keeps reconnecting to it -- and that turned this `?: return`
+        // into a trap: in exactly that state Forget did nothing at all, no
+        // dialog and no toast, while `forgetPairing()` is the only thing that
+        // clears the remembered address. The rider had no way to stop the app
+        // returning to that reader. Caught in review (Opus) before merge.
+        val addr = CompanionWake.pairedAddress(this)
+            ?: CompanionWake.lastPairedAddress(this)
+            ?: return
         AlertDialog.Builder(this)
             .setTitle("Forget $addr?")
             .setMessage(
@@ -386,8 +493,18 @@ class MainActivity : Activity(), BridgeService.Observer {
                     "will stop connecting to anything until you pair again."
             )
             .setPositiveButton("Forget") { _, _ ->
-                service?.forgetPairing()
-                Toast.makeText(this, "unpaired", Toast.LENGTH_SHORT).show()
+                val s = service
+                if (s != null) {
+                    s.forgetPairing()
+                    Toast.makeText(this, "unpaired", Toast.LENGTH_SHORT).show()
+                } else {
+                    // Same reason the toast exists at all: it must not report
+                    // something that did not happen. With no service there is
+                    // nothing to clear the association or the remembered
+                    // address, so say that rather than "unpaired".
+                    CompanionWake.forget(this)
+                    Toast.makeText(this, "unpaired - start the app again to stop the link", Toast.LENGTH_LONG).show()
+                }
                 render()
             }
             .setNegativeButton("Keep", null)
@@ -404,7 +521,20 @@ class MainActivity : Activity(), BridgeService.Observer {
             render()
             return
         }
-        val addr = CompanionWake.onAssociationResult(this)
+        // `data`, not a fresh read of the association list -- see
+        // CompanionWake.onAssociationResult's doc (T-162).
+        val addr = CompanionWake.onAssociationResult(this, data)
+        // resumeLinkOrStart() above re-pinned the link from the association
+        // list, which is exactly the read T-162 found lagging -- so after a
+        // first pairing it pinned nothing, and after a replacement it pinned
+        // the reader being replaced. Bind to the address the picker returned.
+        if (addr != null) {
+            val s = service
+            // Held for onServiceConnected when the bridge is still starting --
+            // the first-pairing case, where this used to no-op. See
+            // [pendingBindAddr].
+            if (s != null) s.bindTo(addr) else pendingBindAddr = addr
+        }
         Toast.makeText(
             this,
             if (addr != null) "paired with $addr" else "pairing did not complete",
@@ -483,7 +613,7 @@ class MainActivity : Activity(), BridgeService.Observer {
      * can answer by name, but both elements render from this one source of
      * truth, never two separately derived guesses at the same state.
      */
-    private enum class LinkState { CONNECTED, RESTING, NEVER_PAIRED, HALT }
+    private enum class LinkState { CONNECTED, RESTING, NEVER_PAIRED, STOPPED, HALT }
 
     /**
      * BLE state is checked before pairing state, not after: a companion
@@ -500,23 +630,60 @@ class MainActivity : Activity(), BridgeService.Observer {
      * and a devicePlateBlocker() reason map to HALT; every other
      * non-connected, paired state reads as RESTING.
      *
+     * [LinkState.STOPPED] is checked before either, because a stopped service
+     * is not a link state at all: nothing is scanning, so neither RESTING
+     * ("wakes when you follow") nor NEVER_PAIRED ("Connect a device") is true
+     * and both invite the rider to wait for something that cannot happen.
+     * BridgeService stops itself after five idle minutes on purpose, and on
+     * 2026-11-13 the resulting "Connect a device" plate was read as a reader
+     * that was not advertising and chased with a laptop BLE scan -- which
+     * found it advertising fine at -57 dBm (T-165).
+     *
      * Returns the paired address alongside the state (rather than letting
      * renderDevicePlate() read CompanionWake.pairedAddress() a second time)
      * for the same reason render() already computes this once per frame --
      * see render()'s comment.
      */
     private fun currentLinkState(snap: BridgeService.Snapshot?): Triple<LinkState, String?, String?> {
+        // Falls back to the reader this phone knows it paired with: the system's
+        // association list can come back empty while the reader is still the
+        // rider's (T-170), and `Connect a device` is then the one thing that is
+        // certainly false -- the app is still reconnecting to that very board.
         val addr = CompanionWake.pairedAddress(this)
+            ?: CompanionWake.lastPairedAddress(this)
         val blocker = devicePlateBlocker()
         val state = when {
             blocker != null -> LinkState.HALT to blocker
             snap?.bleState == BleLink.State.CONNECTED -> LinkState.CONNECTED to null
+            // Only once this activity has actually asked for a bridge -- see
+            // [bridgeEverStarted].
+            bridgeEverStarted && !BridgeService.isRunning -> LinkState.STOPPED to null
             snap?.bleState == BleLink.State.FAILED -> LinkState.HALT to "Not reaching the device"
+            // The safety net under recoverIfPermissionsReturned(): a link
+            // parked for a permission is not resting, and "wakes when you
+            // follow" is a promise it cannot keep. Reached only when the
+            // permission is genuinely still missing (devicePlateBlocker wins
+            // above) or for the one frame before the recovery runs.
+            snap?.bleState == BleLink.State.NO_PERMISSION -> LinkState.HALT to "Permission needed"
             addr == null && snap?.deviceName == null -> LinkState.NEVER_PAIRED to null
             else -> LinkState.RESTING to null
         }
         return Triple(state.first, state.second, addr)
     }
+
+    /**
+     * What to call the paired reader on screen (T-163).
+     *
+     * Three steps, most-live first: what the open link says it is, then the
+     * last name this MAC actually advertised
+     * ([CompanionWake.rememberedName]), then nothing model-specific at all.
+     * The old fallback was `BleLink.DEVICE_NAME` -- the plain X4's advertised
+     * name -- so a phone paired to an X4 Pro was told it held an X4 whenever
+     * the link was down, and a rider with two readers had nothing on screen
+     * that told the two apart (S10, 2026-11-13).
+     */
+    private fun readerName(snap: BridgeService.Snapshot?, addr: String?): String =
+        snap?.deviceName ?: CompanionWake.rememberedName(this, addr) ?: "Your reader"
 
     /**
      * The device plate's four states, per Outline "Dizajn systém" ("Plocha
@@ -556,6 +723,7 @@ class MainActivity : Activity(), BridgeService.Observer {
      * review (Opus) before this shipped as the ink/singular version.
      */
     private fun renderDevicePlate(snap: BridgeService.Snapshot?, link: LinkState, haltName: String?, addr: String?) {
+        val pairingLost = CompanionWake.pairingRecordLost(this)
         val icon: Int
         val background: Int
         val nameColor: Int
@@ -585,8 +753,11 @@ class MainActivity : Activity(), BridgeService.Observer {
                 background = R.drawable.bg_device_plate_connected
                 nameColor = R.color.ui_ink
                 metaColor = R.color.ui_ink
-                name = snap?.deviceName ?: BleLink.DEVICE_NAME
-                meta = if (snap?.rssi != null) "connected - ${snap.rssi} dBm" else "connected"
+                name = readerName(snap, addr)
+                val live = if (snap?.rssi != null) "connected - ${snap.rssi} dBm" else "connected"
+                // The link is fine and stays the headline; the warning is the
+                // second clause, not a replacement for it (T-170).
+                meta = if (pairingLost) "$live · tap to pair again" else live
             }
 
             LinkState.NEVER_PAIRED -> {
@@ -606,11 +777,27 @@ class MainActivity : Activity(), BridgeService.Observer {
                 nameColor = R.color.ui_ash
                 metaColor = R.color.ui_ash
                 name = "Device resting"
-                meta = if (addr != null) {
-                    "wakes when you follow · paired ..${addr.takeLast(5)}"
-                } else {
-                    "normal - wakes when you follow"
+                // "wakes when you follow" is exactly what stops being true
+                // when the association is gone, so it must not be said then.
+                meta = when {
+                    pairingLost -> "will not wake on its own · tap to pair again"
+                    addr != null -> "wakes when you follow · paired ..${addr.takeLast(5)}"
+                    else -> "normal - wakes when you follow"
                 }
+            }
+
+            // Named for what it is, and it says what the tap does. The old
+            // plate for this state was "Connect a device" with no subtitle --
+            // indistinguishable from a missing reader, and read as one
+            // (T-165). Nothing is scanning here, so the rider waiting is the
+            // one thing that cannot work.
+            LinkState.STOPPED -> {
+                icon = R.drawable.ic_bluetooth_off
+                background = R.drawable.bg_device_plate_idle
+                nameColor = R.color.ui_ash
+                metaColor = R.color.ui_ash
+                name = "Bridge stopped"
+                meta = "idle for a while · tap to start looking again"
             }
         }
 
@@ -810,6 +997,13 @@ class MainActivity : Activity(), BridgeService.Observer {
         val addr = CompanionWake.pairedAddress(this)
         val snap = service?.snapshot()
         val blocker = devicePlateBlocker()
+        // The plate promised "tap to start looking again", so the tap does
+        // exactly that and nothing else -- no dialog in the way (T-165).
+        if (blocker == null && bridgeEverStarted && !BridgeService.isRunning) {
+            startBridge()
+            render()
+            return
+        }
         // Only jump straight to the system pairing picker when nothing else
         // is standing in the way: the plate's halt state says "tap to fix"
         // for a permission/Bluetooth/GPS blocker, and this used to ignore
@@ -824,11 +1018,24 @@ class MainActivity : Activity(), BridgeService.Observer {
         if (blocker != null) {
             options.add(Triple("Fix: $blocker", false) { onRetryPressed() })
         }
+        // Offered whatever the link is doing: the link being up is exactly the
+        // case where the rider would otherwise never hear that auto-start has
+        // stopped working (T-170).
+        if (CompanionWake.pairingRecordLost(this)) {
+            options.add(Triple("Pair again so it wakes on its own", false) { startPairing() })
+        }
         if (addr != null && !hasBackgroundLocation()) {
             options.add(Triple("Allow location all the time", false) { onWakePressed() })
         }
         if (blocker == null && snap?.bleState != BleLink.State.CONNECTED) {
             options.add(Triple("Connect now", false) { onRetryPressed() })
+        }
+        // Switching readers used to mean Forget, then pair -- two steps, the
+        // first red, under a confirm, and worded as a loss. This is the one
+        // step it should have been: pick the other reader, and it replaces
+        // this one (T-168).
+        if (blocker == null && addr != null) {
+            options.add(Triple("Pair a different reader", false) { startPairing() })
         }
         // Starting a recording from here too, not only the app bar's
         // ellipsis: the device plate is the natural place to ask for it,
@@ -850,7 +1057,7 @@ class MainActivity : Activity(), BridgeService.Observer {
         val events = snap?.events?.takeLast(20) ?: emptyList()
         val bodyText = if (events.isEmpty()) header else (listOf(header, "") + events).joinToString("\n")
         showDetailDialog(
-            title = snap?.deviceName ?: BleLink.DEVICE_NAME,
+            title = readerName(snap, addr),
             bodyText = bodyText,
             options = options,
         )
@@ -951,7 +1158,21 @@ class MainActivity : Activity(), BridgeService.Observer {
                 append("\n\n").append(lines.joinToString("\n"))
             }
         }
-        showDetailDialog(title = "Map squares", bodyText = body)
+        // Offered only when it can actually do something: the last check
+        // failed on the network and the reader is connected to re-ask
+        // (T-164). Without it this failure stood until the app was
+        // force-stopped -- there was no way at all to clear it from the UI.
+        val options = mutableListOf<Triple<String, Boolean, () -> Unit>>()
+        if (snap?.freshnessRetryable == true) {
+            options.add(Triple("Check the squares again", false) {
+                val started = service?.retryFreshness() == true
+                if (!started) {
+                    Toast.makeText(this, "cannot check right now", Toast.LENGTH_SHORT).show()
+                }
+                render()
+            })
+        }
+        showDetailDialog(title = "Map squares", bodyText = body, options = options)
     }
 
     /**
@@ -1051,6 +1272,14 @@ class MainActivity : Activity(), BridgeService.Observer {
         // grants it from Settings, which left this returning "Permission
         // needed" forever -- caught by Opus review, 2026-11-07.
         if (missingPermissions().isNotEmpty()) return "Permission needed"
+        // A lost pairing record is deliberately **not** a blocker. A blocker
+        // means "this is what keeps the plate from even trying", and nothing
+        // here does: the link reconnects to the remembered reader and sends
+        // position perfectly well. Making it one swapped `Connect a device`
+        // for `Pairing needs redoing` over a live link -- the same lie
+        // pointing the other way, measured on an S24 2026-11-14. The warning
+        // rides on the plate's meta line instead, where the real link state
+        // stays visible underneath it (T-170).
         val adapter = service?.bluetoothAdapter()
         if (adapter != null && !adapter.isEnabled) return "Bluetooth is off"
         val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager

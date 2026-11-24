@@ -105,6 +105,40 @@ class GattOpQueueTest {
         ).also { it.open() }
     }
 
+    // --- 0: is the stack free ------------------------------------------
+
+    @Test
+    fun busyCoversWaitingInFlightAndTheTombstone() {
+        // What optional work gates on: BleLink's liveness probe only probes
+        // when the queue has nothing of its own to do, because real traffic is
+        // a better liveness test than a probe and queueing behind a tile
+        // transfer would time the probe out for reasons that are not the
+        // peer's (T-540).
+        val f = Fixture()
+        val a = char()
+        val b = char()
+        val first = Outcome()
+        val second = Outcome()
+        assertFalse(f.queue.busy)
+
+        f.queue.enqueue(GattOpQueue.Op.write("first", a, byteArrayOf(1), done = first.done))
+        assertTrue("in flight", f.queue.busy)
+
+        f.queue.enqueue(GattOpQueue.Op.write("second", b, byteArrayOf(2), done = second.done))
+        f.queue.onWriteComplete(a, true, null)
+        assertTrue("the second one is now in flight", f.queue.busy)
+
+        // A timeout leaves a tombstone, and the stack is still not free --
+        // see the tombstone rule in GattOpQueue's class doc.
+        f.scheduler.advance(GattOpQueue.WRITE_TIMEOUT_MS + 1)
+        assertEquals(false, second.ok)
+        assertTrue("tombstone still holds the stack", f.queue.busy)
+
+        // The late callback clears it.
+        f.queue.onWriteComplete(b, true, null)
+        assertFalse(f.queue.busy)
+    }
+
     // --- 1: the happy path ----------------------------------------------
 
     @Test

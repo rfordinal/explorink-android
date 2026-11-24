@@ -1,11 +1,15 @@
 package org.explorink.gpsbridge
 
 import android.app.Activity
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.companion.AssociationInfo
 import android.companion.AssociationRequest
 import android.companion.BluetoothLeDeviceFilter
 import android.companion.CompanionDeviceManager
 import android.content.Context
+import android.content.Intent
 import android.content.IntentSender
 import android.os.Build
 import android.os.ParcelUuid
@@ -42,26 +46,86 @@ object CompanionWake {
     /** Request code for the association dialog's IntentSender. */
     const val REQ_ASSOCIATE = 42
 
+    /**
+     * Shares [BridgeService]'s preference file rather than opening a second
+     * one: both halves are "what this phone remembers about its reader", and a
+     * file per caller is how a settings store ends up with four of them.
+     */
+    private const val PREFS = "bridge"
+
+    /** `device_name_<MAC>` -> the last name that MAC actually advertised. See [rememberName]. */
+    private const val PREF_NAME_PREFIX = "device_name_"
+
+    /** The MAC this phone was last paired to. See [rememberPaired]. */
+    private const val PREF_LAST_PAIRED = "last_paired_address"
+
     private fun manager(context: Context): CompanionDeviceManager? =
         context.getSystemService(CompanionDeviceManager::class.java)
 
     /**
-     * MAC addresses this app is associated with. Normally zero or one: the
-     * association dialog is asked for a single device.
+     * MAC addresses this app is associated with, **each at most once**.
+     * Normally zero or one: the association dialog is asked for a single
+     * device.
+     *
+     * `distinct()` is the whole fix available for same-MAC duplicates below
+     * API 33, and it is enough. Measured on an S10 (SDK 31) 2026-11-14:
+     * picking the same reader twice leaves two association records for it, and
+     * the id-based collapse in [keepOnly] only exists from 33 up. Removing one
+     * of them is **not possible** there -- the only tool is
+     * `disassociate(String)`, and one call with that MAC removed *both* records
+     * (2 -> 0 in one call), which would unpair the rider outright, and nothing
+     * but the system picker can put it back.
+     *
+     * So the records stay and the *consequence* goes instead. The only
+     * observable cost was [startObserving] walking the list and registering
+     * presence twice, which showed up in the rider's own event log as `woken by
+     * the device` twice per wake. One entry per MAC ends that, [pairedAddress]
+     * is unaffected (it took the first either way), and [forget] now issues one
+     * call per reader rather than one per record -- which is also correct,
+     * given that one call clears them all.
      */
     fun associatedAddresses(context: Context): List<String> {
         val cdm = manager(context) ?: return emptyList()
         return try {
             if (Build.VERSION.SDK_INT >= 33) {
-                cdm.myAssociations.mapNotNull { it.deviceMacAddress?.toString()?.uppercase() }
+                cdm.myAssociations.mapNotNull { addressOf(it) }
             } else {
                 @Suppress("DEPRECATION")
                 cdm.associations.map { it.uppercase() }
-            }
+            }.distinct()
         } catch (t: Throwable) {
             Log.w(TAG, "associations", t)
             emptyList()
         }
+    }
+
+    /**
+     * One association's MAC, from whichever field carries it.
+     *
+     * **Defensive, and not known to be needed.** Measured on a Galaxy S24
+     * (Android 17, SDK 37) on 2026-11-14, a freshly made association reports
+     * `deviceMacAddress` populated, so the first line answers and the fallback
+     * never runs: `id=18 name=LilyGoT5S3Map mac=30:ed:a0:a8:37:75 dev=true
+     * ble=true`. It is kept because the field is documented as nullable and
+     * the cost of it being null is not a missing name -- it is
+     * [pairedAddress] returning null, and everything that hangs off knowing
+     * which reader is the rider's: the plate, the pin, and whether this app
+     * believes it was ever paired at all. See [BleLink.pinnedAddress] for what
+     * an unpinned link actually does. An earlier version of this comment said
+     * it "takes the first reader advertising" and cited that doc as the
+     * authority; the doc was stale and now repudiates the sentence by name.
+     *
+     * `associatedDevice` only exists from API 34, so API 33 exactly has the
+     * one field and nothing to fall back on.
+     */
+    private fun addressOf(info: AssociationInfo): String? {
+        info.deviceMacAddress?.toString()?.uppercase()?.let { return it }
+        if (Build.VERSION.SDK_INT >= 34) {
+            val device = info.associatedDevice ?: return null
+            device.bleDevice?.device?.address?.uppercase()?.let { return it }
+            device.bluetoothDevice?.address?.uppercase()?.let { return it }
+        }
+        return null
     }
 
     /** The one X4 this phone is paired with, or null while unpaired. */
@@ -127,12 +191,251 @@ object CompanionWake {
      * already recorded by the system at this point; all this does is start
      * observing presence for it.
      *
+     * **The address comes out of the picker's own result [Intent] first, and
+     * only then out of [pairedAddress]** (T-162). Re-reading `cdm.associations`
+     * at the instant the result arrives is not reliable: measured on a Galaxy
+     * S10 (SM-G973F, Android 12) on 2026-11-13, the list had not caught up yet
+     * and the lookup returned null for a pairing that had plainly succeeded --
+     * the device plate was already drawing `paired with B8:1F:3F:D4:89:BD`
+     * underneath a toast saying it had failed. The rider who believes the toast
+     * pairs a second time. The returned Intent is the system's own statement
+     * about what was just picked, so it cannot lag behind itself.
+     *
      * @return the paired address, or null if the rider cancelled.
      */
-    fun onAssociationResult(context: Context): String? {
-        val addr = pairedAddress(context) ?: return null
+    fun onAssociationResult(context: Context, data: Intent? = null): String? {
+        val picked = addressFromResult(data)
+        val addr = picked ?: pairedAddress(context) ?: return null
+        // **Only ever the picker's own address.** [keepOnly] drops every other
+        // association, so handing it a *fallback* address would be destructive:
+        // the fallback is `associatedAddresses().firstOrNull()`, read from the
+        // list this file's own doc above documents as lagging right after the
+        // picker returns, in an order Android does not specify. Replacing
+        // reader B with reader A, with `addressFromResult` returning null and
+        // the list still reading `[B, ...]`, would disassociate **A -- the one
+        // the rider just chose** -- keep B, and pin the link to B while the
+        // toast said otherwise. Caught in review (Opus) before this shipped.
+        // Without a picked address the previous reader simply stays, which is
+        // the old behaviour and loses nothing.
+        if (picked != null) keepOnly(context, picked)
+        rememberPaired(context, addr)
+        // Observe this address directly as well as re-arming from the list: on
+        // the same phone the list can still be empty here, and
+        // [startObserving] walking an empty list would observe nothing at all
+        // -- a silent half-pairing that wakes for no device.
+        observe(context, addr)
         startObserving(context)
         return addr
+    }
+
+    /**
+     * Makes [addr] the one association this app holds, dropping any other.
+     *
+     * **Why the app holds exactly one.** `CompanionDeviceManager` can hold
+     * several, and nothing above it chose between them: [pairedAddress] was
+     * `firstOrNull()` of a system-ordered list, and `BleLink.pinnedAddress`
+     * takes that single value. A second association would therefore have
+     * decided which reader the phone follows by an order no rider can see.
+     * Rather than invent a picker for a set nobody asked for, pairing a reader
+     * now *replaces* the previous one -- which is also what the rider means
+     * when they pair a second reader, and it makes "switch to the other one"
+     * a single action instead of Forget-then-pair (T-168).
+     *
+     * If a rider ever needs to carry two, that is a deliberate feature with a
+     * UI of its own, not a side effect of this function being absent.
+     *
+     * **"Exactly one" is what this aims at, not what it can always deliver.**
+     * An association [addressOf] cannot resolve is invisible to
+     * [associatedAddresses] and therefore cannot be dropped here either -- the
+     * S24 carries one such dead record from 2026-11-09 that survives every
+     * call (T-170, T-171). Same-MAC duplicates *are* handled, by id, from
+     * API 33 up.
+     */
+    fun keepOnly(context: Context, addr: String) {
+        val cdm = manager(context) ?: return
+        val keep = addr.uppercase()
+        // **Same-MAC duplicates are the common case, not an edge one.** Picking
+        // the same reader twice makes the system create a *second* association
+        // for it, and the address-only loop below treats both as "the one to
+        // keep" and drops neither: measured on an S24 on 2026-11-14, re-pairing
+        // one T5 S3 left ids 18 and 19 both holding 30:ed:a0:a8:37:75, each
+        // with its own presence observer. Where the ids are visible (API 33+),
+        // keep the newest and disassociate the rest by id first; the
+        // address-keyed loop afterwards then has only genuinely different
+        // readers left to remove. Below API 33 the system hands out bare
+        // strings with no id, so duplicates cannot be told apart there and this
+        // step is skipped -- **measured on an S10 (SDK 31) 2026-11-14**: picking
+        // the same reader twice leaves two associations with that MAC, and the
+        // rider log then shows `woken by the device` twice per wake. Benign --
+        // `pairedAddress` picks that MAC either way and the link is correct --
+        // but it accumulates, and the only tool below 33 is
+        // `disassociate(String)`, which cannot be aimed at one of two identical
+        // records without risking both. Left alone deliberately (T-171).
+        if (Build.VERSION.SDK_INT >= 33) {
+            runCatching {
+                val sameMac = cdm.myAssociations.filter {
+                    addressOf(it)?.equals(keep, ignoreCase = true) == true
+                }
+                if (sameMac.size > 1) {
+                    val newest = sameMac.maxByOrNull { it.id }
+                    for (dup in sameMac) {
+                        if (dup.id == newest?.id) continue
+                        runCatching {
+                            @Suppress("DEPRECATION")
+                            cdm.disassociate(dup.id)
+                            Log.i(TAG, "dropped duplicate association ${dup.id} for $keep")
+                        }
+                    }
+                }
+            }.onFailure { Log.w(TAG, "de-duplicating associations for $keep", it) }
+        }
+        for (other in associatedAddresses(context)) {
+            if (other.equals(keep, ignoreCase = true)) continue
+            try {
+                @Suppress("DEPRECATION")
+                cdm.stopObservingDevicePresence(other)
+            } catch (t: Throwable) {
+                Log.w(TAG, "stopObservingDevicePresence $other", t)
+            }
+            try {
+                @Suppress("DEPRECATION")
+                cdm.disassociate(other)
+                Log.i(TAG, "replaced by $keep: dropped $other")
+            } catch (t: Throwable) {
+                Log.w(TAG, "disassociate $other", t)
+            }
+            forgetName(context, other)
+        }
+    }
+
+    /**
+     * The MAC the companion picker says the rider chose, read out of the result
+     * [Intent] it hands back.
+     *
+     * Two shapes, because the extra changed: API 33+ returns an `AssociationInfo`
+     * under `EXTRA_ASSOCIATION`, and 31/32 return the matched device under the
+     * deprecated `EXTRA_DEVICE` -- a [ScanResult] for a
+     * `BluetoothLeDeviceFilter` (what [requestAssociation] builds), a
+     * [BluetoothDevice] for the classic filter. All three are read, so this
+     * keeps working if the filter ever changes.
+     */
+    fun addressFromResult(data: Intent?): String? {
+        val intent = data ?: return null
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                val info = intent.getParcelableExtra(
+                    CompanionDeviceManager.EXTRA_ASSOCIATION,
+                    AssociationInfo::class.java,
+                )
+                info?.deviceMacAddress?.toString()?.uppercase()?.let { return it }
+            }
+            @Suppress("DEPRECATION")
+            when (val picked = intent.getParcelableExtra<android.os.Parcelable>(
+                CompanionDeviceManager.EXTRA_DEVICE
+            )) {
+                is ScanResult -> return picked.device?.address?.uppercase()
+                is BluetoothDevice -> return picked.address?.uppercase()
+                else -> Unit
+            }
+        } catch (t: Throwable) {
+            // Never fatal: the caller falls back to reading the association
+            // list, which is what this code used to do on its own.
+            Log.w(TAG, "address out of the association result", t)
+        }
+        return null
+    }
+
+    /** Starts presence observation for one address. Safe to call twice. */
+    private fun observe(context: Context, addr: String) {
+        val cdm = manager(context) ?: return
+        try {
+            @Suppress("DEPRECATION")
+            cdm.startObservingDevicePresence(addr)
+            Log.i(TAG, "observing presence of $addr")
+        } catch (t: Throwable) {
+            Log.w(TAG, "startObservingDevicePresence $addr", t)
+        }
+    }
+
+    // --- what this phone knows it was paired to (T-170) ---------------------
+
+    /**
+     * Remembers the MAC this phone paired with, independently of the system's
+     * association list.
+     *
+     * **Because that list can come back empty while the pairing is still real
+     * to the rider.** Measured on an S24 on 2026-11-14: an association the app
+     * had made was listed by `dumpsys companiondevice` and returned by neither
+     * `myAssociations` nor the deprecated list, so [pairedAddress] was null and
+     * Home drew `Connect a device` at a rider whose reader was a metre away.
+     * `associatedAddresses`'s own `catch` can produce the same emptiness from a
+     * thrown exception, and it cannot be told apart from "genuinely unpaired".
+     *
+     * This is deliberately *not* a second source of truth for pairing --
+     * [pairedAddress] stays that. It is the evidence that lets the app say "I
+     * know which reader is yours, the system's record of it is gone" instead of
+     * the one thing that is certainly false.
+     */
+    fun rememberPaired(context: Context, addr: String?) {
+        if (addr.isNullOrBlank()) return
+        runCatching {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString(PREF_LAST_PAIRED, addr.uppercase())
+                .apply()
+        }
+    }
+
+    /** The MAC this phone last paired with, whatever the association list says. */
+    fun lastPairedAddress(context: Context): String? = runCatching {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(PREF_LAST_PAIRED, null)
+    }.getOrNull()?.ifBlank { null }
+
+    /**
+     * True when this phone knows its reader but the system no longer lists the
+     * association -- the state T-170 is about.
+     */
+    fun pairingRecordLost(context: Context): Boolean =
+        pairedAddress(context) == null && lastPairedAddress(context) != null
+
+    // --- the paired reader's name (T-163) -----------------------------------
+
+    /**
+     * Remembers what a MAC actually advertised, so Home can name the reader it
+     * is paired with while the link is down.
+     *
+     * Before this the fallback was `BleLink.DEVICE_NAME`, one model's constant:
+     * a phone paired to an X4 Pro had its plate dialog headed `XteinkX4Map`
+     * over a line reading `paired with B8:1F:3F:D4:89:BD`, which is an X4 Pro
+     * (S10, 2026-11-13). Naming the wrong model is worse than naming none, and
+     * for a rider with two readers it is the only thing on that dialog that
+     * says which one they are holding.
+     */
+    fun rememberName(context: Context, addr: String?, name: String?) {
+        if (addr == null || name.isNullOrBlank()) return
+        runCatching {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString(PREF_NAME_PREFIX + addr.uppercase(), name)
+                .apply()
+        }
+    }
+
+    /** The remembered name for [addr], or null if this phone never saw one. */
+    fun rememberedName(context: Context, addr: String?): String? {
+        if (addr == null) return null
+        return runCatching {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(PREF_NAME_PREFIX + addr.uppercase(), null)
+        }.getOrNull()?.ifBlank { null }
+    }
+
+    /** Drops the remembered name for [addr]. Part of forgetting the device. */
+    private fun forgetName(context: Context, addr: String) {
+        runCatching {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .remove(PREF_NAME_PREFIX + addr.uppercase())
+                .apply()
+        }
     }
 
     /**
@@ -175,6 +478,14 @@ object CompanionWake {
             } catch (t: Throwable) {
                 Log.w(TAG, "disassociate $addr", t)
             }
+            forgetName(context, addr)
+        }
+        // The rider asked for this one, so the evidence goes too -- otherwise
+        // [pairingRecordLost] would report a lost record for a pairing that was
+        // deliberately ended.
+        runCatching {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .remove(PREF_LAST_PAIRED).apply()
         }
     }
 }
