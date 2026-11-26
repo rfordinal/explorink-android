@@ -51,7 +51,7 @@ class WalletKeyExportActivity : Activity() {
         // the message says which.
         //
         // This default was `1234` first (refused: not the alphabet), then `UUDDLR`
-        // under the directional PIN the gate replaced on 2026-11-24. Each change was a
+        // under the directional PIN the gate replaced on 2026-11-26. Each change was a
         // round trip, which is why the rule is written down rather than remembered.
         private const val DEFAULT_PATTERN = "567ba98c"
         private const val ITERATIONS = 18000
